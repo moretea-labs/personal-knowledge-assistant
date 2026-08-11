@@ -1,0 +1,45 @@
+{
+  "dataDir": "~/.pks",
+  "managedStore": "~/Documents/Personal Knowledge",
+  "host": "127.0.0.1",
+  "port": 3217,
+  "sourceRoots": [
+    {
+      "id": "documents",
+      "type": "local",
+      "name": "Documents",
+      "root": "~/Documents",
+      "enabled": true,
+      "exclude": []
+    },
+    {
+      "id": "obsidian",
+      "type": "obsidian",
+      "name": "Obsidian Vault",
+      "root": "~/Documents/Obsidian Vault",
+      "enabled": false
+    },
+    {
+      "id": "managed",
+      "type": "managed",
+      "name": "Personal Knowledge",
+      "root": "~/Documents/Personal Knowledge",
+      "enabled": true
+    }
+  ],
+  "notion": {
+    "enabled": false,
+    "auth": "notion_snapshot",
+    "snapshotPath": "~/.pks/notion-metadata.json",
+    "contentMode": "metadata",
+    "defaultParentPageId": ""
+  },
+  "semantic": {
+    "provider": "hash",
+    "dimensions": 256
+  },
+  "forge": {
+    "enabled": true,
+    "socketPath": "~/.pks/forge.sock"
+  }
+}

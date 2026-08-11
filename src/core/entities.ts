@@ -1,0 +1,3 @@
+// @ts-nocheck
+export interface ExtractedEntity { type:string; name:string; relation:string; anchor?:string; confidence:number; }
+export function extractEntities(text:string){const out:ExtractedEntity[]=[];const seen=new Set<string>();for(const m of text.matchAll(/\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g)){push('DocumentReference',m[1].trim(),'links_to',m[0],1);}for(const m of text.matchAll(/(^|\s)#([\p{L}\p{N}_/-]{2,80})/gu)){push('Topic',m[2],'tagged_with',m[0].trim(),0.98);}return out;function push(type:string,name:string,relation:string,anchor:string,confidence:number){const k=`${type}|${name.toLowerCase()}|${relation}`;if(name&&!seen.has(k)){seen.add(k);out.push({type,name,relation,anchor,confidence});}}}

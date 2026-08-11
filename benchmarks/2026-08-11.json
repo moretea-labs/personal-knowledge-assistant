@@ -1,0 +1,8 @@
+{
+  "environment": {"node":"v22.16.0","documents":1000,"documentKind":"synthetic markdown"},
+  "firstIndexMs":1991,
+  "unchangedRescanMs":52,
+  "exactFtsMs":1.41,
+  "hashSemanticMs":18.64,
+  "notes":"Synthetic sandbox baseline; not a production SLA."
+}

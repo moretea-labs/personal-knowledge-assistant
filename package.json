@@ -1,0 +1,38 @@
+{
+  "name": "@moretea-labs/personal-knowledge-assistant",
+  "version": "0.2.0",
+  "description": "Local-first personal knowledge assistant with evidence-backed retrieval, safe writes, structured memory, and Forge integration.",
+  "type": "module",
+  "main": "dist/src/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/server.js",
+    "cli": "node dist/src/cli.js",
+    "test": "node --test dist/tests/*.test.js",
+    "demo": "node dist/tests/demo.js",
+    "benchmark": "node dist/tests/benchmark.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2"
+  },
+  "homepage": "https://github.com/moretea-labs/personal-knowledge-assistant#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moretea-labs/personal-knowledge-assistant.git"
+  },
+  "bugs": {
+    "url": "https://github.com/moretea-labs/personal-knowledge-assistant/issues"
+  },
+  "bin": {
+    "personal-knowledge-assistant": "dist/src/cli.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

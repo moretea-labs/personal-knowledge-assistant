@@ -1,0 +1,22 @@
+{
+  "$schema": "./schemas/forge-plugin.schema.json",
+  "id": "personal_knowledge",
+  "name": "Personal Knowledge Assistant",
+  "version": "0.2.0",
+  "protocolVersion": "1.0",
+  "mode": "external",
+  "scope": "controller",
+  "provider": "moretea-labs",
+  "repositoryRegistrationRequired": false,
+  "transport": {
+    "kind": "managed-cli-json",
+    "entrypoint": "scripts/forge-provider.mjs"
+  },
+  "entrypoints": {
+    "cli": "personal-knowledge-assistant",
+    "web": "dist/src/server.js",
+    "provider": "scripts/forge-provider.mjs"
+  },
+  "capabilities": ["knowledge.read", "knowledge.write", "knowledge.admin"],
+  "actions": ["knowledge_search", "knowledge_read", "knowledge_mutate", "knowledge_analyze", "knowledge_admin"]
+}

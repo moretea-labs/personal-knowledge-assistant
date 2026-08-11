@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.moretea-labs.dev/schemas/forge-plugin.schema.json",
+  "title": "Personal Knowledge Assistant Forge plugin manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "version", "protocolVersion", "mode", "scope", "provider", "repositoryRegistrationRequired", "transport", "entrypoints", "capabilities", "actions"],
+  "properties": {
+    "$schema": {"type":"string"},
+    "id": {"const":"personal_knowledge"},
+    "name": {"const":"Personal Knowledge Assistant"},
+    "version": {"type":"string"},
+    "protocolVersion": {"type":"string"},
+    "mode": {"const":"external"},
+    "scope": {"const":"controller"},
+    "provider": {"type":"string"},
+    "repositoryRegistrationRequired": {"const":false},
+    "transport": {"type":"object","required":["kind","entrypoint"],"properties":{"kind":{"const":"managed-cli-json"},"entrypoint":{"type":"string"}},"additionalProperties":false},
+    "entrypoints": {"type":"object","required":["cli","web","provider"],"properties":{"cli":{"type":"string"},"web":{"type":"string"},"provider":{"type":"string"}},"additionalProperties":false},
+    "capabilities": {"type":"array","items":{"type":"string"},"uniqueItems":true},
+    "actions": {"type":"array","items":{"type":"string"},"uniqueItems":true}
+  }
+}
