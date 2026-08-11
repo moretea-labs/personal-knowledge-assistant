@@ -7,7 +7,7 @@ import { loadConfig } from '../dist/src/config.js';
 import { PKSService } from '../dist/src/core/service.js';
 import { providerManifest, FORGE_ACTIONS } from '../dist/src/forge/contract.js';
 
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 const PLUGIN_ID = 'personal_knowledge';
 const capabilities = ['knowledge.read', 'knowledge.write', 'knowledge.admin'];
 function write(value) { process.stdout.write(`${JSON.stringify(value)}\n`); }

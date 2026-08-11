@@ -1,6 +1,6 @@
 {
   "name": "@moretea-labs/personal-knowledge-assistant",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local-first personal knowledge assistant with evidence-backed retrieval, safe writes, structured memory, and Forge integration.",
   "type": "module",
   "main": "dist/src/server.js",

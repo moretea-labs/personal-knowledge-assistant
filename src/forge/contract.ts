@@ -1,7 +1,7 @@
 // @ts-nocheck
 export const FORGE_PLUGIN_ID='personal_knowledge';
 export const FORGE_PROVIDER='pks';
-export const FORGE_PLUGIN_VERSION='0.2.0';
+export const FORGE_PLUGIN_VERSION='0.2.1';
 export const FORGE_PROTOCOL_VERSION='1.0';
 export const FORGE_ACTIONS=[
  {actionId:'knowledge_search',title:'Search personal knowledge',description:'Search indexed personal sources and return bounded evidence with canonical locations.',readOnly:true,risk:'readonly',confirmation:'none',defaultTimeoutMs:15000,cancellable:true,idempotent:true,scopes:['knowledge.read'],resourceClaims:[],argumentsSchema:{type:'object',properties:{query:{type:'string'},limit:{type:'number'},document_type:{type:'string'},source:{type:'string'},mode:{enum:['auto','fts','semantic','metadata','structured']}},required:['query'],additionalProperties:false}},

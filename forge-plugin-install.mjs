@@ -7,6 +7,9 @@ const root = dirname(fileURLToPath(import.meta.url));
 execFileSync('npm', ['install', '--ignore-scripts'], { cwd: root, stdio: 'inherit' });
 execFileSync('npm', ['run', 'build'], { cwd: root, stdio: 'inherit' });
 const helperPath = resolve(root, 'scripts/forge-provider.mjs');
+const nodeLocator = process.platform === 'win32' ? 'where.exe' : 'which';
+const nodeExecutable = String(execFileSync(nodeLocator, ['node'], { encoding: 'utf8' })).split(/\r?\n/).map((value) => value.trim()).find(Boolean);
+if (!nodeExecutable) throw new Error('Personal Knowledge Assistant requires Node.js >=22.5.0.');
 const read = { scope:'knowledge.read', mode:'read', description:'Search, read, and analyze user-owned indexed personal knowledge.', granted:true, required:true };
 const write = { scope:'knowledge.write', mode:'write', description:'Create or update only managed canonical personal knowledge.', granted:true, required:false };
 const admin = { scope:'knowledge.admin', mode:'write', description:'Synchronize configured sources and manage the local knowledge index.', granted:true, required:false };
@@ -19,8 +22,8 @@ const actions = [
  {actionId:'knowledge_admin',title:'Manage personal knowledge index',description:'Read status, synchronize sources, or create a proposal-only physical organization plan.',readOnly:false,risk:'workspace_write',confirmation:'authorization',defaultTimeoutMs:120000,cancellable:true,idempotent:true,scopes:['knowledge.admin'],resourceClaims:writeClaim,argumentsSchema:{type:'object',properties:{operation:{enum:['sync','status','organization_plan','sources','recent_changes']}},required:['operation'],additionalProperties:false}}
 ];
 const registration = {
- pluginId:'personal_knowledge',providerPluginId:'personal_knowledge',displayName:'Personal Knowledge Assistant',provider:'moretea-labs',pluginVersion:'0.2.0',protocolVersion:'1.0',scope:'controller',enabled:true,
- transport:{kind:'managed_cli_json',runtimeExecutable:process.execPath,helperPath,cwd:root,maxRequestBytes:1048576,maxResponseBytes:4194304,healthTimeoutMs:5000,actionTimeoutMs:120000},
+ pluginId:'personal_knowledge',providerPluginId:'personal_knowledge',displayName:'Personal Knowledge Assistant',provider:'moretea-labs',pluginVersion:'0.2.1',protocolVersion:'1.0',scope:'controller',enabled:true,
+ transport:{kind:'managed_cli_json',runtimeExecutable:nodeExecutable,helperPath,cwd:root,maxRequestBytes:1048576,maxResponseBytes:4194304,healthTimeoutMs:5000,actionTimeoutMs:120000},
  permissions:[read,write,admin],
  capabilities:[
   {capabilityId:'knowledge.read',title:'Personal knowledge reads',description:'Search, read, and analyze indexed user-owned knowledge.',scopes:['knowledge.read'],actions:['knowledge_search','knowledge_read','knowledge_analyze']},
