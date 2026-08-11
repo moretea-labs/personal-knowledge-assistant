@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Forge Discussions
+    url: https://github.com/moretea-labs/forge/discussions
+    about: Forge setup and cross-product questions
+  - name: Security report
+    url: https://github.com/moretea-labs/personal-knowledge-assistant/security/advisories/new
+    about: Report vulnerabilities or accidental data exposure privately

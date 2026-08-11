@@ -1,0 +1,24 @@
+name: Bug report
+description: Report a reproducible PKA defect using redacted or synthetic data
+title: "bug: "
+labels: [bug]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Use synthetic/redacted fixtures. Include version, source type, command/API path, and minimal steps.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
