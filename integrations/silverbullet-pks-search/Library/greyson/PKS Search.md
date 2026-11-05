@@ -17,16 +17,9 @@ local PKS_BASE = "http://127.0.0.1:3217"
 local PREVIEW_LIMIT = 8000
 
 local function encode(value)
-  return (tostring(value):gsub("([^%w%-_%.~])", function(char)
-    local codepoint = string.byte(char)
-    if codepoint <= 0x7F then
-      return string.format("%%%02X", codepoint)
-    elseif codepoint <= 0x7FF then
-      return string.format("%%%02X%%%02X", 0xC0 + math.floor(codepoint / 64), 0x80 + codepoint % 64)
-    elseif codepoint <= 0xFFFF then
-      return string.format("%%%02X%%%02X%%%02X", 0xE0 + math.floor(codepoint / 4096), 0x80 + math.floor(codepoint / 64) % 64, 0x80 + codepoint % 64)
-    end
-    return string.format("%%%02X%%%02X%%%02X%%%02X", 0xF0 + math.floor(codepoint / 262144), 0x80 + math.floor(codepoint / 4096) % 64, 0x80 + math.floor(codepoint / 64) % 64, 0x80 + codepoint % 64)
+  -- Lua patterns iterate over bytes; UTF-8 bytes must be percent-encoded as-is.
+  return (tostring(value):gsub("([^A-Za-z0-9%-_%.~])", function(char)
+    return string.format("%%%02X", string.byte(char))
   end))
 end
 
