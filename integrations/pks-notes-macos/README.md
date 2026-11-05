@@ -21,8 +21,10 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 - Search title/summary keywords are highlighted; click a match section to scroll the Markdown preview to its heading (or first matching heading section) without changing the source file
 - Web-source browser/open-link actions; opaque URI fallback copies the source identifier without guessing a file path
 - The note tree and current note header also offer file actions; missing files report a non-destructive error
+- Native Save / Discard / Cancel when leaving a dirty note (including search, new note, workspace and quit); save conflicts never discard changes
+- Cmd+N creates a Markdown note; Cmd+F focuses PKS search; Cmd+O selects the existing workspace; folder right-click offers New Note Here
 - Save via Cmd+S; protect unsaved edits and detect concurrent content changes before writing
-- Create new notes beside the selected note (or at workspace root); confirm Save/Discard/Cancel when quitting with unsaved changes
+- Create notes beside the selected note (or at the workspace root), or explicitly inside a folder via its context menu; note destinations are validated in-vault
 
 ## Development and installation
 
