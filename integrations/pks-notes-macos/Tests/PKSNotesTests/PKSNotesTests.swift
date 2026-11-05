@@ -1,0 +1,138 @@
+import Foundation
+import XCTest
+@testable import PKSNotes
+
+final class PKSNotesTests: XCTestCase {
+    func testChineseSearchDecoding() throws {
+        let json = Data("""
+        [{"documentId":"doc_test","chunkId":"chunk_test","title":"中文学习.md",
+          "uri":"/tmp/vault/中文学习.md","sourceType":"local",
+          "snippet":"测试中文搜索","score":0.9,"headingPath":"一级标题"}]
+        """.utf8)
+        let results = try JSONDecoder().decode([SearchHit].self, from: json)
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0].title, "中文学习.md")
+        XCTAssertEqual(results[0].id, "chunk_test")
+    }
+
+    func testSafeNoteNames() {
+        XCTAssertEqual(WorkspaceFiles.safeNewNoteName("中文"), "中文.md")
+        XCTAssertEqual(WorkspaceFiles.safeNewNoteName("test.md"), "test.md")
+        XCTAssertNil(WorkspaceFiles.safeNewNoteName("../outside"))
+        XCTAssertNil(WorkspaceFiles.safeNewNoteName(".private"))
+        XCTAssertNil(WorkspaceFiles.safeNewNoteName("/absolute"))
+    }
+
+    func testPathContainmentAndSymlinkEscape() throws {
+        let fm = FileManager.default
+        let sandbox = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let notes = sandbox.appendingPathComponent("notes")
+        let sibling = sandbox.appendingPathComponent("notes-private")
+        try fm.createDirectory(at: notes, withIntermediateDirectories: true)
+        try fm.createDirectory(at: sibling, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: sandbox) }
+
+        XCTAssertTrue(WorkspaceFiles.contains(notes.appendingPathComponent("中文.md"), in: notes))
+        XCTAssertFalse(WorkspaceFiles.contains(sibling.appendingPathComponent("secret.md"), in: notes))
+
+        try fm.createSymbolicLink(at: notes.appendingPathComponent("private"),
+                                  withDestinationURL: sibling)
+        XCTAssertFalse(WorkspaceFiles.contains(notes.appendingPathComponent("private/secret.md"), in: notes))
+    }
+
+    func testMarkdownTreeAndHiddenFiles() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let nested = base.appendingPathComponent("分组")
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        try "# Root".write(to: base.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+        try "# Sub".write(to: nested.appendingPathComponent("中文.md"), atomically: true, encoding: .utf8)
+        try "hidden".write(to: base.appendingPathComponent(".hidden.md"), atomically: true, encoding: .utf8)
+        try "asset".write(to: nested.appendingPathComponent("image.png"), atomically: true, encoding: .utf8)
+        let result = WorkspaceFiles.tree(in: base)
+        XCTAssertEqual(result.map { $0.name }, ["分组", "README"])
+        XCTAssertEqual(result.first?.children?.map { $0.name }, ["中文"])
+    }
+
+    @MainActor
+    func testNewNoteUsesCurrentFolderWithoutOverwritingExisting() throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let folder = root.appendingPathComponent("工作")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let existing = folder.appendingPathComponent("已有.md")
+        try "# Existing".write(to: existing, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        model.openWorkspace(root)
+        model.openNote(existing)
+        model.newNote(named: "新笔记")
+        XCTAssertEqual(model.selected, folder.appendingPathComponent("新笔记.md"))
+        XCTAssertTrue(fm.fileExists(atPath: folder.appendingPathComponent("新笔记.md").path))
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("新笔记.md").path))
+        XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "# Existing")
+        model.draft = "# Draft not saved yet"
+        model.newNote(named: "不能覆盖")
+        XCTAssertFalse(fm.fileExists(atPath: folder.appendingPathComponent("不能覆盖.md").path))
+    }
+
+    @MainActor
+    func testEditSaveAndExternalModificationConflict() throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("中文.md")
+        try "# Original".write(to: file, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        model.openWorkspace(folder)
+        model.openNote(file)
+        XCTAssertEqual(model.draft, "# Original")
+        model.draft = "# First saved edit"
+        model.save()
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "# First saved edit")
+        XCTAssertFalse(model.isDirty)
+
+        let mtime = try fm.attributesOfItem(atPath: file.path)[.modificationDate] as? Date
+        model.draft = "# My pending edit"
+        try "# Changed externally".write(to: file, atomically: true, encoding: .utf8)
+        if let mtime {
+            try fm.setAttributes([.modificationDate: mtime], ofItemAtPath: file.path)
+        }
+        model.save()
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "# Changed externally")
+        XCTAssertTrue(model.isDirty)
+        XCTAssertTrue(model.message?.contains("changed outside") == true)
+    }
+
+    func testRelativeMarkdownLinkAndAttachmentResolveInsideWorkspace() throws {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let nested = folder.appendingPathComponent("分组")
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+
+        let note = folder.appendingPathComponent("中文测试.md")
+        let linked = nested.appendingPathComponent("链接.md")
+        let attachment = folder.appendingPathComponent("附件/test.png")
+        XCTAssertEqual(WorkspaceFiles.resolve(URL(string: "分组/链接.md")!, from: note, in: folder), linked)
+        XCTAssertEqual(WorkspaceFiles.resolve(URL(string: "附件/test.png")!, from: note, in: folder), attachment)
+        XCTAssertNil(WorkspaceFiles.resolve(URL(string: "../other/私密.md")!, from: note, in: folder))
+        XCTAssertNil(WorkspaceFiles.resolve(URL(string: "https://example.org")!, from: note, in: folder))
+    }
+}
