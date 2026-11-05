@@ -72,6 +72,7 @@ struct NotesWindow: View {
     @State private var sidebarTab: SidebarTab = .notes
     @State private var newNoteName = ""
     @State private var creatingNote = false
+    @State private var expandedFolderPaths: Set<String> = []
 
     var body: some View {
         NavigationSplitView {
@@ -93,6 +94,14 @@ struct NotesWindow: View {
                 }.help("Choose an existing folder")
             }
         }
+        .onChange(of: model.root) { _, _ in
+            expandedFolderPaths.removeAll()
+        }
+        .onChange(of: model.selected) { _, note in
+            if let note, let root = model.root {
+                expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: note, in: root))
+            }
+        }
         .alert("New Markdown note", isPresented: $creatingNote) {
             TextField("Note name", text: $newNoteName)
             Button("Create") {
@@ -112,6 +121,8 @@ struct NotesWindow: View {
                     .foregroundStyle(.tint)
                 Text("PKS Notes")
                     .font(.headline)
+                    .onTapGesture(count: 2) { NSApp.keyWindow?.zoom(nil) }
+                    .help("Double-click to zoom or restore the window")
                 Spacer()
                 Image(systemName: model.searching ? "arrow.triangle.2.circlepath" :
                       model.searchStatus.hasPrefix("PKS offline") ? "exclamationmark.circle" : "circle")
@@ -256,24 +267,50 @@ struct NotesWindow: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    OutlineGroup(model.files, children: \NoteItem.children) { (item: NoteItem) in
-                        if item.isFolder {
-                            Label(item.name, systemImage: "folder")
-                                .font(.system(size: 12))
-                        } else {
-                            Button {
-                                model.openNote(item.url)
-                            } label: {
-                                Label(item.name, systemImage: "doc.text")
+                    ForEach(NoteTreePresentation.visibleRows(model.files, expandedPaths: expandedFolderPaths)) { row in
+                        HStack(spacing: 7) {
+                            if row.item.isFolder {
+                                Button {
+                                    toggleFolder(row.item.url)
+                                } label: {
+                                    Image(systemName: expandedFolderPaths.contains(row.item.id) ? "chevron.down" : "chevron.right")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 14, height: 20)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .help(expandedFolderPaths.contains(row.item.id) ? "Collapse folder" : "Expand folder")
+                                .accessibilityLabel(expandedFolderPaths.contains(row.item.id)
+                                                    ? "Collapse \(row.item.name)" : "Expand \(row.item.name)")
+                                Label(row.item.name, systemImage: "folder")
                                     .font(.system(size: 12))
-                                    .foregroundColor(model.selected == item.url ? .accentColor : .primary)
-                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture(count: 2) { toggleFolder(row.item.url) }
+                                    .help("Double-click to expand or collapse")
+                            } else {
+                                Image(systemName: "doc.text")
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 14)
+                                Button {
+                                    model.openNote(row.item.url)
+                                } label: {
+                                    Text(row.item.name)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(model.selected == row.item.url ? .accentColor : .primary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
+                                        .lineLimit(1)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("pks-note-\(row.item.name)")
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("pks-note-\(item.name)")
-                            .contextMenu { fileActions(item.url) }
-                            .help(item.url.path)
                         }
+                        .padding(.leading, CGFloat(row.depth) * 17)
+                        .contextMenu { fileActions(row.item.url) }
+                        .help(row.item.url.path)
+                        .accessibilityIdentifier(row.item.isFolder ? "pks-folder-\(row.item.name)" : row.item.id)
                     }
                 } header: {
                     HStack {
@@ -293,6 +330,12 @@ struct NotesWindow: View {
                 }
             }
             .listStyle(.sidebar)
+        }
+    }
+
+    private func toggleFolder(_ url: URL) {
+        if !expandedFolderPaths.insert(url.path).inserted {
+            expandedFolderPaths.remove(url.path)
         }
     }
 
@@ -370,6 +413,8 @@ struct NotesWindow: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.title).font(.headline).lineLimit(1)
+                    .onTapGesture(count: 2) { NSApp.keyWindow?.zoom(nil) }
+                    .help("Double-click to zoom or restore the window")
                 Text(model.selected?.path ?? model.previewSource?.uri ?? "PKS search · external source")
                     .font(.caption2)
                     .foregroundStyle(.secondary)

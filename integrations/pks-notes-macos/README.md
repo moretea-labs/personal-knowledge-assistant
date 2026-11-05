@@ -11,8 +11,8 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 
 ## Features
 
-- Native Mac window; separate Notes and Search sidebar tabs
-- Folder navigation, nested Markdown notes and Chinese filenames
+- Native Mac window; double-click the app or note title to zoom/restore, in addition to standard macOS title-bar controls; separate Notes and Search sidebar tabs
+- Folder navigation, nested Markdown notes and Chinese filenames; double-click a folder name or click its chevron to expand/collapse (including empty folders); active note auto-reveals its parent folders
 - Markdown edit, read, and split preview modes (powered by MarkdownUI 2.4.1)
 - In-workspace Markdown links and images, with path containment checks
 - PKS ranked cross-source search; view snippets and read out-of-workspace results without editing them

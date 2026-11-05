@@ -55,6 +55,34 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(result.first?.children?.map { $0.name }, ["中文"])
     }
 
+    func testFolderExpansionShowsOnlyVisibleDescendants() {
+        let root = URL(fileURLWithPath: "/tmp/pks-ui-test")
+        let parent = root.appendingPathComponent("Projects", isDirectory: true)
+        let folder = parent.appendingPathComponent("Ideas", isDirectory: true)
+        let note = folder.appendingPathComponent("draft.md")
+        let tree = [
+            NoteItem(url: parent, children: [
+                NoteItem(url: folder, children: [NoteItem(url: note, children: nil)])
+            ]),
+            NoteItem(url: root.appendingPathComponent("README.md"), children: nil)
+        ]
+        XCTAssertEqual(NoteTreePresentation.visibleRows(tree, expandedPaths: []).map(\.depth), [0, 0])
+        XCTAssertEqual(NoteTreePresentation.visibleRows(tree, expandedPaths: [parent.path]).map(\.depth), [0, 1, 0])
+        XCTAssertEqual(NoteTreePresentation.visibleRows(tree, expandedPaths: [parent.path, folder.path]).map(\.depth), [0, 1, 2, 0])
+        XCTAssertEqual(NoteTreePresentation.ancestorPaths(for: note, in: root), [parent.path, folder.path])
+    }
+
+    func testEmptyFolderRemainsNavigable() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: root.appendingPathComponent("Empty"), withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let folder = try XCTUnwrap(WorkspaceFiles.tree(in: root).first)
+        XCTAssertTrue(folder.isFolder)
+        XCTAssertEqual(folder.name, "Empty")
+        XCTAssertEqual(folder.children?.count, 0)
+    }
+
     @MainActor
     func testNewNoteUsesCurrentFolderWithoutOverwritingExisting() throws {
         let defaults = UserDefaults.standard
