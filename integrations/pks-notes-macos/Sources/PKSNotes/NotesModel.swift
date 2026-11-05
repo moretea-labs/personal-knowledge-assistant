@@ -186,6 +186,7 @@ final class NotesModel: ObservableObject {
         }
         previewTask?.cancel()
         root = resolved
+        message = nil
         UserDefaults.standard.set(resolved.path, forKey: "PKSNotesWorkspace")
         files = []
         refresh()

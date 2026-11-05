@@ -73,6 +73,7 @@ final class PKSNotesTests: XCTestCase {
 
         let model = NotesModel()
         model.openWorkspace(root)
+        XCTAssertNil(model.message)
         model.openNote(existing)
         model.newNote(named: "新笔记")
         XCTAssertEqual(model.selected, folder.appendingPathComponent("新笔记.md"))
