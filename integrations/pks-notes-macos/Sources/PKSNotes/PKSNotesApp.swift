@@ -156,31 +156,88 @@ struct NotesWindow: View {
                 if sidebarTab == .search {
                 if !model.hits.isEmpty {
                     Section("PKS results · across all sources") {
-                        ForEach(model.hits) { hit in
-                            Button {
-                                model.openResult(hit)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(hit.title)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .lineLimit(2)
-                                    if let heading = hit.headingPath, !heading.isEmpty {
-                                        Text(heading)
+                        ForEach(model.groupedHits) { group in
+                            let hit = group.primary
+                            VStack(alignment: .leading, spacing: 6) {
+                            HStack(alignment: .top, spacing: 6) {
+                                Button {
+                                    model.openResult(hit)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: hit.localFileURL != nil ? "doc.text" :
+                                                  hit.webURL != nil ? "globe" : "doc.richtext")
+                                                .foregroundStyle(.secondary)
+                                            highlighted(hit.title, query: model.query)
+                                                .font(.system(size: 12, weight: .medium))
+                                                .lineLimit(2)
+                                        }
+                                        Text(hit.sourceLabel + " · " + hit.sourceLocation)
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
                                             .lineLimit(1)
+                                        if let heading = hit.headingPath, !heading.isEmpty {
+                                            Text(heading)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                        if let snippet = hit.snippet, !snippet.isEmpty {
+                                            highlighted(snippet.replacingOccurrences(of: "\n", with: " "), query: model.query)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(2)
+                                        }
                                     }
-                                    if let snippet = hit.snippet, !snippet.isEmpty {
-                                        Text(snippet.replacingOccurrences(of: "\n", with: " "))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(2)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 4)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("pks-result-\(hit.documentId)")
+
+                                Menu {
+                                    resultActions(hit)
+                                } label: {
+                                    Image(systemName: "ellipsis")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .menuStyle(.borderlessButton)
+                                .menuIndicator(.hidden)
+                                .frame(width: 25)
+                                .help("Source actions")
+                            }
+                            if group.hits.count > 1 {
+                                DisclosureGroup("\(group.hits.count) matching sections") {
+                                    ForEach(Array(group.hits.enumerated()), id: \.offset) { index, match in
+                                        Button {
+                                            model.openResult(match)
+                                        } label: {
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                Text(match.headingPath?.isEmpty == false
+                                                     ? match.headingPath! : "Match \(index + 1)")
+                                                    .font(.caption)
+                                                    .fontWeight(.medium)
+                                                    .lineLimit(1)
+                                                if let snippet = match.snippet, !snippet.isEmpty {
+                                                    highlighted(snippet.replacingOccurrences(of: "\n", with: " "),
+                                                                query: model.query)
+                                                        .font(.caption2)
+                                                        .lineLimit(2)
+                                                }
+                                            }
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .padding(.vertical, 4)
+                                        .accessibilityIdentifier("pks-match-\(match.id)")
                                     }
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 3)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 22)
                             }
-                            .buttonStyle(.plain)
+                            }
+                            .contextMenu { resultActions(hit) }
                             .help(hit.uri)
                         }
                     }
@@ -214,6 +271,7 @@ struct NotesWindow: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("pks-note-\(item.name)")
+                            .contextMenu { fileActions(item.url) }
                             .help(item.url.path)
                         }
                     }
@@ -235,6 +293,45 @@ struct NotesWindow: View {
                 }
             }
             .listStyle(.sidebar)
+        }
+    }
+
+    private func highlighted(_ value: String, query: String) -> Text {
+        MatchHighlighter.pieces(in: value, query: query).reduce(Text("")) { result, piece in
+            result + (piece.matched
+                      ? Text(piece.text).bold().foregroundColor(.accentColor)
+                      : Text(piece.text))
+        }
+    }
+
+    @ViewBuilder
+    private func fileActions(_ url: URL) -> some View {
+        Button("Show in Finder", systemImage: "folder") {
+            model.revealInFinder(url)
+        }
+        Button("Open with Default App", systemImage: "arrow.up.right.square") {
+            model.openInDefaultApp(url)
+        }
+        Button("Copy File Path", systemImage: "doc.on.doc") {
+            model.copySource(url.path)
+        }
+    }
+
+    @ViewBuilder
+    private func resultActions(_ hit: SearchHit) -> some View {
+        if let file = hit.localFileURL {
+            fileActions(file)
+        } else if let link = hit.webURL {
+            Button("Open Source in Browser", systemImage: "globe") {
+                model.openSourceLink(link)
+            }
+            Button("Copy Source Link", systemImage: "link") {
+                model.copySource(link.absoluteString)
+            }
+        } else {
+            Button("Copy Source Identifier", systemImage: "doc.on.doc") {
+                model.copySource(hit.uri)
+            }
         }
     }
 
@@ -273,13 +370,32 @@ struct NotesWindow: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.title).font(.headline).lineLimit(1)
-                Text(model.selected?.path ?? "PKS search · external source")
+                Text(model.selected?.path ?? model.previewSource?.uri ?? "PKS search · external source")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .textSelection(.enabled)
             }
             Spacer()
+            if let url = model.selected ?? model.previewSource?.localFileURL {
+                Menu {
+                    fileActions(url)
+                } label: {
+                    Label("File actions", systemImage: "folder")
+                }
+                .help("Show the original file in Finder or open another app")
+            } else if let url = model.previewSource?.webURL {
+                Menu {
+                    Button("Open Source in Browser", systemImage: "globe") {
+                        model.openSourceLink(url)
+                    }
+                    Button("Copy Source Link", systemImage: "link") {
+                        model.copySource(url.absoluteString)
+                    }
+                } label: {
+                    Label("Source actions", systemImage: "link")
+                }
+            }
             if model.externalBody == nil {
                 Picker("View", selection: $mode) {
                     ForEach(ReadingMode.allCases, id: \.self) { option in
@@ -329,25 +445,57 @@ struct NotesWindow: View {
     }
 
     private var renderedNote: some View {
-        ScrollView {
-            Markdown(model.body)
-                .markdownTheme(.gitHub)
-                .markdownImageProvider(LocalMarkdownImageProvider(note: model.selected, root: model.root))
-                .environment(\.openURL, OpenURLAction { url in
-                    if url.scheme == nil || url.isFileURL {
-                        if !model.openInternalLink(url) {
-                            model.message = "Link target not available in this workspace."
-                        }
-                        return .handled
+        // Keep ordinary Markdown rendering whole, preserving cross-section
+        // references/footnotes. Segment only when positioning a PKS search hit.
+        let sections = model.activeMatch == nil
+            ? [MarkdownSection(id: 0, heading: nil, markdown: model.body)]
+            : MarkdownSection.sections(in: model.body)
+        return ScrollViewReader { scroll in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(sections) { section in
+                        Markdown(section.markdown)
+                            .markdownTheme(.gitHub)
+                            .markdownImageProvider(LocalMarkdownImageProvider(note: model.selected, root: model.root))
+                            .environment(\.openURL, OpenURLAction { url in
+                                if url.scheme == nil || url.isFileURL {
+                                    if !model.openInternalLink(url) {
+                                        model.message = "Link target not available in this workspace."
+                                    }
+                                    return .handled
+                                }
+                                return ["http", "https"].contains(url.scheme?.lowercased() ?? "")
+                                    ? .systemAction : .discarded
+                            })
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
+                            .id(section.id)
                     }
-                    return ["http", "https"].contains(url.scheme?.lowercased() ?? "")
-                        ? .systemAction : .discarded
-                })
-                .textSelection(.enabled)
+                }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .padding(26)
+            }
+            .onAppear { jumpToMatch(scroll, sections: sections) }
+            .onChange(of: model.matchJumpSequence) { _, _ in
+                jumpToMatch(scroll, sections: sections)
+            }
         }
         .background(Color(nsColor: .textBackgroundColor))
         .accessibilityIdentifier("pks-markdown-preview")
     }
+
+    private func jumpToMatch(_ proxy: ScrollViewProxy, sections: [MarkdownSection]) {
+        guard let hit = model.activeMatch,
+              let target = MarkdownSection.targetIndex(in: sections,
+                                                       headingPath: hit.headingPath,
+                                                       snippet: hit.snippet,
+                                                       query: model.matchedQuery) else { return }
+        DispatchQueue.main.async {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                proxy.scrollTo(target, anchor: .top)
+            }
+        }
+    }
+
 }

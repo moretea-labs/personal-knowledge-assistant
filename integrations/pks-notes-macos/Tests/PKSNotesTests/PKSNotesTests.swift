@@ -136,4 +136,107 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertNil(WorkspaceFiles.resolve(URL(string: "../other/私密.md")!, from: note, in: folder))
         XCTAssertNil(WorkspaceFiles.resolve(URL(string: "https://example.org")!, from: note, in: folder))
     }
+    func testSearchResultSourceLocationsAreTypedAndNotGuessed() throws {
+        func hit(uri: String, type: String) -> SearchHit {
+            SearchHit(documentId: "doc", chunkId: nil, title: "Test", uri: uri,
+                      sourceType: type, snippet: nil, score: nil, headingPath: nil)
+        }
+
+        let icloud = hit(uri: "/Users/test/Library/Mobile Documents/iCloud/中文笔记.md", type: "local")
+        XCTAssertEqual(icloud.localFileURL?.lastPathComponent, "中文笔记.md")
+        XCTAssertEqual(icloud.sourceLabel, "iCloud Drive")
+        XCTAssertNil(icloud.webURL)
+
+        let managed = hit(uri: "/Users/test/Documents/Archive/notes.md", type: "managed")
+        XCTAssertEqual(managed.localFileURL?.path, "/Users/test/Documents/Archive/notes.md")
+        XCTAssertEqual(managed.sourceLabel, "Local file")
+        XCTAssertEqual(managed.sourceLocation, "Archive")
+
+        let webpage = hit(uri: "https://example.com/docs?id=1", type: "web")
+        XCTAssertNil(webpage.localFileURL)
+        XCTAssertEqual(webpage.webURL?.host, "example.com")
+        XCTAssertEqual(webpage.sourceLabel, "Web page")
+
+        XCTAssertNil(hit(uri: "javascript:alert(1)", type: "web").webURL)
+        XCTAssertNil(hit(uri: "https://example.com", type: "managed").localFileURL)
+        XCTAssertNil(hit(uri: "//remote/share/notes.md", type: "local").localFileURL)
+        XCTAssertNil(hit(uri: "/tmp/local.md", type: "web").localFileURL)
+        XCTAssertNil(hit(uri: "opaque:ref-42", type: "other").localFileURL)
+    }
+
+    @MainActor
+    func testMissingFileActionsReportErrorWithoutLaunchingAnything() throws {
+        let model = NotesModel()
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pks-notes-missing-\(UUID().uuidString).md")
+        model.revealInFinder(missing)
+        XCTAssertEqual(model.message, "The original file is not available locally.")
+        model.message = nil
+        model.openInDefaultApp(missing)
+        XCTAssertEqual(model.message, "The original file is not available locally.")
+    }
+
+    func testPKSDocumentGroupingPreservesRankAndIndividualHits() {
+        func hit(_ doc: String, _ uri: String, _ section: String) -> SearchHit {
+            SearchHit(documentId: doc, chunkId: section, title: doc, uri: uri,
+                      sourceType: "local", snippet: section, score: nil, headingPath: section)
+        }
+        let result = SearchResultGroup.group([
+            hit("A", "/notes/a.md", "intro"),
+            hit("B", "/notes/b.md", "summary"),
+            hit("A", "/notes/a.md", "details"),
+            hit("A", "/other/a.md", "other location")
+        ])
+        XCTAssertEqual(result.count, 3)
+        XCTAssertEqual(result.map { $0.primary.documentId }, ["A", "B", "A"])
+        XCTAssertEqual(result[0].hits.map { $0.headingPath }, ["intro", "details"])
+        XCTAssertEqual(result[1].hits.count, 1)
+    }
+
+    func testLiteralUnicodeHighlightingAndNoRegexInterpretation() {
+        let pieces = MatchHighlighter.pieces(in: "学习 Markdown, markdown 和 md.", query: "MARKDOWN")
+        XCTAssertEqual(pieces.filter { $0.matched }.map { $0.text }, ["Markdown", "markdown"])
+        XCTAssertEqual(pieces.map { $0.text }.joined(), "学习 Markdown, markdown 和 md.")
+        XCTAssertEqual(MatchHighlighter.pieces(in: "a.b a-b", query: "a.b")
+            .filter { $0.matched }.count, 1)
+        XCTAssertEqual(MatchHighlighter.pieces(in: "中文 文", query: "文")
+            .filter { $0.matched }.count, 2)
+    }
+
+    func testMarkdownHeadingNavigationIgnoresCodeFences() {
+        let source = "# Intro\nHello\n\n~~~swift\n# Not a heading\n~~~\n## 中文段落\nParagraph here\n"
+        let sections = MarkdownSection.sections(in: source)
+        XCTAssertEqual(sections.count, 2)
+        XCTAssertEqual(sections.map { $0.heading }, ["Intro", "中文段落"])
+        XCTAssertEqual(MarkdownSection.targetIndex(in: sections, headingPath: "Intro > 中文段落",
+                                                   snippet: nil, query: ""), 1)
+        XCTAssertEqual(MarkdownSection.targetIndex(in: sections, headingPath: nil, snippet: nil,
+                                                   query: "Paragraph"), 1)
+    }
+
+    @MainActor
+    func testSameNoteResultNavigationPreservesUnsavedDraft() throws {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        let note = folder.appendingPathComponent("测试.md")
+        try "# Section\nOriginal".write(to: note, atomically: true, encoding: .utf8)
+        let model = NotesModel()
+        model.openWorkspace(folder)
+        model.openNote(note)
+        model.draft = "# Section\nUncommitted changes"
+        model.query = "Section"
+        let hit = SearchHit(documentId: "doc", chunkId: "chunk", title: "测试",
+                            uri: note.path, sourceType: "local", snippet: "Section",
+                            score: 1, headingPath: "Section")
+        model.openResult(hit)
+        XCTAssertEqual(model.selected, note)
+        XCTAssertTrue(model.isDirty)
+        XCTAssertTrue(model.draft.contains("Uncommitted changes"))
+        XCTAssertEqual(model.activeMatch?.headingPath, "Section")
+        XCTAssertGreaterThan(model.matchJumpSequence, 0)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "# Section\nOriginal")
+    }
+
 }
