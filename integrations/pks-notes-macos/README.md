@@ -29,7 +29,9 @@ Requires macOS 14 or later with Swift/Xcode.
     ./scripts/install-macos.sh
     open "$HOME/Applications/PKS Notes.app"
 
-By default the app opens the existing iCloud Drive directory named 学习笔记管理 when it exists, or the last chosen folder. Use the folder toolbar action to choose a different directory. The operating system manages iCloud syncing.
+**First launch:** select the existing iCloud Drive folder `学习笔记管理` using **Choose Folder** (or the folder toolbar button) and click **Open** in the macOS folder picker. This is a one-time macOS file-access grant for this application, not a login and not a new sync service. The app retains the system security-scoped folder bookmark and reopens the same folder on subsequent launches. Until permission is granted, the app intentionally leaves the notes tree empty but PKS search remains available.
+
+The canonical folder is `~/Library/Mobile Documents/com~apple~CloudDocs/学习笔记管理`. No source files are imported, relocated or copied. iCloud Drive handles synchronization. Do not bypass the native folder picker by writing the folder path to app preferences: that does not grant macOS permissions.
 
 ## Verification
 
