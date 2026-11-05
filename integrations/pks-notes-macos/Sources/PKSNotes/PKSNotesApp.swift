@@ -156,7 +156,9 @@ struct NotesWindow: View {
                 if sidebarTab == .search {
                 if !model.hits.isEmpty {
                     Section("PKS results · across all sources") {
-                        ForEach(model.hits) { hit in
+                        ForEach(model.groupedHits) { group in
+                            let hit = group.primary
+                            VStack(alignment: .leading, spacing: 6) {
                             HStack(alignment: .top, spacing: 6) {
                                 Button {
                                     model.openResult(hit)
@@ -166,7 +168,7 @@ struct NotesWindow: View {
                                             Image(systemName: hit.localFileURL != nil ? "doc.text" :
                                                   hit.webURL != nil ? "globe" : "doc.richtext")
                                                 .foregroundStyle(.secondary)
-                                            Text(hit.title)
+                                            highlighted(hit.title, query: model.query)
                                                 .font(.system(size: 12, weight: .medium))
                                                 .lineLimit(2)
                                         }
@@ -181,7 +183,7 @@ struct NotesWindow: View {
                                                 .lineLimit(1)
                                         }
                                         if let snippet = hit.snippet, !snippet.isEmpty {
-                                            Text(snippet.replacingOccurrences(of: "\n", with: " "))
+                                            highlighted(snippet.replacingOccurrences(of: "\n", with: " "), query: model.query)
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
                                                 .lineLimit(2)
@@ -203,6 +205,37 @@ struct NotesWindow: View {
                                 .menuIndicator(.hidden)
                                 .frame(width: 25)
                                 .help("Source actions")
+                            }
+                            if group.hits.count > 1 {
+                                DisclosureGroup("\(group.hits.count) matching sections") {
+                                    ForEach(Array(group.hits.enumerated()), id: \.offset) { index, match in
+                                        Button {
+                                            model.openResult(match)
+                                        } label: {
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                Text(match.headingPath?.isEmpty == false
+                                                     ? match.headingPath! : "Match \(index + 1)")
+                                                    .font(.caption)
+                                                    .fontWeight(.medium)
+                                                    .lineLimit(1)
+                                                if let snippet = match.snippet, !snippet.isEmpty {
+                                                    highlighted(snippet.replacingOccurrences(of: "\n", with: " "),
+                                                                query: model.query)
+                                                        .font(.caption2)
+                                                        .lineLimit(2)
+                                                }
+                                            }
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .padding(.vertical, 4)
+                                        .accessibilityIdentifier("pks-match-\(match.id)")
+                                    }
+                                }
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 22)
+                            }
                             }
                             .contextMenu { resultActions(hit) }
                             .help(hit.uri)
@@ -260,6 +293,14 @@ struct NotesWindow: View {
                 }
             }
             .listStyle(.sidebar)
+        }
+    }
+
+    private func highlighted(_ value: String, query: String) -> Text {
+        MatchHighlighter.pieces(in: value, query: query).reduce(Text("")) { result, piece in
+            result + (piece.matched
+                      ? Text(piece.text).bold().foregroundColor(.accentColor)
+                      : Text(piece.text))
         }
     }
 
@@ -404,25 +445,57 @@ struct NotesWindow: View {
     }
 
     private var renderedNote: some View {
-        ScrollView {
-            Markdown(model.body)
-                .markdownTheme(.gitHub)
-                .markdownImageProvider(LocalMarkdownImageProvider(note: model.selected, root: model.root))
-                .environment(\.openURL, OpenURLAction { url in
-                    if url.scheme == nil || url.isFileURL {
-                        if !model.openInternalLink(url) {
-                            model.message = "Link target not available in this workspace."
-                        }
-                        return .handled
+        // Keep ordinary Markdown rendering whole, preserving cross-section
+        // references/footnotes. Segment only when positioning a PKS search hit.
+        let sections = model.activeMatch == nil
+            ? [MarkdownSection(id: 0, heading: nil, markdown: model.body)]
+            : MarkdownSection.sections(in: model.body)
+        return ScrollViewReader { scroll in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(sections) { section in
+                        Markdown(section.markdown)
+                            .markdownTheme(.gitHub)
+                            .markdownImageProvider(LocalMarkdownImageProvider(note: model.selected, root: model.root))
+                            .environment(\.openURL, OpenURLAction { url in
+                                if url.scheme == nil || url.isFileURL {
+                                    if !model.openInternalLink(url) {
+                                        model.message = "Link target not available in this workspace."
+                                    }
+                                    return .handled
+                                }
+                                return ["http", "https"].contains(url.scheme?.lowercased() ?? "")
+                                    ? .systemAction : .discarded
+                            })
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
+                            .id(section.id)
                     }
-                    return ["http", "https"].contains(url.scheme?.lowercased() ?? "")
-                        ? .systemAction : .discarded
-                })
-                .textSelection(.enabled)
+                }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .padding(26)
+            }
+            .onAppear { jumpToMatch(scroll, sections: sections) }
+            .onChange(of: model.matchJumpSequence) { _, _ in
+                jumpToMatch(scroll, sections: sections)
+            }
         }
         .background(Color(nsColor: .textBackgroundColor))
         .accessibilityIdentifier("pks-markdown-preview")
     }
+
+    private func jumpToMatch(_ proxy: ScrollViewProxy, sections: [MarkdownSection]) {
+        guard let hit = model.activeMatch,
+              let target = MarkdownSection.targetIndex(in: sections,
+                                                       headingPath: hit.headingPath,
+                                                       snippet: hit.snippet,
+                                                       query: model.matchedQuery) else { return }
+        DispatchQueue.main.async {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                proxy.scrollTo(target, anchor: .top)
+            }
+        }
+    }
+
 }

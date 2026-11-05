@@ -148,6 +148,9 @@ final class NotesModel: ObservableObject {
     @Published private(set) var externalTitle: String?
     @Published private(set) var externalBody: String?
     @Published private(set) var previewSource: SearchHit?
+    @Published private(set) var activeMatch: SearchHit?
+    @Published private(set) var matchJumpSequence = 0
+    @Published private(set) var matchedQuery = ""
     @Published var query = ""
     @Published private(set) var hits: [SearchHit] = []
     @Published private(set) var searching = false
@@ -160,6 +163,7 @@ final class NotesModel: ObservableObject {
     var isDirty: Bool { selected != nil && draft != baseline }
     var title: String { externalTitle ?? selected?.lastPathComponent ?? "Select a note" }
     var body: String { externalBody ?? draft }
+    var groupedHits: [SearchResultGroup] { SearchResultGroup.group(hits) }
 
     init() {
         let preferences = UserDefaults.standard
@@ -223,6 +227,7 @@ final class NotesModel: ObservableObject {
         externalTitle = nil
         externalBody = nil
         previewSource = nil
+        activeMatch = nil
         draft = ""
         baseline = ""
     }
@@ -258,6 +263,7 @@ final class NotesModel: ObservableObject {
             externalBody = nil
             externalTitle = nil
             previewSource = nil
+            activeMatch = nil
             message = nil
         } catch {
             message = "Cannot open the note: \(error.localizedDescription)"
@@ -331,7 +337,7 @@ final class NotesModel: ObservableObject {
                 let results = try JSONDecoder().decode([SearchHit].self, from: data)
                 guard query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 hits = results
-                searchStatus = "\(hits.count) results · PKS"
+                searchStatus = "\(hits.count) matches · \(groupedHits.count) documents · PKS"
             } catch {
                 guard query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 hits = []
@@ -390,13 +396,18 @@ final class NotesModel: ObservableObject {
     }
 
     func openResult(_ hit: SearchHit) {
-        if hit.sourceType == "local", hit.uri.hasPrefix("/"), let root {
-            let url = URL(fileURLWithPath: hit.uri)
-            if WorkspaceFiles.contains(url, in: root),
-               ["md", "markdown"].contains(url.pathExtension.lowercased()) {
-                openNote(url)
-                return
+        if hit.sourceType == "local", let url = hit.localFileURL, let root,
+           WorkspaceFiles.contains(url, in: root),
+           ["md", "markdown"].contains(url.pathExtension.lowercased()) {
+            // Repeated hits in the currently edited file can navigate without
+            // reopening it or losing unsaved Markdown changes.
+            if selected != url { openNote(url) }
+            if selected == url {
+                activeMatch = hit
+                matchedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                matchJumpSequence &+= 1
             }
+            return
         }
         guard !isDirty else { message = "Save the current note before opening another result."; return }
         // Cancel previous previews so delayed network results cannot replace another note.
@@ -417,6 +428,9 @@ final class NotesModel: ObservableObject {
                 externalTitle = hit.title + " · read-only PKS result"
                 externalBody = result.content
                 previewSource = hit
+                activeMatch = hit
+                matchedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                matchJumpSequence &+= 1
                 message = result.truncated == true ? "Preview truncated at 30,000 characters." : nil
             } catch is CancellationError {
                 // The user opened a different note or preview while the request was in flight.

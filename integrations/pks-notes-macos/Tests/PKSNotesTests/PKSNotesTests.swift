@@ -176,4 +176,67 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(model.message, "The original file is not available locally.")
     }
 
+    func testPKSDocumentGroupingPreservesRankAndIndividualHits() {
+        func hit(_ doc: String, _ uri: String, _ section: String) -> SearchHit {
+            SearchHit(documentId: doc, chunkId: section, title: doc, uri: uri,
+                      sourceType: "local", snippet: section, score: nil, headingPath: section)
+        }
+        let result = SearchResultGroup.group([
+            hit("A", "/notes/a.md", "intro"),
+            hit("B", "/notes/b.md", "summary"),
+            hit("A", "/notes/a.md", "details"),
+            hit("A", "/other/a.md", "other location")
+        ])
+        XCTAssertEqual(result.count, 3)
+        XCTAssertEqual(result.map { $0.primary.documentId }, ["A", "B", "A"])
+        XCTAssertEqual(result[0].hits.map { $0.headingPath }, ["intro", "details"])
+        XCTAssertEqual(result[1].hits.count, 1)
+    }
+
+    func testLiteralUnicodeHighlightingAndNoRegexInterpretation() {
+        let pieces = MatchHighlighter.pieces(in: "学习 Markdown, markdown 和 md.", query: "MARKDOWN")
+        XCTAssertEqual(pieces.filter { $0.matched }.map { $0.text }, ["Markdown", "markdown"])
+        XCTAssertEqual(pieces.map { $0.text }.joined(), "学习 Markdown, markdown 和 md.")
+        XCTAssertEqual(MatchHighlighter.pieces(in: "a.b a-b", query: "a.b")
+            .filter { $0.matched }.count, 1)
+        XCTAssertEqual(MatchHighlighter.pieces(in: "中文 文", query: "文")
+            .filter { $0.matched }.count, 2)
+    }
+
+    func testMarkdownHeadingNavigationIgnoresCodeFences() {
+        let source = "# Intro\nHello\n\n~~~swift\n# Not a heading\n~~~\n## 中文段落\nParagraph here\n"
+        let sections = MarkdownSection.sections(in: source)
+        XCTAssertEqual(sections.count, 2)
+        XCTAssertEqual(sections.map { $0.heading }, ["Intro", "中文段落"])
+        XCTAssertEqual(MarkdownSection.targetIndex(in: sections, headingPath: "Intro > 中文段落",
+                                                   snippet: nil, query: ""), 1)
+        XCTAssertEqual(MarkdownSection.targetIndex(in: sections, headingPath: nil, snippet: nil,
+                                                   query: "Paragraph"), 1)
+    }
+
+    @MainActor
+    func testSameNoteResultNavigationPreservesUnsavedDraft() throws {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        let note = folder.appendingPathComponent("测试.md")
+        try "# Section\nOriginal".write(to: note, atomically: true, encoding: .utf8)
+        let model = NotesModel()
+        model.openWorkspace(folder)
+        model.openNote(note)
+        model.draft = "# Section\nUncommitted changes"
+        model.query = "Section"
+        let hit = SearchHit(documentId: "doc", chunkId: "chunk", title: "测试",
+                            uri: note.path, sourceType: "local", snippet: "Section",
+                            score: 1, headingPath: "Section")
+        model.openResult(hit)
+        XCTAssertEqual(model.selected, note)
+        XCTAssertTrue(model.isDirty)
+        XCTAssertTrue(model.draft.contains("Uncommitted changes"))
+        XCTAssertEqual(model.activeMatch?.headingPath, "Section")
+        XCTAssertGreaterThan(model.matchJumpSequence, 0)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "# Section\nOriginal")
+    }
+
 }
