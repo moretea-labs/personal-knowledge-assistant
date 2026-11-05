@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { loadConfig } from '../dist/src/config.js';
 import { PKSService } from '../dist/src/core/service.js';
-import { providerManifest, FORGE_ACTIONS } from '../dist/src/forge/contract.js';
+import { providerManifest, FORGE_ACTIONS, FORGE_PLUGIN_VERSION } from '../dist/src/forge/contract.js';
 
-const VERSION = '0.2.1';
+const VERSION = FORGE_PLUGIN_VERSION;
 const PLUGIN_ID = 'personal_knowledge';
 const capabilities = ['knowledge.read', 'knowledge.write', 'knowledge.admin'];
 function write(value) { process.stdout.write(`${JSON.stringify(value)}\n`); }
@@ -37,6 +37,7 @@ async function execute(action, a = {}) {
         return await service.writer.create({ content: a.content || '', title: a.title, domain: a.domain, structuredData: a.structured_data, actor: 'forge' });
       case 'knowledge_admin':
         if (a.operation === 'status') return { status: service.status() };
+        if (a.operation === 'set_aliases') return { result: service.setSearchAliases(a.document_id,a.aliases) };
         if (a.operation === 'organization_plan') return { plan: service.organizationPlan() };
         if (a.operation === 'sources') return service.sources();
         if (a.operation === 'recent_changes') return { changes: service.recentChanges() };

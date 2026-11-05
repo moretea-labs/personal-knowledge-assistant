@@ -67,6 +67,8 @@ export class ForgeSocketServer {
         case 'knowledge_admin':
             if (a.operation === 'status')
                 return { status: this.service.status() };
+            if (a.operation === 'set_aliases')
+                return { result: this.service.setSearchAliases(a.document_id, a.aliases) };
             if (a.operation === 'organization_plan')
                 return { plan: this.service.organizationPlan() };
             if (a.operation === 'sources')

@@ -22,6 +22,7 @@ Forge owns trusted provider installation, authorization, resource claims, and ex
 - Markdown/text/HTML/JSON/CSV plus lightweight PDF, DOCX, PPTX, and XLSX extraction;
 - SQLite catalog + FTS5 + offline approximate semantic hash vectors;
 - hybrid retrieval with bounded reads and exact source locations;
+- file-location search over verified catalog titles, source paths, inferred learning-topic tags, and user-confirmed aliases, including metadata-only PDFs;
 - managed canonical write/update, mutation log, and undo;
 - structured health extraction/timeline with provenance and review queue;
 - book/movie records from frontmatter;
@@ -59,7 +60,7 @@ npm run build
 npm test
 ```
 
-The current synthetic benchmark baseline is tracked at [`benchmarks/2026-08-11.json`](benchmarks/2026-08-11.json). Benchmark results are evidence for the recorded fixture, not a universal retrieval-quality claim.
+The current synthetic benchmark baseline is tracked at [`benchmarks/2026-08-11.json`](benchmarks/2026-08-11.json). For read-only latency measurement against an existing local SQLite index, set `PKS_BENCH_DB` and run `npm run benchmark:search` (no source files are modified). Benchmark results are evidence for the recorded fixture, not a universal retrieval-quality claim.
 
 ## Forge provider
 
@@ -69,6 +70,6 @@ See the [Architecture](docs/ARCHITECTURE.md), [Operations](docs/OPERATIONS.md), 
 
 ## Project
 
-Current release: `v0.2.1`. Use Issues for reproducible PKA defects and product-specific feature requests. Cross-product Forge questions belong in [Forge Discussions](https://github.com/moretea-labs/forge/discussions). Security reports should use GitHub Private Vulnerability Reporting; see [SECURITY.md](SECURITY.md).
+Latest published release: `v0.2.1`; local development package: `v0.2.2` (release/deployment tracked in GitHub Issue #1). Use Issues for reproducible PKA defects and product-specific feature requests. Cross-product Forge questions belong in [Forge Discussions](https://github.com/moretea-labs/forge/discussions). Security reports should use GitHub Private Vulnerability Reporting; see [SECURITY.md](SECURITY.md).
 
 Licensed under the [MIT License](LICENSE).
