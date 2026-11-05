@@ -16,6 +16,9 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 - Markdown edit, read, and split preview modes (powered by MarkdownUI 2.4.1)
 - In-workspace Markdown links and images, with path containment checks
 - PKS ranked cross-source search; view snippets and read out-of-workspace results without editing them
+- Search result source labels with per-result ellipsis/right-click actions; Finder reveal, default app open, and path copy for local/managed files
+- Web-source browser/open-link actions; opaque URI fallback copies the source identifier without guessing a file path
+- The note tree and current note header also offer file actions; missing files report a non-destructive error
 - Save via Cmd+S; protect unsaved edits and detect concurrent content changes before writing
 - Create new notes beside the selected note (or at workspace root); confirm Save/Discard/Cancel when quitting with unsaved changes
 

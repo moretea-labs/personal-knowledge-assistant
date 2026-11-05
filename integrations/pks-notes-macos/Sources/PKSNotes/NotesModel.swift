@@ -1,7 +1,6 @@
 import Foundation
 import Darwin
 import AppKit
-import Darwin
 import SwiftUI
 
 struct SearchHit: Decodable, Identifiable {
@@ -15,6 +14,35 @@ struct SearchHit: Decodable, Identifiable {
     let headingPath: String?
 
     var id: String { chunkId ?? documentId }
+
+    // PKS indexes both vault files (local) and other user-owned files (managed).
+    // Never interpret network/opaque source URIs as local filesystem paths.
+    var localFileURL: URL? {
+        guard ["local", "managed"].contains(sourceType?.lowercased() ?? ""),
+              uri.hasPrefix("/"), !uri.hasPrefix("//"), !uri.contains("\0") else { return nil }
+        return URL(fileURLWithPath: uri).standardizedFileURL
+    }
+
+    var webURL: URL? {
+        guard let url = URL(string: uri),
+              ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
+              url.host != nil else { return nil }
+        return url
+    }
+
+    var sourceLabel: String {
+        if let file = localFileURL {
+            return file.path.contains("/Mobile Documents/") ? "iCloud Drive" : "Local file"
+        }
+        if webURL != nil { return "Web page" }
+        return sourceType?.capitalized ?? "PKS source"
+    }
+
+    var sourceLocation: String {
+        if let file = localFileURL { return file.deletingLastPathComponent().lastPathComponent }
+        if let url = webURL { return url.host ?? uri }
+        return uri
+    }
 }
 
 struct ReadResponse: Decodable {
@@ -119,6 +147,7 @@ final class NotesModel: ObservableObject {
     @Published private(set) var baseline: String = ""
     @Published private(set) var externalTitle: String?
     @Published private(set) var externalBody: String?
+    @Published private(set) var previewSource: SearchHit?
     @Published var query = ""
     @Published private(set) var hits: [SearchHit] = []
     @Published private(set) var searching = false
@@ -193,6 +222,7 @@ final class NotesModel: ObservableObject {
         selected = nil
         externalTitle = nil
         externalBody = nil
+        previewSource = nil
         draft = ""
         baseline = ""
     }
@@ -227,6 +257,7 @@ final class NotesModel: ObservableObject {
             draft = content
             externalBody = nil
             externalTitle = nil
+            previewSource = nil
             message = nil
         } catch {
             message = "Cannot open the note: \(error.localizedDescription)"
@@ -330,6 +361,34 @@ final class NotesModel: ObservableObject {
         return false
     }
 
+    func revealInFinder(_ file: URL) {
+        guard file.isFileURL, FileManager.default.fileExists(atPath: file.path) else {
+            message = "The original file is not available locally."
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([file])
+    }
+
+    func openInDefaultApp(_ file: URL) {
+        guard file.isFileURL, FileManager.default.fileExists(atPath: file.path) else {
+            message = "The original file is not available locally."
+            return
+        }
+        NSWorkspace.shared.open(file)
+    }
+
+    func openSourceLink(_ url: URL) {
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func copySource(_ value: String) {
+        NSPasteboard.general.clearContents()
+        if !NSPasteboard.general.setString(value, forType: .string) {
+            message = "Unable to copy source location."
+        }
+    }
+
     func openResult(_ hit: SearchHit) {
         if hit.sourceType == "local", hit.uri.hasPrefix("/"), let root {
             let url = URL(fileURLWithPath: hit.uri)
@@ -357,6 +416,7 @@ final class NotesModel: ObservableObject {
                 selected = nil
                 externalTitle = hit.title + " · read-only PKS result"
                 externalBody = result.content
+                previewSource = hit
                 message = result.truncated == true ? "Preview truncated at 30,000 characters." : nil
             } catch is CancellationError {
                 // The user opened a different note or preview while the request was in flight.

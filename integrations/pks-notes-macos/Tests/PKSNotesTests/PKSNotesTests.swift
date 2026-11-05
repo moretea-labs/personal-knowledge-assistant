@@ -136,4 +136,44 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertNil(WorkspaceFiles.resolve(URL(string: "../other/私密.md")!, from: note, in: folder))
         XCTAssertNil(WorkspaceFiles.resolve(URL(string: "https://example.org")!, from: note, in: folder))
     }
+    func testSearchResultSourceLocationsAreTypedAndNotGuessed() throws {
+        func hit(uri: String, type: String) -> SearchHit {
+            SearchHit(documentId: "doc", chunkId: nil, title: "Test", uri: uri,
+                      sourceType: type, snippet: nil, score: nil, headingPath: nil)
+        }
+
+        let icloud = hit(uri: "/Users/test/Library/Mobile Documents/iCloud/中文笔记.md", type: "local")
+        XCTAssertEqual(icloud.localFileURL?.lastPathComponent, "中文笔记.md")
+        XCTAssertEqual(icloud.sourceLabel, "iCloud Drive")
+        XCTAssertNil(icloud.webURL)
+
+        let managed = hit(uri: "/Users/test/Documents/Archive/notes.md", type: "managed")
+        XCTAssertEqual(managed.localFileURL?.path, "/Users/test/Documents/Archive/notes.md")
+        XCTAssertEqual(managed.sourceLabel, "Local file")
+        XCTAssertEqual(managed.sourceLocation, "Archive")
+
+        let webpage = hit(uri: "https://example.com/docs?id=1", type: "web")
+        XCTAssertNil(webpage.localFileURL)
+        XCTAssertEqual(webpage.webURL?.host, "example.com")
+        XCTAssertEqual(webpage.sourceLabel, "Web page")
+
+        XCTAssertNil(hit(uri: "javascript:alert(1)", type: "web").webURL)
+        XCTAssertNil(hit(uri: "https://example.com", type: "managed").localFileURL)
+        XCTAssertNil(hit(uri: "//remote/share/notes.md", type: "local").localFileURL)
+        XCTAssertNil(hit(uri: "/tmp/local.md", type: "web").localFileURL)
+        XCTAssertNil(hit(uri: "opaque:ref-42", type: "other").localFileURL)
+    }
+
+    @MainActor
+    func testMissingFileActionsReportErrorWithoutLaunchingAnything() throws {
+        let model = NotesModel()
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pks-notes-missing-\(UUID().uuidString).md")
+        model.revealInFinder(missing)
+        XCTAssertEqual(model.message, "The original file is not available locally.")
+        model.message = nil
+        model.openInDefaultApp(missing)
+        XCTAssertEqual(model.message, "The original file is not available locally.")
+    }
+
 }

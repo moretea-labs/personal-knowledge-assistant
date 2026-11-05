@@ -157,30 +157,54 @@ struct NotesWindow: View {
                 if !model.hits.isEmpty {
                     Section("PKS results · across all sources") {
                         ForEach(model.hits) { hit in
-                            Button {
-                                model.openResult(hit)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(hit.title)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .lineLimit(2)
-                                    if let heading = hit.headingPath, !heading.isEmpty {
-                                        Text(heading)
+                            HStack(alignment: .top, spacing: 6) {
+                                Button {
+                                    model.openResult(hit)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: hit.localFileURL != nil ? "doc.text" :
+                                                  hit.webURL != nil ? "globe" : "doc.richtext")
+                                                .foregroundStyle(.secondary)
+                                            Text(hit.title)
+                                                .font(.system(size: 12, weight: .medium))
+                                                .lineLimit(2)
+                                        }
+                                        Text(hit.sourceLabel + " · " + hit.sourceLocation)
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
                                             .lineLimit(1)
+                                        if let heading = hit.headingPath, !heading.isEmpty {
+                                            Text(heading)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                        if let snippet = hit.snippet, !snippet.isEmpty {
+                                            Text(snippet.replacingOccurrences(of: "\n", with: " "))
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(2)
+                                        }
                                     }
-                                    if let snippet = hit.snippet, !snippet.isEmpty {
-                                        Text(snippet.replacingOccurrences(of: "\n", with: " "))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(2)
-                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 4)
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 3)
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("pks-result-\(hit.documentId)")
+
+                                Menu {
+                                    resultActions(hit)
+                                } label: {
+                                    Image(systemName: "ellipsis")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .menuStyle(.borderlessButton)
+                                .menuIndicator(.hidden)
+                                .frame(width: 25)
+                                .help("Source actions")
                             }
-                            .buttonStyle(.plain)
+                            .contextMenu { resultActions(hit) }
                             .help(hit.uri)
                         }
                     }
@@ -214,6 +238,7 @@ struct NotesWindow: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("pks-note-\(item.name)")
+                            .contextMenu { fileActions(item.url) }
                             .help(item.url.path)
                         }
                     }
@@ -235,6 +260,37 @@ struct NotesWindow: View {
                 }
             }
             .listStyle(.sidebar)
+        }
+    }
+
+    @ViewBuilder
+    private func fileActions(_ url: URL) -> some View {
+        Button("Show in Finder", systemImage: "folder") {
+            model.revealInFinder(url)
+        }
+        Button("Open with Default App", systemImage: "arrow.up.right.square") {
+            model.openInDefaultApp(url)
+        }
+        Button("Copy File Path", systemImage: "doc.on.doc") {
+            model.copySource(url.path)
+        }
+    }
+
+    @ViewBuilder
+    private func resultActions(_ hit: SearchHit) -> some View {
+        if let file = hit.localFileURL {
+            fileActions(file)
+        } else if let link = hit.webURL {
+            Button("Open Source in Browser", systemImage: "globe") {
+                model.openSourceLink(link)
+            }
+            Button("Copy Source Link", systemImage: "link") {
+                model.copySource(link.absoluteString)
+            }
+        } else {
+            Button("Copy Source Identifier", systemImage: "doc.on.doc") {
+                model.copySource(hit.uri)
+            }
         }
     }
 
@@ -273,13 +329,32 @@ struct NotesWindow: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.title).font(.headline).lineLimit(1)
-                Text(model.selected?.path ?? "PKS search · external source")
+                Text(model.selected?.path ?? model.previewSource?.uri ?? "PKS search · external source")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .textSelection(.enabled)
             }
             Spacer()
+            if let url = model.selected ?? model.previewSource?.localFileURL {
+                Menu {
+                    fileActions(url)
+                } label: {
+                    Label("File actions", systemImage: "folder")
+                }
+                .help("Show the original file in Finder or open another app")
+            } else if let url = model.previewSource?.webURL {
+                Menu {
+                    Button("Open Source in Browser", systemImage: "globe") {
+                        model.openSourceLink(url)
+                    }
+                    Button("Copy Source Link", systemImage: "link") {
+                        model.copySource(url.absoluteString)
+                    }
+                } label: {
+                    Label("Source actions", systemImage: "link")
+                }
+            }
             if model.externalBody == nil {
                 Picker("View", selection: $mode) {
                     ForEach(ReadingMode.allCases, id: \.self) { option in
