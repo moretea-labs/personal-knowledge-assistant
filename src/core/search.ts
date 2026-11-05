@@ -5,6 +5,9 @@ import type { EmbeddingProvider } from './embedding.js';
 import { cosine } from './embedding.js';
 
 export class SearchEngine {
+  // Derived, bounded in-process search acceleration only. SQLite remains canonical;
+  // a write by this connection or another connection invalidates the snapshot.
+  private semanticCache: { key:string; revision:string; rows:any[] } | null = null;
   constructor(private db:KnowledgeDB, private embeddings:EmbeddingProvider) {}
 
   async search(query:string, opts:{mode?:SearchMode;domain?:string;source?:string;documentType?:string;dateFrom?:string;dateTo?:string;limit?:number}={}):Promise<SearchResult[]> {
@@ -12,9 +15,17 @@ export class SearchEngine {
     if (opts.mode === 'structured' || looksStructured(query)) return this.structured(query, limit);
     const metadata = this.metadata(query, Math.max(limit * 2, 20), opts);
     if (opts.mode === 'metadata') return metadata.slice(0, limit);
+    // Locating a file is a catalog lookup, never an approximate content search.
+    if ((opts.mode === undefined || opts.mode === 'auto') && isLocatorQuery(query)) return metadata.slice(0, limit);
     const fts = this.fts(query, Math.max(limit * 3, 20), opts);
     if ((opts.mode === undefined || opts.mode === 'auto') && fts.length >= limit && metadata.length === 0) return fts.slice(0, limit);
-    const sem = (opts.mode === 'fts' || query.trim().length < 2) ? [] : await this.semantic(query, Math.max(limit * 3, 20), opts);
+    // A single-term query with enough literal FTS matches should not decode
+    // thousands of vectors. Natural-language and low-recall queries still use
+    // semantic evidence; explicit mode=semantic always computes it.
+    const sufficientLiteral = (opts.mode === undefined || opts.mode === 'auto')
+      && !/\s/u.test(query.trim()) && fts.length >= limit;
+    const sem = (sufficientLiteral || opts.mode === 'fts' || query.trim().length < 2)
+      ? [] : await this.semantic(query, Math.max(limit * 3, 20), opts);
     const map = new Map<string,SearchResult>();
     for (const r of [...fts, ...sem]) {
       const k = r.chunkId || r.documentId;
@@ -45,21 +56,38 @@ export class SearchEngine {
   }
 
   private metadata(query:string, limit:number, opts:any):SearchResult[] {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
+    const pdfOnly=/\bpdf\b/i.test(query);
+    const needle = normalizeCatalogText(locatorSubject(query).replace(/\bpdf\b/gi,''));
+    if (!needle) return [];
     const w = this.where(opts);
-    const rows = this.db.db.prepare(`SELECT d.id document_id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,d.index_status,d.metadata_json FROM documents d WHERE ${w.sql} AND (lower(d.title) LIKE ? OR lower(d.uri) LIKE ?) ORDER BY CASE WHEN lower(d.title)=? THEN 0 WHEN lower(d.title) LIKE ? THEN 1 ELSE 2 END,d.modified_at DESC LIMIT ?`).all(...w.args, `%${q}%`, `%${q}%`, q, `${q}%`, limit) as any[];
-    return rows.map((r,i)=>({
-      documentId:r.document_id,
-      title:r.title,
-      uri:r.uri,
-      sourceType:r.source_type,
-      documentType:r.document_type,
-      modifiedAt:r.modified_at,
-      snippet:r.index_status === 'deferred' ? 'Cloud/offline placeholder: metadata is indexed; content will be indexed when locally available.' : r.uri,
-      score:Math.max(0.72, 0.98 - i * 0.015),
-      reasons:[r.index_status === 'deferred' ? 'metadata_deferred' : 'metadata']
-    }));
+    const rows = this.db.db.prepare('SELECT d.id document_id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,d.index_status,d.tags_json FROM documents d WHERE ' + w.sql).all(...w.args) as any[];
+    // corrections is the existing higher-authority user-correction ledger; never duplicate aliases in derived documents.
+    const aliases = new Map<string,string[]>();
+    for (const c of this.db.db.prepare("SELECT target_id,new_value FROM corrections WHERE field='search_aliases' ORDER BY rowid DESC").all() as any[]) {
+      if (!aliases.has(c.target_id)) {
+        try { const names=JSON.parse(c.new_value); aliases.set(c.target_id,Array.isArray(names)?names:[]); }
+        catch { aliases.set(c.target_id,[]); }
+      }
+    }
+    return rows.map(r=>{
+      if(pdfOnly&&!String(r.uri).toLowerCase().endsWith('.pdf'))return null;
+      const title=normalizeCatalogText(r.title);
+      const path=normalizeCatalogText(r.uri);
+      const known=(aliases.get(r.document_id)||[]).map(normalizeCatalogText);
+      const tagNames=(JSON.parse(r.tags_json||'[]') as string[]).map(normalizeCatalogText);
+      const exactAlias=known.some(x=>x===needle);
+      const titleExact=title===needle || title.replace(/pdf$/,'')===needle;
+      const titleContains=title.includes(needle);
+      const aliasContains=known.some(x=>x.includes(needle));
+      const pathContains=path.includes(needle);
+      const tagContains=tagNames.some(x=>x.includes(needle));
+      if (!(exactAlias||titleExact||titleContains||aliasContains||pathContains||tagContains)) return null;
+      const score=exactAlias?1.0:titleExact?0.99:titleContains?0.96:aliasContains?0.95:pathContains?0.88:0.72;
+      return {documentId:r.document_id,title:r.title,uri:r.uri,sourceType:r.source_type,documentType:r.document_type,modifiedAt:r.modified_at,indexStatus:r.index_status,
+        snippet:r.index_status==='deferred'?'Cloud placeholder: filename/path known; PDF text not locally accessible.':
+                r.index_status==='metadata_only'?'PDF metadata only: no extractable native text.':r.uri,
+        score,reasons:[exactAlias||aliasContains?'verified_alias':r.index_status==='deferred'?'metadata_deferred':'metadata']} as SearchResult;
+    }).filter(Boolean).sort((a:any,b:any)=>b.score-a.score || String(a.title).localeCompare(String(b.title))).slice(0,limit) as SearchResult[];
   }
 
   private fts(query:string, limit:number, opts:any):SearchResult[] {
@@ -75,8 +103,43 @@ export class SearchEngine {
   private async semantic(query:string,limit:number,opts:any):Promise<SearchResult[]> {
     let q; try { q=await this.embeddings.embed(query); } catch { return []; }
     const w=this.where(opts);
-    const rows=this.db.db.prepare(`SELECT d.id document_id,c.id chunk_id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,c.text,c.page,c.heading_path,c.embedding_json FROM chunks c JOIN documents d ON d.id=c.document_id WHERE c.embedding_json IS NOT NULL AND c.embedding_provider=? AND ${w.sql} ORDER BY d.modified_at DESC LIMIT 5000`).all(this.embeddings.id,...w.args) as any[];
-    return rows.map(r=>({r,s:cosine(q,JSON.parse(r.embedding_json||'[]'))})).filter(x=>x.s>0.12).sort((a,b)=>b.s-a.s).slice(0,limit).map(x=>({documentId:x.r.document_id,chunkId:x.r.chunk_id,title:x.r.title,uri:x.r.uri,sourceType:x.r.source_type,documentType:x.r.document_type,modifiedAt:x.r.modified_at,snippet:snippet(x.r.text,query),score:x.s*0.82,reasons:['semantic_hash'],page:x.r.page??undefined,headingPath:x.r.heading_path??undefined}));
+    const key=JSON.stringify([this.embeddings.id,w.sql,w.args]);
+    // total_changes covers same-connection indexing/mutations; data_version
+    // covers commits from other SQLite connections. Neither changes the index.
+    const localRevision=(this.db.db.prepare('SELECT total_changes() n').get() as any).n;
+    const externalRevision=(this.db.db.prepare('PRAGMA data_version').get() as any).data_version;
+    const revision=localRevision+':'+externalRevision;
+    let candidates=this.semanticCache?.key===key&&this.semanticCache.revision===revision
+      ? this.semanticCache.rows : null;
+    if(!candidates){
+      const rows=this.db.db.prepare(`SELECT d.id document_id,c.id chunk_id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,c.text,c.page,c.heading_path,c.embedding_json FROM chunks c JOIN documents d ON d.id=c.document_id WHERE c.embedding_json IS NOT NULL AND c.embedding_provider=? AND ${w.sql} ORDER BY d.modified_at DESC LIMIT 5000`).all(this.embeddings.id,...w.args) as any[];
+      let vectorBytes=0;
+      candidates=rows.map(r=>{
+        let parsed:number[];
+        try { parsed=JSON.parse(r.embedding_json); } catch { parsed=[]; }
+        const vector=Float32Array.from(Array.isArray(parsed)?parsed:[]);
+        vectorBytes+=vector.byteLength;
+        const norm=Math.sqrt(vector.reduce((sum,value)=>sum+value*value,0))||1;
+        const {embedding_json,...data}=r;
+        return {r:data,vector,norm};
+      });
+      // No persistent vector store or unbounded memoization: one view at a
+      // time, with a fixed memory budget. Large remote vectors stay uncached.
+      this.semanticCache=vectorBytes<=12*1024*1024
+        ? {key,revision,rows:candidates} : null;
+    }
+    const qNorm=Math.sqrt(q.reduce((sum:number,value:number)=>sum+value*value,0))||1;
+    return candidates.map(({r,vector,norm})=>{
+      const n=Math.min(q.length,vector.length);
+      let dot=0;
+      for(let i=0;i<n;i++)dot+=q[i]*vector[i];
+      return {r,s:dot/(qNorm*norm)};
+    }).filter(x=>x.s>0.12).sort((a,b)=>b.s-a.s).slice(0,limit).map(x=>({
+      documentId:x.r.document_id,chunkId:x.r.chunk_id,title:x.r.title,uri:x.r.uri,
+      sourceType:x.r.source_type,documentType:x.r.document_type,modifiedAt:x.r.modified_at,
+      snippet:snippet(x.r.text,query),score:x.s*0.82,reasons:['semantic_hash'],
+      page:x.r.page??undefined,headingPath:x.r.heading_path??undefined
+    }));
   }
 
   private structured(query:string,limit:number):SearchResult[] {
@@ -88,5 +151,15 @@ export class SearchEngine {
   }
 }
 
-function looksStructured(q:string){return /(最近|最新|最高|最低|趋势|肌酐|胱抑素|cystatin|creatinine|他克莫司|tacrolimus)/i.test(q);}
+// Recency/ordering words alone do not imply a health-structured query.
+// Only route to the structured catalog for observation types it can answer.
+function looksStructured(q:string){return /(肌酐|胱抑素|cystatin|creatinine|他克莫司|tacrolimus)/i.test(q);}
 function snippet(text:string,q:string){const terms=q.toLowerCase().split(/\s+/).filter(Boolean);let pos=-1;for(const t of terms){pos=text.toLowerCase().indexOf(t);if(pos>=0)break;}if(pos<0)pos=0;return text.slice(Math.max(0,pos-100),Math.min(text.length,pos+320)).replace(/\s+/g,' ').trim();}
+
+/** File location questions require verified names/aliases and must not use fuzzy hash vectors. */
+function isLocatorQuery(q:string){return /(?:在哪里|在哪儿|在哪|放在哪里|路径|位置|查找|找到|找一下|文件|资料|电子书|pdf|where\s+(?:is|are)|locate|find\s+(?:my|the|a)|.{2,12}小绿书)/i.test(q) || /^[\p{L}\p{N}]{2,12}书$/u.test(q.trim());}
+function locatorSubject(q:string){
+  const cleaned=q.replace(/(?:请帮我|帮我|我的|在哪里|在哪儿|在哪|存放在|找到|查找|找一下|找找|找|位置|路径|相关的|相关|资料|文件|电子书|有没有|where\s+(?:is|are)|locate|find\s+(?:my|the|a))/gi,' ').trim();
+  return cleaned || q.trim();
+}
+function normalizeCatalogText(s:string){return String(s||'').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,'');}

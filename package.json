@@ -1,6 +1,6 @@
 {
   "name": "@moretea-labs/personal-knowledge-assistant",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Local-first personal knowledge assistant with evidence-backed retrieval, safe writes, structured memory, and Forge integration.",
   "type": "module",
   "main": "dist/src/server.js",
@@ -10,7 +10,8 @@
     "cli": "node dist/src/cli.js",
     "test": "node --test dist/tests/*.test.js",
     "demo": "node dist/tests/demo.js",
-    "benchmark": "node dist/tests/benchmark.js"
+    "benchmark": "node dist/tests/benchmark.js",
+    "benchmark:search": "node scripts/benchmark-search.mjs"
   },
   "engines": {
     "node": ">=22.5.0"

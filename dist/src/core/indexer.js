@@ -38,6 +38,15 @@ export class Indexer {
             stats.errors.push(...r.errors);
         }
     } return stats; }
+    refreshPathTags(documentId, path) {
+        const row = this.db.db.prepare('SELECT tags_json FROM documents WHERE id=?').get(documentId);
+        if (!row)
+            return;
+        const prev = JSON.parse(row.tags_json || '[]');
+        const next = [...catalogTagsForPath(path, prev)];
+        if (JSON.stringify(prev) !== JSON.stringify(next))
+            this.db.db.prepare('UPDATE documents SET tags_json=? WHERE id=?').run(JSON.stringify(next), documentId);
+    }
     async syncRoot(sourceId, sourceType, name, root, excludeRoots = []) {
         const now = new Date().toISOString();
         this.db.db.prepare(`INSERT INTO sources(id,type,name,root_uri,enabled,created_at,updated_at) VALUES(?,?,?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET type=excluded.type,name=excluded.name,root_uri=excluded.root_uri,updated_at=excluded.updated_at`).run(sourceId, sourceType, name, root, now, now);
@@ -47,7 +56,9 @@ export class Indexer {
             stats.scanned++;
             seen.add(e.path);
             try {
-                const existing = this.db.db.prepare('SELECT id,content_hash,modified_at,size,index_status,last_indexed_at FROM documents WHERE uri=?').get(e.path);
+                const existing = this.db.db.prepare('SELECT id,content_hash,modified_at,size,index_status,last_indexed_at,tags_json FROM documents WHERE uri=?').get(e.path);
+                if (existing)
+                    this.refreshPathTags(existing.id, e.path);
                 const unchanged = existing && existing.modified_at === e.modifiedAt && Number(existing.size) === e.size;
                 if (unchanged && existing.content_hash) {
                     stats.skipped++;
@@ -96,9 +107,9 @@ export class Indexer {
     catch (e) {
         this.db.db.exec('ROLLBACK');
         throw e;
-    } return documentId; }
-    async indexFile(sourceId, sourceType, path, modifiedAt, createdAt, size, hash) { const parsed = await parseDocument(path); const existing = this.db.db.prepare('SELECT id FROM documents WHERE uri=?').get(path); const documentId = existing?.id || stableId('doc', path); const observedDate = inferObservedDate(path, parsed.text, modifiedAt); const domain = extractDomains(parsed.text, observedDate); const title = String(parsed.metadata.title || basename(path)); const h = hash || await sha256File(path); const now = new Date().toISOString(); this.db.db.exec('BEGIN'); try {
-        this.db.db.prepare(`INSERT INTO documents(id,source_id,source_type,uri,canonical_uri,title,mime_type,created_at,modified_at,content_hash,size,document_type,tags_json,index_status,last_indexed_at,metadata_json,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'indexed',?,?,NULL) ON CONFLICT(id) DO UPDATE SET source_id=excluded.source_id,source_type=excluded.source_type,title=excluded.title,modified_at=excluded.modified_at,content_hash=excluded.content_hash,size=excluded.size,document_type=excluded.document_type,tags_json=excluded.tags_json,index_status='indexed',last_indexed_at=excluded.last_indexed_at,metadata_json=excluded.metadata_json,deleted_at=NULL`).run(documentId, sourceId, sourceType, path, path, title, 'application/octet-stream', createdAt, modifiedAt, h, size, domain.documentType || 'generic', JSON.stringify(domain.tags || []), now, JSON.stringify(parsed.metadata));
+    } this.refreshPathTags(documentId, path); return documentId; }
+    async indexFile(sourceId, sourceType, path, modifiedAt, createdAt, size, hash) { const parsed = await parseDocument(path); const existing = this.db.db.prepare('SELECT id FROM documents WHERE uri=?').get(path); const documentId = existing?.id || stableId('doc', path); const observedDate = inferObservedDate(path, parsed.text, modifiedAt); const domain = extractDomains(parsed.text, observedDate); const title = String(parsed.metadata.title || basename(path)); const indexStatus = path.toLowerCase().endsWith('.pdf') && !parsed.text.trim() ? 'metadata_only' : 'indexed'; const catalogTags = catalogTagsForPath(path, domain.tags || []); const h = hash || await sha256File(path); const now = new Date().toISOString(); this.db.db.exec('BEGIN'); try {
+        this.db.db.prepare(`INSERT INTO documents(id,source_id,source_type,uri,canonical_uri,title,mime_type,created_at,modified_at,content_hash,size,document_type,tags_json,index_status,last_indexed_at,metadata_json,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL) ON CONFLICT(id) DO UPDATE SET source_id=excluded.source_id,source_type=excluded.source_type,title=excluded.title,modified_at=excluded.modified_at,content_hash=excluded.content_hash,size=excluded.size,document_type=excluded.document_type,tags_json=excluded.tags_json,index_status=excluded.index_status,last_indexed_at=excluded.last_indexed_at,metadata_json=excluded.metadata_json,deleted_at=NULL`).run(documentId, sourceId, sourceType, path, path, title, 'application/octet-stream', createdAt, modifiedAt, h, size, domain.documentType || 'generic', JSON.stringify([...catalogTags]), indexStatus, now, JSON.stringify(parsed.metadata));
         this.db.db.prepare('DELETE FROM chunks_fts WHERE document_id=?').run(documentId);
         this.db.db.prepare('DELETE FROM chunks WHERE document_id=?').run(documentId);
         this.db.db.prepare('DELETE FROM medical_observations WHERE source_document_id=? AND verified=0').run(documentId);
@@ -234,3 +245,22 @@ function notionTitle(page) { const props = page.properties || {}; for (const v o
             return s;
     }
 } return ''; }
+function catalogTagsForPath(path, prior = []) {
+    const tags = new Set(prior);
+    if (path.toLowerCase().endsWith('.pdf'))
+        tags.add('PDF');
+    if (/英语|雅思|english|vocabulary|grammar|ielts|speakout|conversation/i.test(path)) {
+        tags.add('英语学习');
+        if (/雅思|ielts/i.test(path))
+            tags.add('雅思');
+        if (/vocabulary|词汇/i.test(path))
+            tags.add('词汇');
+        if (/grammar|语法/i.test(path))
+            tags.add('语法');
+        if (/listening|听力/i.test(path))
+            tags.add('听力');
+        if (/conversation|speakout|口语|phrases/i.test(path))
+            tags.add('口语');
+    }
+    return tags;
+}

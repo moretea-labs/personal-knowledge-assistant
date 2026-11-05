@@ -9,3 +9,140 @@ test('user health correction survives reindex',async()=>{const x=await setup();c
 test('remote embedding provider speaks OpenAI-compatible protocol',async()=>{const { RemoteEmbeddingProvider }=await import('../src/core/embedding.js');const { createServer }=await import('node:http');const server=createServer(async(req,res)=>{let raw='';for await(const c of req)raw+=c;const body=JSON.parse(raw);assert.equal(body.model,'test-model');res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({data:[{embedding:[1,0,0]}]}));});await new Promise(r=>server.listen(0,'127.0.0.1',r));const port=(server.address() as any).port;const p=new RemoteEmbeddingProvider(`http://127.0.0.1:${port}/v1`,'test-model',3);assert.deepEqual(await p.embed('hello'),[1,0,0]);server.close();});
 
 test('Notion metadata snapshot indexes titles without a token and reconciles deletions',async()=>{const x=await setup();const snapshot=join(x.root,'notion-metadata.json');x.svc.cfg.notion={enabled:true,auth:'notion_snapshot',snapshotPath:snapshot,contentMode:'metadata',workspaceId:'workspace-test'};await writeFile(snapshot,JSON.stringify({schemaVersion:1,mode:'metadata',workspaceId:'workspace-test',workspaceName:'Test',fetchedAt:'2026-08-11T00:00:00Z',results:[{object:'page',id:'page-1',title:'Reading List',last_edited_time:'2026-08-10T00:00:00Z',url:'https://www.notion.so/page-1',parent:{type:'workspace',workspace:true}}]}));const first=await x.svc.sync();assert.equal(first.errors.length,0);const rs=await x.svc.search('Reading List');assert.equal(rs.length,1);assert.equal(rs[0].sourceType,'notion');const row=x.svc.db.db.prepare("select metadata_json from documents where uri='notion://page-1' and deleted_at is null").get() as any;assert.match(row.metadata_json,/metadata_snapshot/);await writeFile(snapshot,JSON.stringify({schemaVersion:1,mode:'metadata',workspaceId:'workspace-test',workspaceName:'Test',fetchedAt:'2026-08-11T01:00:00Z',results:[]}));await x.svc.sync();assert.equal((await x.svc.search('Reading List')).length,0);x.svc.db.close();});
+
+test('file locating uses catalog and aliases, including metadata-only cloud PDFs',async()=>{
+  const x=await setup();
+  const pdf=join(x.docs,'English-Vocabulary-Handbook.pdf');
+  await writeFile(pdf,'synthetic PDF with no native text');
+  await writeFile(join(x.docs,'unrelated.md'),'# Utilities\nSome text about unrelated pages and a Spotify collection.');
+  await x.svc.sync();
+  const row=x.svc.db.db.prepare('SELECT id,index_status,tags_json FROM documents WHERE uri=?').get(pdf) as any;
+  assert.equal(row.index_status,'metadata_only');
+  assert.match(row.tags_json,/英语学习/);
+  assert.deepEqual((await x.svc.search('韦氏小绿书')).map(x=>x.uri),[]);
+  const name=await x.svc.search('English-Vocabulary-Handbook.pdf');
+  assert.equal(name.length,1);assert.equal(name[0].uri,pdf);assert.equal(name[0].indexStatus,'metadata_only');
+  assert.deepEqual(x.svc.setSearchAliases(row.id,['韦氏小绿书','The Green Vocabulary Book']).aliases,['韦氏小绿书','The Green Vocabulary Book']);
+  const alias=await x.svc.search('韦氏小绿书');
+  assert.equal(alias.length,1);assert.equal(alias[0].uri,pdf);assert.ok(alias[0].reasons.includes('verified_alias'));
+  await x.svc.sync();
+  assert.equal((await x.svc.search('韦氏小绿书')).length,1,'explicit aliases survive rebuild');
+  x.svc.db.db.prepare("UPDATE documents SET index_status='deferred',content_hash=NULL WHERE id=?").run(row.id);
+  const deferred=await x.svc.search('帮我找English-Vocabulary-Handbook.pdf在哪里');
+  assert.equal(deferred.length,1);assert.equal(deferred[0].indexStatus,'deferred');
+  assert.ok(deferred[0].snippet.includes('Cloud placeholder'));
+  assert.deepEqual((await x.svc.search('我把不相关的韦氏资料放在哪里')).map(x=>x.uri),[]);
+  assert.ok(x.svc.status().indexStatusCounts.some((s:any)=>s.status==='deferred'&&s.count>=1));
+  x.svc.db.close();
+});
+
+test('English-learning catalog tags let PDF location queries find a source folder',async()=>{
+  const x=await setup();
+  const folder=join(x.docs,'雅思');await mkdir(folder,{recursive:true});
+  const pdf=join(folder,'500-Real-English-Phrases.pdf');
+  await writeFile(pdf,'PDF without native text');
+  await x.svc.sync();
+  const matches=await x.svc.search('我的英语学习相关PDF在哪里');
+  assert.equal(matches.length,1);assert.equal(matches[0].uri,pdf);
+  assert.equal(matches[0].indexStatus,'metadata_only');
+  x.svc.db.close();
+});
+
+test('unchanged deferred PDF catalog refreshes topic tags without touching content',async()=>{
+  const x=await setup();
+  const folder=join(x.docs,'雅思');await mkdir(folder,{recursive:true});
+  const pdf=join(folder,'Cambridge-English-Vocabulary.pdf');await writeFile(pdf,'cloud placeholder fixture');
+  await x.svc.sync();
+  const doc=x.svc.db.db.prepare('SELECT id FROM documents WHERE uri=?').get(pdf) as any;
+  x.svc.db.db.prepare("UPDATE documents SET tags_json='[]',index_status='deferred',content_hash=NULL,last_indexed_at=? WHERE id=?").run(new Date().toISOString(),doc.id);
+  const result=await x.svc.sync();
+  assert.equal(result.indexed,0);
+  const row=x.svc.db.db.prepare('SELECT index_status,tags_json FROM documents WHERE id=?').get(doc.id) as any;
+  assert.equal(row.index_status,'deferred');
+  assert.match(row.tags_json,/英语学习/);
+  assert.match(row.tags_json,/雅思/);
+  const found=await x.svc.search('我的英语学习相关PDF在哪里');
+  assert.equal(found.length,1);assert.equal(found[0].uri,pdf);assert.equal(found[0].indexStatus,'deferred');
+  x.svc.db.close();
+});
+
+test('semantic candidate reuse preserves ranking and invalidates on local/external DB writes',async()=>{
+  const { DatabaseSync }=await import('node:sqlite');
+  const x=await setup();
+  const note=join(x.docs,'guitar-chord.md');
+  await writeFile(note,'# Guitar practice\nChord switching technique and finger positioning.');
+  await x.svc.sync();
+  const q='guitar chord switching technique';
+  const first=await x.svc.search(q,{mode:'semantic',limit:12});
+  assert.ok(first.some((r:any)=>r.uri===note));
+  const firstRevision=(x.svc.searcher as any).semanticCache?.revision;
+  assert.ok(firstRevision,'small hash-vector index should be cached after first query');
+  const repeated=await x.svc.search(q,{mode:'semantic',limit:12});
+  assert.deepEqual(repeated.map((r:any)=>r.documentId),first.map((r:any)=>r.documentId));
+  assert.equal((x.svc.searcher as any).semanticCache?.revision,firstRevision);
+
+  // A separate database connection must invalidate the same derived cache.
+  const other=new DatabaseSync(join(x.svc.cfg.dataDir,'knowledge.db'));
+  other.prepare('UPDATE documents SET title=? WHERE uri=?').run('Externally Renamed Guitar Note',note);
+  other.close();
+  const external=await x.svc.search(q,{mode:'semantic',limit:12});
+  assert.equal(external.find((r:any)=>r.uri===note)?.title,'Externally Renamed Guitar Note');
+  const externalRevision=(x.svc.searcher as any).semanticCache?.revision;
+  assert.notEqual(externalRevision,firstRevision);
+
+  // The existing Indexer writes through our connection and invalidates too.
+  const added=join(x.docs,'second-guitar.md');
+  await writeFile(added,'# Guitar practice\nChord switching technique and finger positioning.');
+  await x.svc.sync();
+  const afterSync=await x.svc.search(q,{mode:'semantic',limit:20});
+  assert.ok(afterSync.some((r:any)=>r.uri===added),'newly indexed document must appear without restarting PKS');
+  assert.notEqual((x.svc.searcher as any).semanticCache?.revision,externalRevision);
+  x.svc.db.close();
+});
+
+test('semantic source filters cannot reuse candidates from the wrong source',async()=>{
+  const x=await setup();
+  await writeFile(join(x.docs,'docs-chord.md'),'Chord switching practice and fine motor precision.');
+  await mkdir(x.managed,{recursive:true});
+  await writeFile(join(x.managed,'managed-chord.md'),'Chord switching practice and fine motor precision.');
+  await x.svc.sync();
+  const docsOnly=await x.svc.search('chord switching practice',{mode:'semantic',source:'docs',limit:15});
+  assert.ok(docsOnly.length>0);
+  assert.ok(docsOnly.every((r:any)=>r.uri.startsWith(x.docs+'/')));
+  const managedOnly=await x.svc.search('chord switching practice',{mode:'semantic',source:'managed',limit:15});
+  assert.ok(managedOnly.length>0);
+  assert.ok(managedOnly.every((r:any)=>r.uri.startsWith(x.managed+'/')));
+  x.svc.db.close();
+});
+
+test('single-term literal search avoids the full vector scan without disabling semantic queries',async()=>{
+  const x=await setup();
+  for(let i=0;i<16;i++){
+    await writeFile(join(x.docs,`kafka-${i}.md`),`# Kafka ${i}\nKafka stream event processing and consumer notes ${i}.`);
+  }
+  await x.svc.sync();
+  const literal=await x.svc.search('Kafka',{mode:'auto',limit:10});
+  assert.equal(literal.length,10);
+  assert.equal((x.svc.searcher as any).semanticCache,null,
+    'sufficient FTS results must avoid loading all embedding vectors');
+
+  // Explicit semantic mode continues to provide related conceptual evidence.
+  const conceptual=await x.svc.search('Kafka event consumption',{mode:'semantic',limit:10});
+  assert.ok(conceptual.length>0);
+  assert.ok((x.svc.searcher as any).semanticCache);
+  x.svc.db.close();
+});
+
+test('ordinary recent/latest search terms do not get routed to health-only structured retrieval',async()=>{
+  const x=await setup();
+  const p=join(x.docs,'最近读书笔记.md');
+  await writeFile(p,'# 最近读书笔记\n这是一份最新英语学习和阅读记录。');
+  await x.svc.sync();
+  const recent=await x.svc.search('最近读书笔记');
+  assert.ok(recent.some((r:any)=>r.uri===p));
+  const latest=await x.svc.search('最新英语学习');
+  assert.ok(latest.some((r:any)=>r.uri===p));
+  const explicitStructured=await x.svc.search('最新英语学习',{mode:'structured'});
+  assert.deepEqual(explicitStructured,[]);
+  x.svc.db.close();
+});
