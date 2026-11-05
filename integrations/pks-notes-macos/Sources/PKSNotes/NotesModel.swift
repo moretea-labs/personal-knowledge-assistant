@@ -102,7 +102,7 @@ enum WorkspaceFiles {
             if kind == mode_t(S_IFLNK) { return nil }
             if kind == mode_t(S_IFDIR) {
                 let children = tree(in: url)
-                return children.isEmpty ? nil : NoteItem(url: url, children: children)
+                return NoteItem(url: url, children: children)
             }
             let ext = url.pathExtension.lowercased()
             return ["md", "markdown"].contains(ext) ? NoteItem(url: url, children: nil) : nil
