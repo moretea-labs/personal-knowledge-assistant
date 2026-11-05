@@ -163,7 +163,7 @@ final class NotesModel: ObservableObject {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+        panel.directoryURL = (root ?? WorkspaceFiles.defaultVault()).deletingLastPathComponent()
         if panel.runModal() == .OK, let url = panel.url {
             if let previous = securityScopedFolder { previous.stopAccessingSecurityScopedResource() }
             securityScopedFolder = url.startAccessingSecurityScopedResource() ? url : nil
