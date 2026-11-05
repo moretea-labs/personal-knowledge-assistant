@@ -197,26 +197,39 @@ final class NotesModel: ObservableObject {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.directoryURL = (root ?? WorkspaceFiles.defaultVault()).deletingLastPathComponent()
-        if panel.runModal() == .OK, let url = panel.url {
-            if let previous = securityScopedFolder { previous.stopAccessingSecurityScopedResource() }
-            securityScopedFolder = url.startAccessingSecurityScopedResource() ? url : nil
-            // Store the one macOS user-selected folder grant, never note contents.
-            let bookmark = try? url.bookmarkData(options: [.withSecurityScope],
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        // Keep the old scope and bookmark until the user accepts the navigation.
+        let acquiredScope = url.startAccessingSecurityScopedResource()
+        guard openWorkspace(url) else {
+            if acquiredScope { url.stopAccessingSecurityScopedResource() }
+            return
+        }
+        if let previous = securityScopedFolder { previous.stopAccessingSecurityScopedResource() }
+        securityScopedFolder = acquiredScope ? url : nil
+        // Store only the one user-selected folder grant, never note contents.
+        if let bookmark = try? url.bookmarkData(options: [.withSecurityScope],
                                                  includingResourceValuesForKeys: nil,
-                                                 relativeTo: nil)
-            if let bookmark { UserDefaults.standard.set(bookmark, forKey: "PKSNotesWorkspaceBookmark") }
-            openWorkspace(url)
+                                                 relativeTo: nil) {
+            UserDefaults.standard.set(bookmark, forKey: "PKSNotesWorkspaceBookmark")
+        } else {
+            // An old bookmark must never silently reopen a different workspace.
+            UserDefaults.standard.removeObject(forKey: "PKSNotesWorkspaceBookmark")
+            message = "Folder opened, but macOS could not save permanent access. Choose it again next launch."
         }
     }
 
-    func openWorkspace(_ url: URL) {
-        guard !isDirty else { message = "Save or discard your changes before changing folders."; return }
+    @discardableResult
+    func openWorkspace(_ url: URL, navigationDecision: UnsavedNoteDecision? = nil) -> Bool {
         let resolved = url.standardizedFileURL.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: resolved.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
-            message = "Choose an existing Markdown folder."; return
+            message = "Choose an existing Markdown folder."; return false
         }
+        if root == resolved { return true }
+        guard confirmLeavingNote(decision: navigationDecision) else { return false }
+
         previewTask?.cancel()
         root = resolved
         message = nil
@@ -230,6 +243,7 @@ final class NotesModel: ObservableObject {
         activeMatch = nil
         draft = ""
         baseline = ""
+        return true
     }
 
     func refresh() {
@@ -246,12 +260,50 @@ final class NotesModel: ObservableObject {
         }
     }
 
-    func openNote(_ url: URL) {
-        guard !isDirty else { message = "Save this note before opening another."; return }
+    enum UnsavedNoteDecision {
+        case save, discard, cancel
+    }
+
+    /// Shared for quit, note switching, cross-source previews and workspace changes.
+    /// Discard only authorizes the destination; the old draft is kept if opening fails.
+    func confirmLeavingNote(decision: UnsavedNoteDecision? = nil) -> Bool {
+        guard isDirty else { return true }
+        let selectedDecision: UnsavedNoteDecision
+        if let decision {
+            selectedDecision = decision
+        } else {
+            let alert = NSAlert()
+            alert.messageText = "Unsaved Markdown changes"
+            alert.informativeText = "Save changes to \(title) before leaving this note?"
+            alert.addButton(withTitle: "Save")
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Discard Changes")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn: selectedDecision = .save
+            case .alertThirdButtonReturn: selectedDecision = .discard
+            default: selectedDecision = .cancel
+            }
+        }
+        switch selectedDecision {
+        case .save:
+            save()
+            return !isDirty // Never navigate after a save or external-conflict failure.
+        case .discard: return true
+        case .cancel: return false
+        }
+    }
+
+    func openNote(_ url: URL, navigationDecision: UnsavedNoteDecision? = nil) {
+        if selected == url { return }
         guard let root, WorkspaceFiles.contains(url, in: root),
               ["md", "markdown"].contains(url.pathExtension.lowercased()) else {
             message = "Only Markdown files inside the selected workspace can be edited."; return
         }
+        guard confirmLeavingNote(decision: navigationDecision) else { return }
+        loadNote(url)
+    }
+
+    private func loadNote(_ url: URL) {
         do {
             let content = try String(contentsOf: url, encoding: .utf8)
             let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
@@ -292,22 +344,29 @@ final class NotesModel: ObservableObject {
         }
     }
 
-    func newNote(named name: String) {
+    func newNote(named name: String, in parentFolder: URL? = nil,
+                 navigationDecision: UnsavedNoteDecision? = nil) {
         guard let root, let filename = WorkspaceFiles.safeNewNoteName(name) else {
             message = "Enter a simple note name without slashes."; return
         }
-        guard !isDirty else { message = "Save your current note first."; return }
-        // New notes belong beside the selected note; without a selection, use the vault root.
-        let folder = selected?.deletingLastPathComponent() ?? root
+        // An explicit folder action takes precedence over the current note.
+        let folder = (parentFolder ?? selected?.deletingLastPathComponent() ?? root).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard (folder == root || WorkspaceFiles.contains(folder, in: root)),
+              FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            message = "Choose a folder inside the Markdown workspace."; return
+        }
         let url = folder.appendingPathComponent(filename)
         guard WorkspaceFiles.contains(url, in: root) else { message = "Invalid note path."; return }
         guard !FileManager.default.fileExists(atPath: url.path) else {
             message = "The note already exists."; return
         }
+        guard confirmLeavingNote(decision: navigationDecision) else { return }
         do {
             try "# \(url.deletingPathExtension().lastPathComponent)\n\n".write(to: url, atomically: true, encoding: .utf8)
             refresh()
-            openNote(url)
+            loadNote(url)
         } catch {
             message = "Cannot create note: \(error.localizedDescription)"
         }
@@ -409,7 +468,7 @@ final class NotesModel: ObservableObject {
             }
             return
         }
-        guard !isDirty else { message = "Save the current note before opening another result."; return }
+        guard confirmLeavingNote() else { return }
         // Cancel previous previews so delayed network results cannot replace another note.
         previewTask?.cancel()
         previewTask = Task {
