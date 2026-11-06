@@ -44,6 +44,9 @@ struct MarkdownPreviewPane: View {
     let live: Bool
     let identity: String
     let theme: NotesTheme
+    let fontAdjustment: Double
+    let lineAdjustment: Double
+    let widthAdjustment: Double
     @Binding var cache: MarkdownPreviewSnapshot?
 
     private struct RenderKey: Hashable {
@@ -72,8 +75,10 @@ struct MarkdownPreviewPane: View {
                     LazyVStack(alignment: .leading, spacing: 4) {
                         ForEach(rendered) { part in
                             Markdown(part.content)
-                                .markdownTheme(.pksReading(theme))
-                                .font(.system(size: 16, design: theme.readingFont))
+                                .markdownTheme(.pksReading(theme, fontAdjustment: fontAdjustment,
+                                                           lineAdjustment: lineAdjustment))
+                                .font(.system(size: theme.typography.bodySize + fontAdjustment,
+                                              design: theme.typography.design))
                                 .markdownImageProvider(LocalMarkdownImageProvider(note: model.selected, root: model.root))
                                 .environment(\.openURL, OpenURLAction { url in
                                     if url.scheme == nil || url.isFileURL {
@@ -91,7 +96,7 @@ struct MarkdownPreviewPane: View {
                                 .id(part.id)
                         }
                     }
-                    .frame(maxWidth: 740, alignment: .topLeading)
+                    .frame(maxWidth: theme.typography.pageWidth + widthAdjustment, alignment: .topLeading)
                     .frame(maxWidth: .infinity, alignment: .top)
                     .padding(.horizontal, 32)
                     .padding(.vertical, 36)
@@ -147,72 +152,112 @@ struct MarkdownPreviewPane: View {
 }
 
 private extension Theme {
-    /// Editorial reading layout: native text colors, quieter headings and comfortable CJK spacing.
-    /// The Markdown parser and source file remain unchanged.
-    static func pksReading(_ theme: NotesTheme) -> Theme {
-        Theme.basic
-        .text {
-            ForegroundColor(theme.ink)
-            FontSize(16)
-        }
-        .heading1 { configuration in
-            configuration.label
-                .markdownTextStyle {
-                    FontWeight(.bold)
-                    FontSize(.em(1.85))
-                }
-                .markdownMargin(top: .rem(0.7), bottom: .rem(1.1))
-        }
-        .heading2 { configuration in
-            configuration.label
-                .markdownTextStyle {
-                    FontWeight(.semibold)
-                    FontSize(.em(1.4))
-                }
-                .markdownMargin(top: .rem(1.75), bottom: .rem(0.7))
-        }
-        .heading3 { configuration in
-            configuration.label
-                .markdownTextStyle {
-                    FontWeight(.semibold)
-                    FontSize(.em(1.16))
-                }
-                .markdownMargin(top: .rem(1.35), bottom: .rem(0.55))
-        }
-        .paragraph { configuration in
-            configuration.label
-                .fixedSize(horizontal: false, vertical: true)
-                .relativeLineSpacing(.em(0.32))
-                .markdownMargin(top: .zero, bottom: .em(1.15))
-        }
-        .blockquote { configuration in
-            HStack(alignment: .top, spacing: 12) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(theme.ink.opacity(0.30))
-                    .frame(width: 3)
-                configuration.label
-                    .foregroundStyle(theme.ink.opacity(0.75))
+    /// A theme controls typography and block layout, not merely background color.
+    /// Parsed MarkdownContent is unchanged when any appearance setting changes.
+    static func pksReading(_ theme: NotesTheme, fontAdjustment: Double, lineAdjustment: Double) -> Theme {
+        let type = theme.typography
+        let bodySize = type.bodySize + fontAdjustment
+        let lineHeight = max(0.08, type.lineSpacing + lineAdjustment)
+        return Theme.basic
+            .text {
+                ForegroundColor(theme.ink)
+                FontSize(bodySize)
             }
-            .markdownMargin(top: .rem(0.5), bottom: .rem(1))
-        }
-        .code {
-            FontFamilyVariant(.monospaced)
-            FontSize(.em(0.89))
-        }
-        .codeBlock { configuration in
-            ScrollView(.horizontal) {
+            .strong {
+                FontWeight(.semibold)
+            }
+            .link {
+                ForegroundColor(theme.linkColor)
+            }
+            .heading1 { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        FontWeight(type.headingWeight)
+                        FontSize(.em(type.heading1))
+                    }
+                    .markdownMargin(top: .rem(type.headingSpacing * 1.05),
+                                    bottom: .rem(type.paragraphSpacing * 0.9))
+            }
+            .heading2 { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        FontWeight(type.headingWeight)
+                        FontSize(.em(type.heading2))
+                    }
+                    .markdownMargin(top: .rem(type.headingSpacing),
+                                    bottom: .rem(type.paragraphSpacing * 0.6))
+            }
+            .heading3 { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        FontWeight(.semibold)
+                        FontSize(.em(type.heading3))
+                    }
+                    .markdownMargin(top: .rem(type.headingSpacing * 0.78),
+                                    bottom: .rem(type.paragraphSpacing * 0.52))
+            }
+            .paragraph { configuration in
                 configuration.label
                     .fixedSize(horizontal: false, vertical: true)
-                    .relativeLineSpacing(.em(0.25))
-                    .markdownTextStyle {
-                        FontFamilyVariant(.monospaced)
-                        FontSize(.em(0.87))
-                    }
-                    .padding(18)
+                    .relativeLineSpacing(.em(lineHeight))
+                    .markdownMargin(top: .zero, bottom: .em(type.paragraphSpacing))
             }
-            .background(theme.codeBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .markdownMargin(top: .rem(0.7), bottom: .rem(1.3))
-        }
+            .blockquote { configuration in
+                HStack(alignment: .top, spacing: type.quoteInset) {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(theme.ink.opacity(theme == .midnight ? 0.42 : 0.22))
+                        .frame(width: theme == .warm ? 2 : 3)
+                    if theme == .warm {
+                        configuration.label
+                            .italic()
+                            .foregroundStyle(theme.ink.opacity(0.82))
+                    } else {
+                        configuration.label
+                            .foregroundStyle(theme.ink.opacity(0.78))
+                    }
+                }
+                .markdownMargin(top: .rem(0.5), bottom: .rem(type.paragraphSpacing))
+            }
+            .code {
+                FontFamilyVariant(.monospaced)
+                FontSize(.em(theme == .midnight ? 0.98 : 0.88))
+                BackgroundColor(theme.codeBackground)
+            }
+            .codeBlock { configuration in
+                ScrollView(.horizontal) {
+                    configuration.label
+                        .fixedSize(horizontal: false, vertical: true)
+                        .relativeLineSpacing(.em(0.24))
+                        .markdownTextStyle {
+                            FontFamilyVariant(.monospaced)
+                            FontSize(.em(theme == .midnight ? 0.94 : 0.85))
+                        }
+                        .padding(type.codePadding)
+                }
+                .background(theme.codeBackground)
+                .clipShape(RoundedRectangle(cornerRadius: type.codeCorner))
+                .markdownMargin(top: .rem(0.5), bottom: .rem(type.paragraphSpacing))
+            }
+            .listItem { configuration in
+                configuration.label
+                    .markdownMargin(top: .em(type.listSpacing))
+            }
+            .table { configuration in
+                configuration.label
+                    .fixedSize(horizontal: false, vertical: true)
+                    .markdownTableBorderStyle(.init(color: theme.ink.opacity(0.14)))
+                    .markdownTableBackgroundStyle(.alternatingRows(theme.canvas, theme.codeBackground))
+                    .markdownMargin(top: .rem(0.4), bottom: .rem(type.paragraphSpacing))
+            }
+            .tableCell { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        if configuration.row == 0 {
+                            FontWeight(.semibold)
+                        }
+                    }
+                    .relativePadding(.horizontal, length: .em(0.68))
+                    .relativePadding(.vertical, length: .em(0.4))
+            }
     }
 }

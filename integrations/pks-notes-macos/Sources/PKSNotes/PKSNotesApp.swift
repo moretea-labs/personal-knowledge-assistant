@@ -82,6 +82,10 @@ struct NotesWindow: View {
     @EnvironmentObject private var model: NotesModel
     @State private var mode: ReadingMode = .edit
     @AppStorage("PKSNotesReadingTheme") private var themeID = NotesTheme.system.rawValue
+    @AppStorage("PKSNotesFontAdjustment") private var fontAdjustment = 0.0
+    @AppStorage("PKSNotesLineAdjustment") private var lineAdjustment = 0.0
+    @AppStorage("PKSNotesWidthAdjustment") private var widthAdjustment = 0.0
+    @State private var showingTypography = false
     @State private var previewCache: MarkdownPreviewSnapshot?
     @State private var visibleTreeRows: [NoteTreePresentation.Row] = []
 
@@ -109,16 +113,16 @@ struct NotesWindow: View {
                     HStack(spacing: 2) {
                         ForEach(ReadingMode.allCases, id: \.self) { choice in
                             Button {
-                                mode = choice
+                                withAnimation(.easeOut(duration: 0.16)) {
+                                    mode = choice
+                                }
                             } label: {
                                 Label(choice.rawValue, systemImage: choice.symbol)
                                     .font(.system(size: 12, weight: mode == choice ? .semibold : .regular))
-                                    .padding(.horizontal, 9)
-                                    .padding(.vertical, 5)
-                                    .background(
-                                        mode == choice ? Color(nsColor: .controlBackgroundColor) : .clear,
-                                        in: RoundedRectangle(cornerRadius: 6)
-                                    )
+                                    .foregroundStyle(mode == choice ? Color.primary : Color.secondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 6)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .keyboardShortcut(choice.shortcut, modifiers: .command)
@@ -126,25 +130,19 @@ struct NotesWindow: View {
                             .help("Switch to \(choice.rawValue) Markdown")
                         }
                     }
-                    .padding(2)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.horizontal, 2)
                 }
             }
             ToolbarItemGroup(placement: .primaryAction) {
-                Menu {
-                    ForEach(NotesTheme.allCases) { option in
-                        Button {
-                            themeID = option.rawValue
-                        } label: {
-                            Label(option.name, systemImage: theme == option ? "checkmark.circle.fill" : option.symbol)
-                        }
-                        .accessibilityIdentifier("pks-theme-\(option.rawValue)")
-                    }
+                Button {
+                    showingTypography = true
                 } label: {
-                    Image(systemName: "paintpalette")
+                    Image(systemName: "textformat.size")
                 }
-                .menuIndicator(.hidden)
-                .help("Choose reading theme")
+                .popover(isPresented: $showingTypography, arrowEdge: .bottom) {
+                    typographyInspector
+                }
+                .help("Reading theme and typography")
                 .accessibilityIdentifier("pks-theme-menu")
 
                 if model.autoSavePending && model.selected != nil {
@@ -249,9 +247,92 @@ struct NotesWindow: View {
         }
     }
 
+    private var typographyInspector: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Reading Appearance")
+                .font(.headline)
+                .padding(.bottom, 1)
+
+            ForEach(NotesTheme.allCases) { option in
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        themeID = option.rawValue
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: option.symbol)
+                            .frame(width: 20)
+                            .foregroundStyle(.secondary)
+                        Text(option.name)
+                            .fontWeight(theme == option ? .semibold : .regular)
+                        Spacer(minLength: 6)
+                        if theme == option {
+                            Image(systemName: "checkmark")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .padding(.vertical, 5)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("pks-theme-\(option.rawValue)")
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("Text Size")
+                    Spacer()
+                    Text("\(theme.typography.bodySize + fontAdjustment, specifier: "%.1f") pt")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Slider(value: $fontAdjustment, in: -2...4, step: 0.5)
+                    .accessibilityIdentifier("pks-typography-size")
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("Line Spacing")
+                    Spacer()
+                    Text("\(Int((theme.typography.lineSpacing + lineAdjustment) * 100))%")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Slider(value: $lineAdjustment, in: -0.15...0.30, step: 0.01)
+                    .accessibilityIdentifier("pks-typography-leading")
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("Reading Width")
+                    Spacer()
+                    Text("\(Int(theme.typography.pageWidth + widthAdjustment)) pt")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Slider(value: $widthAdjustment, in: -160...160, step: 20)
+                    .accessibilityIdentifier("pks-typography-width")
+            }
+            Button("Reset Typography") {
+                fontAdjustment = 0
+                lineAdjustment = 0
+                widthAdjustment = 0
+            }
+            .disabled(fontAdjustment == 0 && lineAdjustment == 0 && widthAdjustment == 0)
+            .font(.caption)
+            .buttonStyle(.link)
+        }
+        .font(.system(size: 13))
+        .controlSize(.small)
+        .padding(18)
+        .frame(width: 288)
+        .accessibilityIdentifier("pks-typography-inspector")
+    }
+
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                 TextField("Search all PKS knowledge", text: $model.query)
@@ -267,9 +348,9 @@ struct NotesWindow: View {
                     }.buttonStyle(.borderless)
                 }
             }
-            .padding(9)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
 
             if model.searching || model.searchStatus.hasPrefix("PKS offline") {
                 Text(model.searchStatus)
@@ -279,23 +360,21 @@ struct NotesWindow: View {
                     .padding(.horizontal, 14)
             }
 
-            HStack(spacing: 14) {
+            HStack(spacing: 18) {
                 ForEach(SidebarTab.allCases, id: \.self) { tab in
                     Button {
-                        sidebarTab = tab
+                        withAnimation(.easeOut(duration: 0.14)) {
+                            sidebarTab = tab
+                        }
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: tab == .notes ? "folder" : "text.magnifyingglass")
                             Text(tab == .notes ? "Files" : "Results")
                         }
                         .font(.system(size: 12, weight: sidebarTab == tab ? .semibold : .regular))
-                        .foregroundStyle(sidebarTab == tab ? .primary : .secondary)
-                        .padding(.vertical, 4)
-                        .overlay(alignment: .bottom) {
-                            if sidebarTab == tab {
-                                Capsule().fill(Color.accentColor).frame(height: 2)
-                            }
-                        }
+                        .foregroundStyle(sidebarTab == tab ? Color.accentColor : Color.secondary)
+                        .padding(.vertical, 9)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("pks-sidebar-\(tab.rawValue.lowercased())")
@@ -303,6 +382,7 @@ struct NotesWindow: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 14)
+            .padding(.bottom, 4)
 
             List {
                 if sidebarTab == .search {
@@ -462,11 +542,6 @@ struct NotesWindow: View {
                         }
                         .padding(.leading, CGFloat(row.depth) * 17)
                         .padding(.vertical, 2)
-                        .background(treeFocused && treeCursorPath == row.id
-                                    ? Color.accentColor.opacity(0.22)
-                                    : model.selected == row.item.url || model.previewPDF == row.item.url
-                                        ? Color.accentColor.opacity(0.12) : Color.clear,
-                                    in: RoundedRectangle(cornerRadius: 5))
                         .contextMenu {
                             if row.item.isFolder {
                                 Button("New Note Here", systemImage: "square.and.pencil") {
@@ -489,15 +564,11 @@ struct NotesWindow: View {
                         }
                         .buttonStyle(.borderless)
                     }
-                } footer: {
-                    Text(model.root?.path ?? "Choose an existing folder")
-                        .font(.caption2)
-                        .lineLimit(2)
-                        .textSelection(.enabled)
                 }
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
             .focusable(sidebarTab == .notes)
             .focused($treeFocused)
             .onMoveCommand { direction in
@@ -600,18 +671,20 @@ struct NotesWindow: View {
                 reader
             }
             if let message = model.message {
-                Divider()
-                HStack {
+                HStack(spacing: 9) {
                     Image(systemName: "info.circle")
-                    Text(message).font(.callout).lineLimit(2)
+                    Text(message).font(.caption).lineLimit(2)
                     Spacer()
                     Button("Dismiss") { model.message = nil }
                         .buttonStyle(.borderless)
                 }
-                .padding(9)
-                .background(.thinMaterial)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color(nsColor: .windowBackgroundColor))
             }
         }
+        .background(theme.canvas)
         .navigationTitle(model.selected == nil && model.previewPDF == nil && model.externalBody == nil ? "PKS Notes" : model.title)
     }
 
@@ -635,13 +708,17 @@ struct NotesWindow: View {
 
     private var editor: some View {
         TextEditor(text: $model.draft)
-            .font(.system(size: 15, design: .monospaced))
+            .font(.system(size: theme.typography.bodySize + fontAdjustment,
+                          design: theme.typography.design))
+            .lineSpacing(CGFloat(max(0.08, theme.typography.lineSpacing + lineAdjustment) * 9))
             .foregroundColor(theme.ink)
-            .tint(theme == .warm ? Color.brown : .accentColor)
+            .tint(theme.linkColor)
             .scrollContentBackground(.hidden)
+            .frame(maxWidth: theme.typography.pageWidth + widthAdjustment)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(theme.canvas)
-            .padding(.horizontal, 22)
-            .padding(.vertical, 16)
             // The old draft remains intact until an off-main file load succeeds.
             .disabled(model.loadingNote)
             .accessibilityIdentifier("pks-markdown-editor")
@@ -650,7 +727,11 @@ struct NotesWindow: View {
     private var renderedNote: some View {
         MarkdownPreviewPane(source: model.body, live: mode == .split,
                             identity: model.selected?.path ?? model.previewSource?.documentId ?? "",
-                            theme: theme, cache: $previewCache)
+                            theme: theme,
+                            fontAdjustment: fontAdjustment,
+                            lineAdjustment: lineAdjustment,
+                            widthAdjustment: widthAdjustment,
+                            cache: $previewCache)
             // A different note must never briefly display another file's parsed document.
             .id(model.selected?.path ?? model.previewSource?.documentId ?? "empty")
     }

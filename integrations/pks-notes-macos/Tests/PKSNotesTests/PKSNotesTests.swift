@@ -98,6 +98,23 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(model.message?.contains("changed outside") == true)
     }
 
+    func testTypographyThemesChangeLayoutNotOnlyBackgrounds() {
+        let profiles = NotesTheme.allCases.map(\.typography)
+        XCTAssertEqual(profiles.count, 4)
+        XCTAssertEqual(Set(profiles.map(\.bodySize)).count, 4)
+        XCTAssertEqual(Set(profiles.map(\.heading1)).count, 4)
+        XCTAssertEqual(Set(profiles.map(\.paragraphSpacing)).count, 4)
+        XCTAssertEqual(Set(profiles.map(\.lineSpacing)).count, 4)
+        XCTAssertEqual(Set(profiles.map(\.pageWidth)).count, 4)
+        XCTAssertEqual(Set(profiles.map(\.codeCorner)).count, 4)
+        XCTAssertGreaterThan(NotesTheme.warm.typography.paragraphSpacing,
+                             NotesTheme.midnight.typography.paragraphSpacing)
+        XCTAssertLessThan(NotesTheme.warm.typography.pageWidth,
+                          NotesTheme.midnight.typography.pageWidth)
+        XCTAssertTrue(profiles.allSatisfy { $0.heading1 > $0.heading2 && $0.heading2 > $0.heading3 })
+        XCTAssertTrue(profiles.allSatisfy { $0.bodySize >= 14 && $0.pageWidth >= 600 })
+    }
+
     func testReadingThemeDefaultsAndParsedPreviewCacheIdentity() {
         XCTAssertEqual(NotesTheme.allCases.map(\.rawValue),
                        ["system", "paper", "warm", "midnight"])
