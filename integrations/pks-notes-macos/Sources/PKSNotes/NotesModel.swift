@@ -142,6 +142,7 @@ final class NotesModel: ObservableObject {
     @Published private(set) var root: URL?
     @Published private(set) var files: [NoteItem] = []
     @Published private(set) var loadingFiles = false
+    @Published private(set) var loadingNote = false
     @Published private(set) var selected: URL?
     @Published var draft: String = ""
     @Published private(set) var baseline: String = ""
@@ -158,6 +159,10 @@ final class NotesModel: ObservableObject {
     @Published private(set) var searchStatus = "PKS search · 127.0.0.1:3217"
     private var savedModification: Date?
     private var previewTask: Task<Void, Never>?
+    private var noteLoadTask: Task<Void, Never>?
+    private var requestedNote: URL?
+    private var loadIdentity: UUID?
+    private var pendingMatch: SearchHit?
     private var securityScopedFolder: URL?
 
     var isDirty: Bool { selected != nil && draft != baseline }
@@ -231,6 +236,7 @@ final class NotesModel: ObservableObject {
         guard confirmLeavingNote(decision: navigationDecision) else { return false }
 
         previewTask?.cancel()
+        cancelNoteLoad()
         root = resolved
         message = nil
         UserDefaults.standard.set(resolved.path, forKey: "PKSNotesWorkspace")
@@ -294,7 +300,11 @@ final class NotesModel: ObservableObject {
     }
 
     func openNote(_ url: URL, navigationDecision: UnsavedNoteDecision? = nil) {
-        if selected == url { return }
+        if requestedNote == url { return }
+        if selected == url {
+            cancelNoteLoad() // A re-selection wins over another pending file load.
+            return
+        }
         guard let root, WorkspaceFiles.contains(url, in: root),
               ["md", "markdown"].contains(url.pathExtension.lowercased()) else {
             message = "Only Markdown files inside the selected workspace can be edited."; return
@@ -303,27 +313,70 @@ final class NotesModel: ObservableObject {
         loadNote(url)
     }
 
+    private func cancelNoteLoad() {
+        noteLoadTask?.cancel()
+        noteLoadTask = nil
+        requestedNote = nil
+        loadIdentity = nil
+        pendingMatch = nil
+        loadingNote = false
+    }
+
     private func loadNote(_ url: URL) {
-        do {
-            let content = try String(contentsOf: url, encoding: .utf8)
-            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-            savedModification = attrs[.modificationDate] as? Date
-            previewTask?.cancel()
-            selected = url
-            baseline = content
-            draft = content
-            externalBody = nil
-            externalTitle = nil
-            previewSource = nil
-            activeMatch = nil
-            message = nil
-        } catch {
-            message = "Cannot open the note: \(error.localizedDescription)"
+        cancelNoteLoad()
+        previewTask?.cancel()
+        requestedNote = url
+        let identity = UUID()
+        loadIdentity = identity
+        loadingNote = true
+        message = nil
+
+        // iCloud File Provider can block while hydrating files. Never read Markdown
+        // on the main actor; only publish a successful, current request.
+        noteLoadTask = Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let content = try String(contentsOf: url, encoding: .utf8)
+                let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+                let modification = attrs[.modificationDate] as? Date
+                guard !Task.isCancelled else { return }
+                await self?.finishOpeningNote(url, identity: identity,
+                                              content: content, modification: modification)
+            } catch {
+                guard !Task.isCancelled else { return }
+                await self?.failOpeningNote(url, identity: identity,
+                                            reason: error.localizedDescription)
+            }
         }
     }
 
+    private func finishOpeningNote(_ url: URL, identity: UUID, content: String,
+                                   modification: Date?) {
+        guard requestedNote == url, loadIdentity == identity else { return }
+        selected = url
+        baseline = content
+        draft = content
+        savedModification = modification
+        externalBody = nil
+        externalTitle = nil
+        previewSource = nil
+        activeMatch = pendingMatch
+        if pendingMatch != nil {
+            matchedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            matchJumpSequence &+= 1
+        }
+        cancelNoteLoad()
+        message = nil
+    }
+
+    private func failOpeningNote(_ url: URL, identity: UUID, reason: String) {
+        guard requestedNote == url, loadIdentity == identity else { return }
+        cancelNoteLoad()
+        message = "Cannot open the note: \(reason)"
+    }
+
     func save() {
-        guard isDirty, let root, let selected, WorkspaceFiles.contains(selected, in: root) else { return }
+        guard !loadingNote, isDirty, let root, let selected,
+              WorkspaceFiles.contains(selected, in: root) else { return }
         do {
             let attrs = try FileManager.default.attributesOfItem(atPath: selected.path)
             let actual = attrs[.modificationDate] as? Date
@@ -458,10 +511,11 @@ final class NotesModel: ObservableObject {
         if hit.sourceType == "local", let url = hit.localFileURL, let root,
            WorkspaceFiles.contains(url, in: root),
            ["md", "markdown"].contains(url.pathExtension.lowercased()) {
-            // Repeated hits in the currently edited file can navigate without
-            // reopening it or losing unsaved Markdown changes.
-            if selected != url { openNote(url) }
-            if selected == url {
+            if selected != url || requestedNote != nil {
+                openNote(url)
+                if requestedNote == url { pendingMatch = hit }
+            } else {
+                // Repeated hits in the edited note never discard unsaved changes.
                 activeMatch = hit
                 matchedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
                 matchJumpSequence &+= 1
@@ -469,8 +523,12 @@ final class NotesModel: ObservableObject {
             return
         }
         guard confirmLeavingNote() else { return }
-        // Cancel previous previews so delayed network results cannot replace another note.
+        // This request becomes the newest navigation intent, including after Discard.
+        cancelNoteLoad()
         previewTask?.cancel()
+        let sourceNote = selected
+        let sourceDraft = draft
+        let sourceRoot = root
         previewTask = Task {
             do {
                 let encoded = hit.documentId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!
@@ -482,7 +540,10 @@ final class NotesModel: ObservableObject {
                     throw URLError(.badServerResponse)
                 }
                 let result = try JSONDecoder().decode(ReadResponse.self, from: data)
-                guard !Task.isCancelled, !isDirty else { return }
+                // Discard means the old draft may still be dirty until this preview
+                // commits. Only reject a stale response if context changed since launch.
+                guard !Task.isCancelled, selected == sourceNote,
+                      draft == sourceDraft, root == sourceRoot else { return }
                 selected = nil
                 externalTitle = hit.title + " · read-only PKS result"
                 externalBody = result.content
