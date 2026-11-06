@@ -114,13 +114,13 @@ final class PKSNotesTests: XCTestCase {
 
     func testTypographyThemesChangeLayoutNotOnlyBackgrounds() {
         let profiles = NotesTheme.allCases.map(\.typography)
-        XCTAssertEqual(profiles.count, 4)
-        XCTAssertEqual(Set(profiles.map(\.bodySize)).count, 4)
-        XCTAssertEqual(Set(profiles.map(\.heading1)).count, 4)
-        XCTAssertEqual(Set(profiles.map(\.paragraphSpacing)).count, 4)
-        XCTAssertEqual(Set(profiles.map(\.lineSpacing)).count, 4)
-        XCTAssertEqual(Set(profiles.map(\.pageWidth)).count, 4)
-        XCTAssertEqual(Set(profiles.map(\.codeCorner)).count, 4)
+        XCTAssertEqual(profiles.count, 5)
+        XCTAssertEqual(Set(profiles.map(\.bodySize)).count, 5)
+        XCTAssertEqual(Set(profiles.map(\.heading1)).count, 5)
+        XCTAssertEqual(Set(profiles.map(\.paragraphSpacing)).count, 5)
+        XCTAssertEqual(Set(profiles.map(\.lineSpacing)).count, 5)
+        XCTAssertEqual(Set(profiles.map(\.pageWidth)).count, 5)
+        XCTAssertEqual(Set(profiles.map(\.codeCorner)).count, 5)
         XCTAssertGreaterThan(NotesTheme.warm.typography.paragraphSpacing,
                              NotesTheme.midnight.typography.paragraphSpacing)
         XCTAssertLessThan(NotesTheme.warm.typography.pageWidth,
@@ -131,9 +131,12 @@ final class PKSNotesTests: XCTestCase {
 
     func testReadingThemeDefaultsAndParsedPreviewCacheIdentity() {
         XCTAssertEqual(NotesTheme.allCases.map(\.rawValue),
-                       ["system", "paper", "warm", "midnight"])
+                       ["system", "paper", "warm", "midnight", "graphite"])
         XCTAssertEqual(NotesTheme.restored("nonexistent"), .system)
         XCTAssertEqual(NotesTheme.restored("warm"), .warm)
+        XCTAssertEqual(NotesTheme.restored("graphite"), .graphite)
+        XCTAssertEqual(NotesTheme.graphite.appearance, .dark)
+        XCTAssertEqual(NotesTheme.graphite.readingFont, .default)
         XCTAssertEqual(NotesTheme.midnight.appearance, .dark)
         XCTAssertEqual(NotesTheme.warm.appearance, .light)
         XCTAssertNil(NotesTheme.system.appearance)
@@ -398,6 +401,66 @@ final class PKSNotesTests: XCTestCase {
         await waitForNote(model, note)
         XCTAssertNil(model.previewPDF)
         XCTAssertEqual(model.draft, "# Original")
+    }
+
+    @MainActor
+    func testOneClickNewNoteCreatesBlankEditorAndNeverOverwritesExistingFile() async throws {
+        let defaults = UserDefaults.standard
+        let previousRoot = defaults.string(forKey: "PKSNotesWorkspace")
+        let previousNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let previousRoot { defaults.set(previousRoot, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousNote { defaults.set(previousNote, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let child = folder.appendingPathComponent("中文文件夹", isDirectory: true)
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let original = folder.appendingPathComponent("Untitled.md")
+        try "# Do not overwrite me".write(to: original, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(folder))
+        let first = model.newNote()
+        XCTAssertEqual(first?.lastPathComponent, "Untitled 2.md")
+        guard let first else { return XCTFail("Expected a new blank note") }
+        await waitForNote(model, first)
+        XCTAssertEqual(model.selected, first)
+        XCTAssertEqual(model.draft, "")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "")
+        XCTAssertEqual(try String(contentsOf: original, encoding: .utf8), "# Do not overwrite me")
+
+        model.draft = "# Direct writing\n\nFirst paragraph"
+        for _ in 0..<120 {
+            if !model.isDirty { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertFalse(model.isDirty, "Typing into a one-click note must autosave.")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8),
+                       "# Direct writing\n\nFirst paragraph")
+
+        let second = model.newNote()
+        XCTAssertEqual(second?.lastPathComponent, "Untitled 3.md")
+        guard let second else { return XCTFail("Expected a collision-free second note") }
+        await waitForNote(model, second)
+        XCTAssertEqual(model.draft, "")
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "")
+
+        let nested = model.newNote(in: child)
+        XCTAssertEqual(nested?.lastPathComponent, "Untitled.md")
+        guard let nested else { return XCTFail("Expected a note in the chosen folder") }
+        await waitForNote(model, nested)
+        XCTAssertEqual(nested.deletingLastPathComponent(), child)
+
+        model.draft = "Unsaved but protected"
+        XCTAssertNil(model.newNote(navigationDecision: .cancel))
+        XCTAssertEqual(model.draft, "Unsaved but protected")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: child.appendingPathComponent("Untitled 2.md").path
+        ))
     }
 
     @MainActor

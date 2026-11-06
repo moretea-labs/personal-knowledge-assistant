@@ -6,6 +6,7 @@ enum NotesTheme: String, CaseIterable, Identifiable {
     case paper
     case warm
     case midnight
+    case graphite
 
     var id: String { rawValue }
 
@@ -15,6 +16,7 @@ enum NotesTheme: String, CaseIterable, Identifiable {
         case .paper: "Paper"
         case .warm: "Warm"
         case .midnight: "Midnight"
+        case .graphite: "Graphite"
         }
     }
 
@@ -24,6 +26,7 @@ enum NotesTheme: String, CaseIterable, Identifiable {
         case .paper: "doc.text"
         case .warm: "sun.max"
         case .midnight: "moon.stars"
+        case .graphite: "circle.lefthalf.filled"
         }
     }
 
@@ -31,7 +34,7 @@ enum NotesTheme: String, CaseIterable, Identifiable {
         switch self {
         case .system: nil
         case .paper, .warm: .light
-        case .midnight: .dark
+        case .midnight, .graphite: .dark
         }
     }
 
@@ -41,6 +44,7 @@ enum NotesTheme: String, CaseIterable, Identifiable {
         case .paper: Color(red: 0.998, green: 0.998, blue: 0.997)
         case .warm: Color(red: 0.974, green: 0.951, blue: 0.903)
         case .midnight: Color(red: 0.111, green: 0.125, blue: 0.143)
+        case .graphite: Color(red: 0.125, green: 0.129, blue: 0.137)
         }
     }
 
@@ -50,6 +54,7 @@ enum NotesTheme: String, CaseIterable, Identifiable {
         case .paper: Color(red: 0.16, green: 0.19, blue: 0.23)
         case .warm: Color(red: 0.28, green: 0.25, blue: 0.21)
         case .midnight: Color(red: 0.88, green: 0.90, blue: 0.91)
+        case .graphite: Color(red: 0.915, green: 0.916, blue: 0.902)
         }
     }
 
@@ -59,13 +64,14 @@ enum NotesTheme: String, CaseIterable, Identifiable {
         case .paper: Color(red: 0.954, green: 0.961, blue: 0.969)
         case .warm: Color(red: 0.922, green: 0.887, blue: 0.829)
         case .midnight: Color(red: 0.17, green: 0.19, blue: 0.22)
+        case .graphite: Color(red: 0.173, green: 0.18, blue: 0.192)
         }
     }
 
     var readingFont: Font.Design {
         switch self {
         case .warm: .serif
-        case .system, .paper, .midnight: .default
+        case .system, .paper, .midnight, .graphite: .default
         }
     }
 
@@ -132,6 +138,15 @@ extension NotesTheme {
                 pageWidth: 800, quoteInset: 10, codePadding: 14,
                 codeCorner: 5, listSpacing: 0.20
             )
+        case .graphite:
+            ReadingTypography(
+                design: .default, bodySize: 16,
+                heading1: 1.94, heading2: 1.42, heading3: 1.15,
+                headingWeight: .semibold, lineSpacing: 0.31,
+                paragraphSpacing: 1.24, headingSpacing: 1.54,
+                pageWidth: 735, quoteInset: 15, codePadding: 17,
+                codeCorner: 6, listSpacing: 0.28
+            )
         }
     }
 
@@ -141,6 +156,7 @@ extension NotesTheme {
         case .paper: Color(red: 0.18, green: 0.36, blue: 0.58)
         case .warm: Color(red: 0.48, green: 0.29, blue: 0.14)
         case .midnight: Color(red: 0.47, green: 0.73, blue: 0.82)
+        case .graphite: Color(red: 0.92, green: 0.72, blue: 0.39)
         }
     }
 }

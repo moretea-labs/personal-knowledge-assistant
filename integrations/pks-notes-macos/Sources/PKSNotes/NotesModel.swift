@@ -129,6 +129,18 @@ enum WorkspaceFiles {
         return contains(normalized, in: root) ? normalized : nil
     }
 
+    /// Deterministic collision-safe suggestion; O_EXCL remains the final writer guard.
+    static func nextUntitledName(in folder: URL) -> String? {
+        for index in 0..<10_000 {
+            let base = index == 0 ? "Untitled" : "Untitled \(index + 1)"
+            let filename = base + ".md"
+            if !FileManager.default.fileExists(atPath: folder.appendingPathComponent(filename).path) {
+                return filename
+            }
+        }
+        return nil
+    }
+
     static func safeNewNoteName(_ name: String) -> String? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != ".", trimmed != "..",
@@ -482,31 +494,61 @@ final class NotesModel: ObservableObject {
         }
     }
 
-    func newNote(named name: String, in parentFolder: URL? = nil,
-                 navigationDecision: UnsavedNoteDecision? = nil) {
-        guard let root, let filename = WorkspaceFiles.safeNewNoteName(name) else {
-            message = "Enter a simple note name without slashes."; return
+    /// A new note is immediately usable; the UI never asks for a filename.
+    /// Explicit names and automatic Untitled names share this one safe writer.
+    @discardableResult
+    func newNote(named name: String? = nil, in parentFolder: URL? = nil,
+                 navigationDecision: UnsavedNoteDecision? = nil) -> URL? {
+        guard let root else {
+            message = "Choose a notes folder before creating a note."; return nil
         }
-        // An explicit folder action takes precedence over the current note.
+        // An explicit folder action takes precedence over the currently open note.
         let folder = (parentFolder ?? selected?.deletingLastPathComponent() ?? root).standardizedFileURL
         var isDirectory: ObjCBool = false
         guard (folder == root || WorkspaceFiles.contains(folder, in: root)),
               FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
-            message = "Choose a folder inside the Markdown workspace."; return
+            message = "Choose a folder inside the Markdown workspace."; return nil
+        }
+        let filename: String
+        if let name {
+            guard let normalized = WorkspaceFiles.safeNewNoteName(name) else {
+                message = "Enter a simple note name without slashes."; return nil
+            }
+            filename = normalized
+        } else {
+            guard let available = WorkspaceFiles.nextUntitledName(in: folder) else {
+                message = "No available filename for a new note."; return nil
+            }
+            filename = available
         }
         let url = folder.appendingPathComponent(filename)
-        guard WorkspaceFiles.contains(url, in: root) else { message = "Invalid note path."; return }
-        guard !FileManager.default.fileExists(atPath: url.path) else {
-            message = "The note already exists."; return
+        guard WorkspaceFiles.contains(url, in: root) else {
+            message = "Invalid note path."; return nil
         }
-        guard confirmLeavingNote(decision: navigationDecision) else { return }
+        guard confirmLeavingNote(decision: navigationDecision) else { return nil }
+
+        // O_EXCL prevents overwriting an existing file even if another app
+        // creates the same name between the availability check and the write.
+        let descriptor = url.path.withCString {
+            Darwin.open($0, O_WRONLY | O_CREAT | O_EXCL, mode_t(0o644))
+        }
+        guard descriptor >= 0 else {
+            message = "Cannot create note. The filename may already exist."; return nil
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
-            try "# \(url.deletingPathExtension().lastPathComponent)\n\n".write(to: url, atomically: true, encoding: .utf8)
+            let content = name == nil ? "" : "# \(url.deletingPathExtension().lastPathComponent)\n\n"
+            try handle.write(contentsOf: Data(content.utf8))
+            try handle.close()
             refresh()
             loadNote(url)
+            return url
         } catch {
+            try? handle.close()
+            try? FileManager.default.removeItem(at: url)
             message = "Cannot create note: \(error.localizedDescription)"
+            return nil
         }
     }
 

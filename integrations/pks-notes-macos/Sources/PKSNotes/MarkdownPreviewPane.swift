@@ -205,7 +205,7 @@ private extension Theme {
             .blockquote { configuration in
                 HStack(alignment: .top, spacing: type.quoteInset) {
                     RoundedRectangle(cornerRadius: 1)
-                        .fill(theme.ink.opacity(theme == .midnight ? 0.42 : 0.22))
+                        .fill(theme.ink.opacity(theme == .midnight || theme == .graphite ? 0.42 : 0.22))
                         .frame(width: theme == .warm ? 2 : 3)
                     if theme == .warm {
                         configuration.label
@@ -220,7 +220,7 @@ private extension Theme {
             }
             .code {
                 FontFamilyVariant(.monospaced)
-                FontSize(.em(theme == .midnight ? 0.98 : 0.88))
+                FontSize(.em(theme == .midnight || theme == .graphite ? 0.98 : 0.88))
                 BackgroundColor(theme.codeBackground)
             }
             .codeBlock { configuration in
@@ -230,7 +230,7 @@ private extension Theme {
                         .relativeLineSpacing(.em(0.24))
                         .markdownTextStyle {
                             FontFamilyVariant(.monospaced)
-                            FontSize(.em(theme == .midnight ? 0.94 : 0.85))
+                            FontSize(.em(theme == .midnight || theme == .graphite ? 0.94 : 0.85))
                         }
                         .padding(type.codePadding)
                 }
