@@ -1224,12 +1224,9 @@ struct NotesWindow: View {
         case "task": command = .task
         default: return
         }
-        let result = MarkdownEditing.apply(command, to: model.draft, selection: textView.selectedRange())
-        model.draft = result.text
-        DispatchQueue.main.async {
-            textView.setSelectedRange(result.selection)
-            textView.scrollRangeToVisible(result.selection)
-        }
+        let original = textView.string
+        let result = MarkdownEditing.apply(command, to: original, selection: textView.selectedRange())
+        applyNativeEditorChange(result, from: original, in: textView)
     }
 
     private func handlePaste() {
@@ -1252,8 +1249,17 @@ struct NotesWindow: View {
             model.message = "Could not save the pasted image inside this notes workspace."
             return
         }
-        let result = MarkdownEditing.insert(markdown, into: model.draft, selection: textView.selectedRange())
-        model.draft = result.text
+        let original = textView.string
+        let result = MarkdownEditing.insert(markdown, into: original, selection: textView.selectedRange())
+        applyNativeEditorChange(result, from: original, in: textView)
+    }
+
+    private func applyNativeEditorChange(_ result: MarkdownEditResult, from original: String,
+                                         in textView: NSTextView) {
+        guard let replacement = MarkdownEditing.minimalChange(from: original, to: result.text) else { return }
+        // Inserting through NSTextView, instead of assigning the SwiftUI binding,
+        // lets the native text system register a single undoable edit.
+        textView.insertText(replacement.text, replacementRange: replacement.range)
         DispatchQueue.main.async {
             textView.setSelectedRange(result.selection)
             textView.scrollRangeToVisible(result.selection)

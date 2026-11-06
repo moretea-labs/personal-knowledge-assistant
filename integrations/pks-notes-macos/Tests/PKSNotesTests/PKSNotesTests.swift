@@ -1008,6 +1008,18 @@ extension PKSNotesTests {
         )
     }
 
+    func testMarkdownReplacementPreservesUnchangedTextAndUnicodeOffsets() {
+        XCTAssertEqual(
+            MarkdownEditing.minimalChange(from: "alpha beta", to: "alpha **beta**"),
+            MarkdownReplacement(range: NSRange(location: 6, length: 4), text: "**beta**")
+        )
+        XCTAssertEqual(
+            MarkdownEditing.minimalChange(from: "中文测试", to: "中文**测试**"),
+            MarkdownReplacement(range: NSRange(location: 2, length: 2), text: "**测试**")
+        )
+        XCTAssertNil(MarkdownEditing.minimalChange(from: "same", to: "same"))
+    }
+
     func testMarkdownEditingInsertsAtSelection() {
         XCTAssertEqual(
             MarkdownEditing.insert("![Pasted image](attachments/a.png)",

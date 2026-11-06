@@ -15,7 +15,37 @@ enum MarkdownEditCommand {
     case task
 }
 
+struct MarkdownReplacement: Equatable {
+    let range: NSRange
+    let text: String
+}
+
 enum MarkdownEditing {
+    /// Replace only the changed UTF-16 range in NSTextView so AppKit owns undo/redo.
+    static func minimalChange(from original: String, to updated: String) -> MarkdownReplacement? {
+        let before = original as NSString
+        let after = updated as NSString
+        var prefix = 0
+        while prefix < min(before.length, after.length),
+              before.character(at: prefix) == after.character(at: prefix) {
+            prefix += 1
+        }
+        if prefix == before.length && prefix == after.length { return nil }
+
+        var suffix = 0
+        while suffix < before.length - prefix && suffix < after.length - prefix,
+              before.character(at: before.length - suffix - 1)
+                == after.character(at: after.length - suffix - 1) {
+            suffix += 1
+        }
+        return MarkdownReplacement(
+            range: NSRange(location: prefix, length: before.length - prefix - suffix),
+            text: after.substring(
+                with: NSRange(location: prefix, length: after.length - prefix - suffix)
+            )
+        )
+    }
+
     static func apply(_ command: MarkdownEditCommand, to text: String, selection: NSRange) -> MarkdownEditResult {
         let ns = text as NSString
         let safeLocation = min(max(0, selection.location), ns.length)
