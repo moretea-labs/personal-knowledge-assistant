@@ -139,20 +139,30 @@ enum MindNodePackage {
             if info.isDirectory != true { totalSize += info.fileSize ?? 0 }
             guard totalSize <= 96 * 1024 * 1024 else { throw Failure.tooLarge }
         }
-        do {
-            try fileManager.copyItem(at: template, to: destination)
-            try bytes.write(to: destination.appendingPathComponent("contents.xml"), options: .atomic)
-            let oldPreview = destination.appendingPathComponent("QuickLook/Preview.jpg")
-            if fileManager.fileExists(atPath: oldPreview.path) {
-                try fileManager.removeItem(at: oldPreview)
+        // Stage the complete package beside the destination. On an export
+        // collision or write failure, remove ONLY our random staging directory.
+        // Never delete a destination another app may have created concurrently.
+        let staging = destination.deletingLastPathComponent()
+            .appendingPathComponent(".pks-notes-\(UUID().uuidString).mindnode", isDirectory: true)
+        defer {
+            if fileManager.fileExists(atPath: staging.path) {
+                try? fileManager.removeItem(at: staging)
             }
-        } catch {
-            // A partially copied package must never be mistaken for a finished map.
-            if fileManager.fileExists(atPath: destination.path) {
-                try? fileManager.removeItem(at: destination)
-            }
-            throw error
         }
+        try fileManager.copyItem(at: template, to: staging)
+        try bytes.write(to: staging.appendingPathComponent("contents.xml"), options: .atomic)
+        // The new outline contains no attachments; carrying forward the
+        // template's private images and stale preview would leak unrelated data.
+        for folder in ["resources", "QuickLook"] {
+            let oldData = staging.appendingPathComponent(folder, isDirectory: true)
+            if fileManager.fileExists(atPath: oldData.path) {
+                try fileManager.removeItem(at: oldData)
+            }
+        }
+        guard !fileManager.fileExists(atPath: destination.path) else {
+            throw Failure.destinationExists
+        }
+        try fileManager.moveItem(at: staging, to: destination)
     }
 
     private struct ExportTopic {
@@ -167,6 +177,12 @@ enum MindNodePackage {
             throw Failure.notOutline
         }
         let topicLines = Set(topics.map(\.id))
+        // Do not silently downgrade Markdown tasks, linked notes, or images
+        // into plain textual node titles. OPML remains the interchange option.
+        let richTitlePattern = #"(?:!\[[^\]]*\]\([^)]+\)|\[\[[^\]]+\]\]|\[[^\]]+\]\([^)]+\)|^\[[ xX]\](?:\s|$))"#
+        guard topics.allSatisfy({ topic in
+            topic.title.range(of: richTitlePattern, options: .regularExpression) == nil
+        }) else { throw Failure.notOutline }
         // Native export is intentionally strict: never silently drop prose,
         // tasks, images, fenced code, or other content from a user document.
         for (index, line) in lines.enumerated() {

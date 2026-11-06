@@ -9,13 +9,14 @@ struct MindMapCanvas: View {
     let importOutline: (String, String) -> Bool
     @State private var selectedID: Int?
     @State private var renameTitle = ""
-    @State private var renaming = false
+    @State private var editingNodeID: Int?
     @State private var interchangeError: String?
     @State private var collapsed: Set<Int> = []
     @State private var zoom: CGFloat = 1.0
     @State private var dropTargetID: Int?
     @State private var gestureBaseZoom: CGFloat?
     @FocusState private var canvasFocused: Bool
+    @FocusState private var titleEditorFocused: Bool
 
     private var nodes: [MindMapNode] { MindMapOutline.nodes(in: source) }
 
@@ -52,8 +53,7 @@ struct MindMapCanvas: View {
                                 .foregroundStyle(.secondary)
                             Button("Create Mind Map") {
                                 source = MindMapOutline.createMap()
-                                selectedID = 0
-                                canvasFocused = true
+                                startEditingNode(0, title: "New Mind Map")
                             }
                             .buttonStyle(.borderedProminent)
                             .accessibilityIdentifier("pks-mind-map-create")
@@ -84,16 +84,6 @@ struct MindMapCanvas: View {
                 }
             }
         }
-        .alert("Rename Node", isPresented: $renaming) {
-            TextField("Title", text: $renameTitle)
-            Button("Save") {
-                if let id = selectedID,
-                   let updated = MindMapOutline.rename(in: source, nodeID: id, to: renameTitle) {
-                    source = updated
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
         .alert("Mind Map Import/Export", isPresented: Binding(
             get: { interchangeError != nil },
             set: { if !$0 { interchangeError = nil } }
@@ -105,22 +95,27 @@ struct MindMapCanvas: View {
         .focusable()
         .focused($canvasFocused)
         .onKeyPress(.downArrow) {
+            guard editingNodeID == nil else { return .ignored }
             moveSelection(by: 1)
             return .handled
         }
         .onKeyPress(.upArrow) {
+            guard editingNodeID == nil else { return .ignored }
             moveSelection(by: -1)
             return .handled
         }
         .onKeyPress(.tab) {
+            guard editingNodeID == nil else { return .ignored }
             addChild()
             return .handled
         }
         .onKeyPress(.return) {
+            guard editingNodeID == nil else { return .ignored }
             addSibling()
             return .handled
         }
         .onKeyPress(.delete) {
+            guard editingNodeID == nil else { return .ignored }
             deleteSelectedLeaf()
             return .handled
         }
@@ -266,10 +261,22 @@ struct MindMapCanvas: View {
                 Color.clear.frame(width: 10, height: 10)
             }
 
-            Text(node.title)
-                .font(.system(size: node.depth == 0 ? 16 : 14, weight: node.depth == 0 ? .semibold : .medium))
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if editingNodeID == node.id {
+                TextField("Node title", text: $renameTitle)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: node.depth == 0 ? 16 : 14, weight: .medium))
+                    .focused($titleEditorFocused)
+                    .onSubmit { finishRename(save: true) }
+                    .onExitCommand { finishRename(save: false) }
+                    .accessibilityIdentifier("pks-mind-map-inline-title")
+                    .onAppear { titleEditorFocused = true }
+            } else {
+                Text(node.title)
+                    .font(.system(size: node.depth == 0 ? 16 : 14,
+                                  weight: node.depth == 0 ? .semibold : .medium))
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
 
             if let link = MindMapOutline.links(in: node.title).first {
                 Button {
@@ -322,12 +329,13 @@ struct MindMapCanvas: View {
             dropTargetID = targeted ? node.id : nil
         }
         .onTapGesture {
+            guard editingNodeID == nil else { return }
             selectedID = node.id
             canvasFocused = true
         }
         .onTapGesture(count: 2) {
+            guard editingNodeID == nil else { return }
             selectedID = node.id
-            canvasFocused = true
             beginRename()
         }
     }
@@ -336,9 +344,8 @@ struct MindMapCanvas: View {
         guard let id = selectedID ?? nodes.first?.id,
               let updated = MindMapOutline.addChild(in: source, parentID: id) else { return }
         source = updated
-        selectedID = id + 1
         collapsed.removeAll()
-        canvasFocused = true
+        startEditingNode(id + 1, title: "New idea")
     }
 
     private func addSibling() {
@@ -353,9 +360,8 @@ struct MindMapCanvas: View {
             .trimmingCharacters(in: .whitespaces)
         let isList = ["- ", "* ", "+ "].contains(where: { trimmedLine.hasPrefix($0) })
         source = updated
-        selectedID = isList ? siblingLine : id + 1
         collapsed.removeAll()
-        canvasFocused = true
+        startEditingNode(isList ? siblingLine : id + 1, title: "New idea")
     }
 
     private func deleteSelectedLeaf() {
@@ -514,8 +520,26 @@ struct MindMapCanvas: View {
 
     private func beginRename() {
         guard let node = nodes.first(where: { $0.id == selectedID }) else { return }
-        renameTitle = node.title
-        renaming = true
+        startEditingNode(node.id, title: node.title)
+    }
+
+    private func startEditingNode(_ id: Int, title: String) {
+        selectedID = id
+        renameTitle = title
+        editingNodeID = id
+        canvasFocused = false
+        titleEditorFocused = true
+    }
+
+    private func finishRename(save: Bool) {
+        guard let id = editingNodeID else { return }
+        if save, let updated = MindMapOutline.rename(in: source, nodeID: id, to: renameTitle) {
+            source = updated
+        }
+        // Empty/invalid edits leave the original Markdown node unchanged.
+        editingNodeID = nil
+        titleEditorFocused = false
+        canvasFocused = true
     }
 
     private func shiftedSource(deeper: Bool) -> String? {
