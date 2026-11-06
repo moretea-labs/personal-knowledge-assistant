@@ -16,14 +16,16 @@ final class PKSNotesTests: XCTestCase {
     func testWorkspaceTitleHidesICloudInternalFolderName() {
         XCTAssertEqual(
             NotesGeometry.workspaceTitle(
-                URL(fileURLWithPath: "/Users/reader/Library/Mobile Documents/com~apple~CloudDocs")
+                URL(fileURLWithPath: "/Users/reader/Library/Mobile Documents/com~apple~CloudDocs"),
+                language: .english
             ), "iCloud Drive"
         )
         XCTAssertEqual(
-            NotesGeometry.workspaceTitle(URL(fileURLWithPath: "/tmp/学习笔记管理")),
+            NotesGeometry.workspaceTitle(URL(fileURLWithPath: "/tmp/学习笔记管理"), language: .english),
             "学习笔记管理"
         )
-        XCTAssertEqual(NotesGeometry.workspaceTitle(nil), "PKS Library")
+        XCTAssertEqual(NotesGeometry.workspaceTitle(nil, language: .english), "PKS Library")
+        XCTAssertEqual(NotesGeometry.workspaceTitle(nil, language: .simplifiedChinese), "PKS 资料库")
     }
 
     func testBackgroundMarkdownPreviewParsingAndSearchHeadingNavigation() async {
@@ -109,7 +111,7 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(model.isDirty)
         XCTAssertEqual(model.draft, "# Local pending")
         XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "# External revision")
-        XCTAssertTrue(model.message?.contains("changed outside") == true)
+        XCTAssertTrue(model.message?.contains(AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")) == true)
     }
 
     func testTypographyThemesChangeLayoutNotOnlyBackgrounds() {
@@ -129,17 +131,27 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(profiles.allSatisfy { $0.bodySize >= 14 && $0.pageWidth >= 600 })
     }
 
+    func testApplicationAppearanceAndLanguagePreferencesAreIndependent() {
+        XCTAssertEqual(AppAppearance.allCases.map(\.rawValue), ["system", "light", "dark"])
+        XCTAssertEqual(AppAppearance.restored("unknown"), .system)
+        XCTAssertNil(AppAppearance.system.colorScheme)
+        XCTAssertEqual(AppAppearance.light.colorScheme, .light)
+        XCTAssertEqual(AppAppearance.dark.colorScheme, .dark)
+
+        XCTAssertEqual(AppLanguage.allCases.map(\.rawValue), ["system", "zh-Hans", "en"])
+        XCTAssertEqual(AppLanguage.restored("unknown"), .system)
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Search"), "搜索")
+        XCTAssertEqual(AppLanguage.english.text("Search"), "Search")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Markdown"), "Markdown")
+    }
+
     func testReadingThemeDefaultsAndParsedPreviewCacheIdentity() {
         XCTAssertEqual(NotesTheme.allCases.map(\.rawValue),
                        ["system", "paper", "warm", "midnight", "graphite"])
         XCTAssertEqual(NotesTheme.restored("nonexistent"), .system)
         XCTAssertEqual(NotesTheme.restored("warm"), .warm)
         XCTAssertEqual(NotesTheme.restored("graphite"), .graphite)
-        XCTAssertEqual(NotesTheme.graphite.appearance, .dark)
         XCTAssertEqual(NotesTheme.graphite.readingFont, .default)
-        XCTAssertEqual(NotesTheme.midnight.appearance, .dark)
-        XCTAssertEqual(NotesTheme.warm.appearance, .light)
-        XCTAssertNil(NotesTheme.system.appearance)
 
         let markdown = "# 标题\n\nSome **bold** Markdown and a [link](x.md)."
         let blocks = MarkdownPreviewParsing.prepare(markdown, match: nil)
@@ -759,7 +771,7 @@ final class PKSNotesTests: XCTestCase {
         model.save()
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "# Changed externally")
         XCTAssertTrue(model.isDirty)
-        XCTAssertTrue(model.message?.contains("changed outside") == true)
+        XCTAssertTrue(model.message?.contains(AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")) == true)
     }
 
     func testRelativeMarkdownLinkAndAttachmentResolveInsideWorkspace() throws {
@@ -811,10 +823,10 @@ final class PKSNotesTests: XCTestCase {
         let missing = FileManager.default.temporaryDirectory
             .appendingPathComponent("pks-notes-missing-\(UUID().uuidString).md")
         model.revealInFinder(missing)
-        XCTAssertEqual(model.message, "The original file is not available locally.")
+        XCTAssertEqual(model.message, AppLanguage.current.text("The original file is not available locally."))
         model.message = nil
         model.openInDefaultApp(missing)
-        XCTAssertEqual(model.message, "The original file is not available locally.")
+        XCTAssertEqual(model.message, AppLanguage.current.text("The original file is not available locally."))
     }
 
     func testPKSDocumentGroupingPreservesRankAndIndividualHits() {
@@ -895,7 +907,7 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(model.selected, latest)
         XCTAssertEqual(model.draft, "# Preserve unsaved source")
         XCTAssertEqual(try String(contentsOf: latest, encoding: .utf8), "# Latest")
-        XCTAssertTrue(model.message?.contains("Cannot open the note") == true)
+        XCTAssertTrue(model.message?.contains(AppLanguage.current.text("Cannot open the note")) == true)
     }
 
     @MainActor

@@ -17,11 +17,19 @@ final class PKSNotesAppDelegate: NSObject, NSApplicationDelegate {
 struct PKSNotesApp: App {
     @NSApplicationDelegateAdaptor(PKSNotesAppDelegate.self) private var appDelegate
     @StateObject private var model = NotesModel()
+    @AppStorage(AppAppearance.defaultsKey) private var appearanceID = AppAppearance.system.rawValue
+    @AppStorage(AppLanguage.defaultsKey) private var languageID = AppLanguage.system.rawValue
+
+    private var appearance: AppAppearance { AppAppearance.restored(appearanceID) }
+    private var language: AppLanguage { AppLanguage.restored(languageID) }
 
     var body: some Scene {
         WindowGroup {
             NotesWindow()
                 .environmentObject(model)
+                .environment(\.notesLanguage, language)
+                .environment(\.locale, language.locale)
+                .preferredColorScheme(appearance.colorScheme)
                 .onAppear { appDelegate.notesModel = model }
                 .frame(minWidth: 920, minHeight: 620)
         }
@@ -30,69 +38,72 @@ struct PKSNotesApp: App {
 
         Settings {
             NotesAppearanceSettings()
+                .environment(\.notesLanguage, language)
+                .environment(\.locale, language.locale)
+                .preferredColorScheme(appearance.colorScheme)
         }
         .commands {
             // This single-window editor uses Cmd+N for a note, not another app window.
             CommandGroup(replacing: .newItem) {}
             CommandGroup(replacing: .pasteboard) {
-                Button("Cut") { NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil) }
+                Button(language.text("Cut")) { NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil) }
                     .keyboardShortcut("x", modifiers: .command)
-                Button("Copy") { NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) }
+                Button(language.text("Copy")) { NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) }
                     .keyboardShortcut("c", modifiers: .command)
-                Button("Paste") {
+                Button(language.text("Paste")) {
                     NotificationCenter.default.post(name: NotesMenuEvent.paste, object: nil)
                 }
                 .keyboardShortcut("v", modifiers: .command)
             }
             CommandMenu("Markdown") {
-                Button("Bold") { NotesMenuEvent.postFormat("bold") }
+                Button(language.text("Bold")) { NotesMenuEvent.postFormat("bold") }
                     .keyboardShortcut("b", modifiers: .command)
-                Button("Italic") { NotesMenuEvent.postFormat("italic") }
+                Button(language.text("Italic")) { NotesMenuEvent.postFormat("italic") }
                     .keyboardShortcut("i", modifiers: .command)
-                Button("Inline Code") { NotesMenuEvent.postFormat("code") }
+                Button(language.text("Inline Code")) { NotesMenuEvent.postFormat("code") }
                     .keyboardShortcut("e", modifiers: .command)
-                Button("Link") { NotesMenuEvent.postFormat("link") }
+                Button(language.text("Link")) { NotesMenuEvent.postFormat("link") }
                     .keyboardShortcut("k", modifiers: .command)
                 Divider()
-                Button("Heading 1") { NotesMenuEvent.postFormat("h1") }
+                Button(language.text("Heading 1")) { NotesMenuEvent.postFormat("h1") }
                     .keyboardShortcut("1", modifiers: [.command, .shift])
-                Button("Heading 2") { NotesMenuEvent.postFormat("h2") }
+                Button(language.text("Heading 2")) { NotesMenuEvent.postFormat("h2") }
                     .keyboardShortcut("2", modifiers: [.command, .shift])
-                Button("Heading 3") { NotesMenuEvent.postFormat("h3") }
+                Button(language.text("Heading 3")) { NotesMenuEvent.postFormat("h3") }
                     .keyboardShortcut("3", modifiers: [.command, .shift])
                 Divider()
-                Button("Bullet List") { NotesMenuEvent.postFormat("bullet") }
+                Button(language.text("Bullet List")) { NotesMenuEvent.postFormat("bullet") }
                     .keyboardShortcut("8", modifiers: [.command, .shift])
-                Button("Task") { NotesMenuEvent.postFormat("task") }
+                Button(language.text("Task")) { NotesMenuEvent.postFormat("task") }
                     .keyboardShortcut("9", modifiers: [.command, .shift])
             }
             CommandMenu("PKS") {
-                Button("New Markdown Note") {
+                Button(language.text("New Markdown Note")) {
                     NotificationCenter.default.post(name: NotesMenuEvent.newNote, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
-                Button("Quick Open…") {
+                Button(language.text("Quick Open…")) {
                     NotificationCenter.default.post(name: NotesMenuEvent.quickOpen, object: nil)
                 }
                 .keyboardShortcut("p", modifiers: .command)
                 Divider()
-                Button("Toggle Edit / Preview") {
+                Button(language.text("Toggle Edit / Preview")) {
                     NotificationCenter.default.post(name: NotesMenuEvent.toggleEdit, object: nil)
                 }
                 .keyboardShortcut(.return, modifiers: .command)
                 Divider()
-                Button("Save Markdown") { model.save() }
+                Button(language.text("Save Markdown")) { model.save() }
                     .keyboardShortcut("s", modifiers: .command)
-                Button("Find in PKS") {
+                Button(language.text("Find in PKS")) {
                     NotificationCenter.default.post(name: NotesMenuEvent.search, object: nil)
                 }
                 .keyboardShortcut("f", modifiers: .command)
-                Button("Run PKS Search") { model.search() }
+                Button(language.text("Run PKS Search")) { model.search() }
                     .keyboardShortcut(.return, modifiers: [.command, .shift])
                 Divider()
-                Button("Refresh Files") { model.refresh() }
+                Button(language.text("Refresh Files")) { model.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
-                Button("Choose Folder…") { model.chooseWorkspace() }
+                Button(language.text("Choose Folder…")) { model.chooseWorkspace() }
                     .keyboardShortcut("o", modifiers: .command)
             }
         }
@@ -111,10 +122,10 @@ enum NotesGeometry {
     static let toolbarTarget: CGFloat = 28
     static let selectionCorner: CGFloat = 9
 
-    static func workspaceTitle(_ root: URL?) -> String {
-        guard let root else { return "PKS Library" }
+    static func workspaceTitle(_ root: URL?, language: AppLanguage) -> String {
+        guard let root else { return language.text("PKS Library") }
         let name = root.lastPathComponent
-        return name == "com~apple~CloudDocs" ? "iCloud Drive" : name
+        return name == "com~apple~CloudDocs" ? language.text("iCloud Drive") : name
     }
 }
 
@@ -166,6 +177,8 @@ private struct PreviewWarmupKey: Hashable {
 
 struct NotesWindow: View {
     @EnvironmentObject private var model: NotesModel
+    @Environment(\.notesLanguage) private var language
+    @Environment(\.colorScheme) private var colorScheme
     @State private var mode: ReadingMode = .read
     @State private var showingMindMap = false
     @AppStorage("PKSNotesReadingTheme") private var themeID = NotesTheme.system.rawValue
@@ -227,12 +240,12 @@ struct NotesWindow: View {
                             }
                             .buttonStyle(.plain)
                             .keyboardShortcut(choice.shortcut, modifiers: .command)
-                            .help("\(choice.rawValue) Markdown")
+                            .help("\(language.text(choice.rawValue)) Markdown")
                             .accessibilityIdentifier("pks-mode-\(choice.rawValue.lowercased())")
                         }
                     }
                     .padding(3)
-                    .background(Color.primary.opacity(theme == .graphite ? 0.075 : 0.045),
+                    .background(Color.primary.opacity(colorScheme == .dark ? 0.075 : 0.045),
                                 in: RoundedRectangle(cornerRadius: 9))
                 }
 
@@ -242,7 +255,7 @@ struct NotesWindow: View {
                     } label: {
                         toolbarSymbol(showingMindMap ? "doc.text" : "point.3.connected.trianglepath.dotted")
                     }
-                    .help(showingMindMap ? "Return to Markdown" : "Mind Map")
+                    .help(language.text(showingMindMap ? "Return to Markdown" : "Mind Map"))
                     .accessibilityIdentifier("pks-mind-map-toggle")
                 }
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
@@ -260,13 +273,13 @@ struct NotesWindow: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .help("Links and related notes")
+                    .help(language.text("Links and related notes"))
                     .accessibilityIdentifier("pks-relationships-menu")
                     .popover(isPresented: $showingBacklinks, arrowEdge: .bottom) {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 0) {
                                 HStack {
-                                    Text("Relationships").font(.headline)
+                                    Text(language.text("Relationships")).font(.headline)
                                     Spacer()
                                     if model.loadingBacklinks || model.loadingRelated {
                                         ProgressView().controlSize(.small)
@@ -277,9 +290,9 @@ struct NotesWindow: View {
 
                                 Divider()
 
-                                relationshipSectionTitle("Outgoing")
+                                relationshipSectionTitle(language.text("Outgoing"))
                                 if model.outgoingLinks.isEmpty {
-                                    relationshipEmpty("No links from this note.")
+                                    relationshipEmpty(language.text("No links from this note."))
                                 } else {
                                     ForEach(Array(model.outgoingLinks.enumerated()), id: \.offset) { _, link in
                                         relationshipButton(
@@ -294,16 +307,18 @@ struct NotesWindow: View {
                                 }
 
                                 Divider().padding(.vertical, 4)
-                                relationshipSectionTitle("Backlinks")
+                                relationshipSectionTitle(language.text("Backlinks"))
                                 if model.loadingBacklinks {
-                                    relationshipEmpty("Finding notes that link here…")
+                                    relationshipEmpty(language.text("Finding notes that link here…"))
                                 } else if model.backlinks.isEmpty {
-                                    relationshipEmpty("No backlinks in this workspace.")
+                                    relationshipEmpty(language.text("No backlinks in this workspace."))
                                 } else {
                                     ForEach(model.backlinks) { backlink in
                                         relationshipButton(
                                             title: backlink.title,
-                                            detail: backlink.count > 1 ? "\(backlink.count) references" : "1 reference",
+                                            detail: backlink.count > 1
+                                                ? "\(backlink.count) \(language.text("references"))"
+                                                : language.text("1 reference"),
                                             symbol: "arrow.turn.up.left"
                                         ) {
                                             showingBacklinks = false
@@ -313,13 +328,13 @@ struct NotesWindow: View {
                                 }
 
                                 Divider().padding(.vertical, 4)
-                                relationshipSectionTitle("Related · PKS")
+                                relationshipSectionTitle(language.text("Related · PKS"))
                                 if model.loadingRelated {
-                                    relationshipEmpty("Finding related knowledge…")
+                                    relationshipEmpty(language.text("Finding related knowledge…"))
                                 } else if let error = model.relatedError {
                                     relationshipEmpty(error)
                                 } else if model.relatedHits.isEmpty {
-                                    relationshipEmpty("No related PKS results.")
+                                    relationshipEmpty(language.text("No related PKS results."))
                                 } else {
                                     ForEach(model.relatedHits.prefix(6)) { hit in
                                         relationshipButton(
@@ -341,15 +356,15 @@ struct NotesWindow: View {
                 if model.autoSavePending && model.selected != nil {
                     ProgressView()
                         .controlSize(.small)
-                        .help("Saving Markdown automatically…")
+                        .help(language.text("Saving Markdown automatically…"))
                         .accessibilityIdentifier("pks-autosave-progress")
                 }
 
                 Menu {
-                    Button("Quick Open Note…", systemImage: "doc.text.magnifyingglass") {
+                    Button(language.text("Quick Open Note…"), systemImage: "doc.text.magnifyingglass") {
                         openQuickPicker()
                     }
-                    Button("New Mind Map", systemImage: "point.3.connected.trianglepath.dotted") {
+                    Button(language.text("New Mind Map"), systemImage: "point.3.connected.trianglepath.dotted") {
                         beginNewMindMap()
                     }
                     Divider()
@@ -357,21 +372,20 @@ struct NotesWindow: View {
                         fileActions(file)
                         Divider()
                     } else if let link = model.previewSource?.webURL {
-                        Button("Open Source in Browser", systemImage: "globe") { model.openSourceLink(link) }
-                        Button("Copy Source Link", systemImage: "link") { model.copySource(link.absoluteString) }
+                        Button(language.text("Open Source in Browser"), systemImage: "globe") { model.openSourceLink(link) }
+                        Button(language.text("Copy Source Link"), systemImage: "link") { model.copySource(link.absoluteString) }
                         Divider()
                     }
-                    Button("Refresh Files", systemImage: "arrow.clockwise") { model.refresh() }
-                    Button("Choose Folder…", systemImage: "folder") { model.chooseWorkspace() }
+                    Button(language.text("Refresh Files"), systemImage: "arrow.clockwise") { model.refresh() }
+                    Button(language.text("Choose Folder…"), systemImage: "folder") { model.chooseWorkspace() }
                 } label: {
                     toolbarSymbol("ellipsis.circle")
                 }
                 .menuIndicator(.hidden)
                 .accessibilityIdentifier("pks-file-actions-menu")
-                .help("File actions and workspace options")
+                .help(language.text("File actions and workspace options"))
             }
         }
-        .preferredColorScheme(theme.appearance)
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.quickOpen)) { _ in
             openQuickPicker()
         }
@@ -448,25 +462,25 @@ struct NotesWindow: View {
         .sheet(isPresented: $showingQuickOpen) {
             quickOpenSheet
         }
-        .alert("Rename", isPresented: $showingRename) {
-            TextField("Name", text: $renameValue)
+        .alert(language.text("Rename"), isPresented: $showingRename) {
+            TextField(language.text("Name"), text: $renameValue)
                 .accessibilityIdentifier("pks-rename-field")
-            Button("Rename") {
+            Button(language.text("Rename")) {
                 if let item = renameCandidate { _ = model.renameItem(item, to: renameValue) }
                 renameCandidate = nil
             }
-            Button("Cancel", role: .cancel) { renameCandidate = nil }
+            Button(language.text("Cancel"), role: .cancel) { renameCandidate = nil }
         } message: {
-            Text("Change the name without moving the item. File extensions are preserved.")
+            Text(language.text("Change the name without moving the item. File extensions are preserved."))
         }
-        .alert("Move Folder to Trash?", isPresented: $confirmingFolderTrash) {
-            Button("Move to Trash", role: .destructive) {
+        .alert(language.text("Move Folder to Trash?"), isPresented: $confirmingFolderTrash) {
+            Button(language.text("Move to Trash"), role: .destructive) {
                 if let folder = folderTrashCandidate { _ = model.moveToTrash(folder) }
                 folderTrashCandidate = nil
             }
-            Button("Cancel", role: .cancel) { folderTrashCandidate = nil }
+            Button(language.text("Cancel"), role: .cancel) { folderTrashCandidate = nil }
         } message: {
-            Text("The folder and all of its contents will move to the macOS Trash, where they can be restored.")
+            Text(language.text("The folder and all of its contents will move to the macOS Trash, where they can be restored."))
         }
     }
 
@@ -568,7 +582,7 @@ struct NotesWindow: View {
                     .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
                     .frame(width: NotesGeometry.treeIconWidth)
                     .foregroundStyle(.secondary)
-                TextField("Search files…", text: $quickOpenQuery)
+                TextField(language.text("Search files…"), text: $quickOpenQuery)
                     .textFieldStyle(.plain)
                     .font(.system(size: 17))
                     .focused($quickOpenFocused)
@@ -595,7 +609,7 @@ struct NotesWindow: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .keyboardShortcut(.cancelAction)
-                .help("Cancel (Esc)")
+                .help(language.text("Cancel (Esc)"))
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 20)
@@ -603,8 +617,8 @@ struct NotesWindow: View {
                 .opacity(0.45)
                 .padding(.horizontal, 20)
             if matches.isEmpty {
-                Text(quickOpenQuery.isEmpty ? "Type a name to find a note in your library."
-                     : "No files match your search.")
+                Text(language.text(quickOpenQuery.isEmpty ? "Type a name to find a note in your library."
+                     : "No files match your search."))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -666,13 +680,9 @@ struct NotesWindow: View {
     /// Bear/Panda-inspired quiet navigation tint. Editorial content retains its own
     /// untouched white/paper canvas; no translucent cards or decorative shadows.
     private var sidebarCanvas: Color {
-        switch theme {
-        case .system: Color(red: 0.972, green: 0.978, blue: 0.975)
-        case .paper: Color(red: 0.976, green: 0.978, blue: 0.981)
-        case .warm: Color(red: 0.958, green: 0.944, blue: 0.922)
-        case .midnight: Color(red: 0.132, green: 0.145, blue: 0.163)
-        case .graphite: Color(red: 0.095, green: 0.101, blue: 0.108)
-        }
+        colorScheme == .dark
+            ? Color(red: 0.105, green: 0.112, blue: 0.121)
+            : Color(red: 0.972, green: 0.978, blue: 0.975)
     }
 
     private func navigationRow(_ tab: SidebarTab, symbol: String, title: String) -> some View {
@@ -697,7 +707,7 @@ struct NotesWindow: View {
             }
             .padding(.horizontal, 11)
             .frame(height: 32)
-            .background(selected ? Color.primary.opacity(theme == .graphite ? 0.13 : 0.065) : .clear,
+            .background(selected ? Color.primary.opacity(colorScheme == .dark ? 0.13 : 0.065) : .clear,
                         in: RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
         }
@@ -724,10 +734,12 @@ struct NotesWindow: View {
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
-                                .help(expandedFolderPaths.contains(row.item.id)
-                                      ? "Collapse folder" : "Expand folder")
-                                .accessibilityLabel(expandedFolderPaths.contains(row.item.id)
-                                                    ? "Collapse \(row.item.name)" : "Expand \(row.item.name)")
+                                .help(language.text(expandedFolderPaths.contains(row.item.id)
+                                      ? "Collapse folder" : "Expand folder"))
+                                .accessibilityLabel(
+                                    language.text(expandedFolderPaths.contains(row.item.id) ? "Collapse" : "Expand")
+                                    + " " + row.item.name
+                                )
                             } else {
                                 Color.clear.frame(width: NotesGeometry.disclosureWidth,
                                                   height: NotesGeometry.treeRowHeight)
@@ -758,7 +770,7 @@ struct NotesWindow: View {
                                         treeCursorPath = row.id
                                         treeFocused = true
                                     })
-                                    .help("Double-click to expand or collapse")
+                                    .help(language.text("Double-click to expand or collapse"))
                             } else {
                                 Button {
                                     treeCursorPath = row.id
@@ -779,7 +791,7 @@ struct NotesWindow: View {
                             }
                         }
                         .padding(.leading, CGFloat(row.depth) * NotesGeometry.treeIndent)
-                        .background(isSelected ? Color.primary.opacity(theme == .graphite ? 0.15 : 0.075)
+                        .background(isSelected ? Color.primary.opacity(colorScheme == .dark ? 0.15 : 0.075)
                                     : fileDropTargetPath == row.id
                                         ? theme.linkColor.opacity(0.12)
                                         : treeFocused && treeCursorPath == row.id
@@ -813,7 +825,7 @@ struct NotesWindow: View {
                         .padding(.vertical, 1)
                         .contextMenu {
                             if row.item.isFolder {
-                                Button("New Note Here", systemImage: "square.and.pencil") {
+                                Button(language.text("New Note Here"), systemImage: "square.and.pencil") {
                                     beginNewNote(in: row.item.url)
                                 }
                                 Divider()
@@ -827,7 +839,7 @@ struct NotesWindow: View {
     @ViewBuilder
     private var searchResultRows: some View {
                 if !model.hits.isEmpty {
-                    Section("PKS results · across all sources") {
+                    Section(language.text("PKS results · across all sources")) {
                         ForEach(model.groupedHits) { group in
                             let hit = group.primary
                             VStack(alignment: .leading, spacing: 6) {
@@ -880,17 +892,17 @@ struct NotesWindow: View {
                                 .menuStyle(.borderlessButton)
                                 .menuIndicator(.hidden)
                                 .frame(width: NotesGeometry.toolbarTarget)
-                                .help("Source actions")
+                                .help(language.text("Source actions"))
                             }
                             if group.hits.count > 1 {
-                                DisclosureGroup("\(group.hits.count) matching sections") {
+                                DisclosureGroup("\(group.hits.count) " + language.text("matching sections")) {
                                     ForEach(Array(group.hits.enumerated()), id: \.offset) { index, match in
                                         Button {
                                             model.openResult(match)
                                         } label: {
                                             VStack(alignment: .leading, spacing: 3) {
                                                 Text(match.headingPath?.isEmpty == false
-                                                     ? match.headingPath! : "Match \(index + 1)")
+                                                     ? match.headingPath! : language.text("Match") + " \(index + 1)")
                                                     .font(.caption)
                                                     .fontWeight(.medium)
                                                     .lineLimit(1)
@@ -918,7 +930,7 @@ struct NotesWindow: View {
                         }
                     }
                 } else {
-                    Text(model.searching ? "Searching PKS…" : "Search the existing PKS index.")
+                    Text(language.text(model.searching ? "Searching PKS…" : "Search the existing PKS index."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -931,7 +943,7 @@ struct NotesWindow: View {
             HStack(spacing: 10) {
                 Image(systemName: "square.stack.3d.up")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(theme == .graphite ? theme.linkColor : Color.primary)
+                    .foregroundStyle(colorScheme == .dark ? theme.linkColor : Color.primary)
                     .frame(width: 22)
                 Text("PKS Notes")
                     .font(.system(size: 14, weight: .semibold))
@@ -947,7 +959,7 @@ struct NotesWindow: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help("New Markdown note (⌘N)")
+                .help(language.text("New Markdown note (⌘N)"))
                 .accessibilityIdentifier("pks-new-note-button")
             }
             .padding(.horizontal, 17)
@@ -959,7 +971,7 @@ struct NotesWindow: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
-                TextField("Quick find in PKS…", text: $model.query)
+                TextField(language.text("Quick find in PKS…"), text: $model.query)
                     .font(.system(size: 12))
                     .textFieldStyle(.plain)
                     .focused($searchFieldFocused)
@@ -985,22 +997,22 @@ struct NotesWindow: View {
             }
             .padding(.horizontal, 11)
             .frame(height: 33)
-            .background(Color.primary.opacity(theme == .graphite ? 0.085 : 0.035),
+            .background(Color.primary.opacity(colorScheme == .dark ? 0.085 : 0.035),
                         in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
             .padding(.top, 5)
             .padding(.bottom, 17)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("NAVIGATION")
+                Text(language.text("NAVIGATION"))
                     .font(.system(size: 10, weight: .semibold))
                     .tracking(0.75)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 11)
                     .padding(.bottom, 3)
 
-                navigationRow(.notes, symbol: "square.stack.3d.up", title: "All Notes")
-                navigationRow(.search, symbol: "text.magnifyingglass", title: "PKS Search")
+                navigationRow(.notes, symbol: "square.stack.3d.up", title: language.text("All Notes"))
+                navigationRow(.search, symbol: "text.magnifyingglass", title: language.text("PKS Search"))
 
                 Button(action: openQuickPicker) {
                     HStack(spacing: 10) {
@@ -1008,7 +1020,7 @@ struct NotesWindow: View {
                             .font(.system(size: 14, weight: .medium))
                             .frame(width: 18, height: 22)
                             .foregroundStyle(.secondary)
-                        Text("Quick Open")
+                        Text(language.text("Quick Open"))
                             .font(.system(size: 12.5, weight: .medium))
                         Spacer()
                         Text("⌘P")
@@ -1020,25 +1032,25 @@ struct NotesWindow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Quick Open a file in the current library")
+                .help(language.text("Quick Open a file in the current library"))
                 .accessibilityIdentifier("pks-sidebar-quick-open")
             }
             .padding(.horizontal, 10)
             .padding(.bottom, 19)
 
             HStack(spacing: 6) {
-                Text(sidebarTab == .notes ? "FOLDERS" : "SEARCH RESULTS")
+                Text(language.text(sidebarTab == .notes ? "FOLDERS" : "SEARCH RESULTS"))
                     .font(.system(size: 10, weight: .semibold))
                     .tracking(0.75)
                     .foregroundStyle(.tertiary)
                 Spacer(minLength: 0)
                 if sidebarTab == .notes {
                     Menu {
-                        Button("Choose Notes Folder…", systemImage: "folder") {
+                        Button(language.text("Choose Notes Folder…"), systemImage: "folder") {
                             model.chooseWorkspace()
                         }
                         if let root = model.root {
-                            Button("Show in Finder", systemImage: "arrow.up.forward.app") {
+                            Button(language.text("Show in Finder"), systemImage: "arrow.up.forward.app") {
                                 model.revealInFinder(root)
                             }
                         }
@@ -1050,7 +1062,7 @@ struct NotesWindow: View {
                     .buttonStyle(.plain)
                     .menuIndicator(.hidden)
                     .foregroundStyle(.secondary)
-                    .help("Current library folder")
+                    .help(language.text("Current library folder"))
                     .accessibilityIdentifier("pks-workspace-menu")
                 }
                 if model.loadingFiles && sidebarTab == .notes {
@@ -1067,7 +1079,7 @@ struct NotesWindow: View {
                         .font(.system(size: 12))
                         .frame(width: 15)
                         .foregroundStyle(.tertiary)
-                    Text(NotesGeometry.workspaceTitle(model.root))
+                    Text(NotesGeometry.workspaceTitle(model.root, language: language))
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -1075,7 +1087,7 @@ struct NotesWindow: View {
                 }
                 .padding(.horizontal, 22)
                 .frame(height: 28)
-            } else if model.searching || model.searchStatus.hasPrefix("PKS offline") {
+            } else if model.searching || model.searchFailed {
                 Text(model.searchStatus)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -1093,7 +1105,7 @@ struct NotesWindow: View {
                     if model.loadingFiles {
                         HStack {
                             ProgressView().controlSize(.small)
-                            Text("Loading local Markdown…")
+                            Text(language.text("Loading local Markdown…"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -1168,30 +1180,30 @@ struct NotesWindow: View {
 
     @ViewBuilder
     private func fileActions(_ url: URL) -> some View {
-        Button("Show in Finder", systemImage: "folder") {
+        Button(language.text("Show in Finder"), systemImage: "folder") {
             model.revealInFinder(url)
         }
-        Button("Open with Default App", systemImage: "arrow.up.right.square") {
+        Button(language.text("Open with Default App"), systemImage: "arrow.up.right.square") {
             model.openInDefaultApp(url)
         }
-        Button("Copy File Path", systemImage: "doc.on.doc") {
+        Button(language.text("Copy File Path"), systemImage: "doc.on.doc") {
             model.copySource(url.path)
         }
         if model.canManage(url) {
             Divider()
-            Button("Rename…", systemImage: "pencil") {
+            Button(language.text("Rename…"), systemImage: "pencil") {
                 beginRename(url)
             }
-            Button("Move to Folder…", systemImage: "folder.badge.gearshape") {
+            Button(language.text("Move to Folder…"), systemImage: "folder.badge.gearshape") {
                 chooseDestination(for: url, copying: false)
             }
-            Button("Copy to Folder…", systemImage: "doc.on.doc") {
+            Button(language.text("Copy to Folder…"), systemImage: "doc.on.doc") {
                 chooseDestination(for: url, copying: true)
             }
             Button(role: .destructive) {
                 requestMoveToTrash(url)
             } label: {
-                Label("Move to Trash", systemImage: "trash")
+                Label(language.text("Move to Trash"), systemImage: "trash")
             }
         }
     }
@@ -1201,14 +1213,14 @@ struct NotesWindow: View {
         if let file = hit.localFileURL {
             fileActions(file)
         } else if let link = hit.webURL {
-            Button("Open Source in Browser", systemImage: "globe") {
+            Button(language.text("Open Source in Browser"), systemImage: "globe") {
                 model.openSourceLink(link)
             }
-            Button("Copy Source Link", systemImage: "link") {
+            Button(language.text("Copy Source Link"), systemImage: "link") {
                 model.copySource(link.absoluteString)
             }
         } else {
-            Button("Copy Source Identifier", systemImage: "doc.on.doc") {
+            Button(language.text("Copy Source Identifier"), systemImage: "doc.on.doc") {
                 model.copySource(hit.uri)
             }
         }
@@ -1217,15 +1229,15 @@ struct NotesWindow: View {
     private func chooseDestination(for item: URL, copying: Bool) {
         guard let root = model.root else { return }
         let panel = NSOpenPanel()
-        panel.title = copying ? "Copy to Folder" : "Move to Folder"
-        panel.message = "Choose a destination inside the current notes workspace."
+        panel.title = language.text(copying ? "Copy to Folder" : "Move to Folder")
+        panel.message = language.text("Choose a destination inside the current notes workspace.")
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.directoryURL = item.deletingLastPathComponent()
         guard panel.runModal() == .OK, let folder = panel.url else { return }
         guard WorkspaceFiles.contains(folder, in: root) || folder.standardizedFileURL == root.standardizedFileURL else {
-            model.message = "Choose a destination inside the current notes workspace."
+            model.message = language.text("Choose a destination inside the current notes workspace.")
             return
         }
         if copying {
@@ -1274,7 +1286,7 @@ struct NotesWindow: View {
             return
         }
         guard let markdown = model.importClipboardImage() else {
-            model.message = "Could not save the pasted image inside this notes workspace."
+            model.message = language.text("Could not save the pasted image inside this notes workspace.")
             return
         }
         let original = textView.string
@@ -1347,7 +1359,7 @@ struct NotesWindow: View {
             if model.loadingNote && model.selected == nil && model.previewPDF == nil && model.externalBody == nil {
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.small)
-                    Text("Opening note…")
+                    Text(language.text("Opening note…"))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -1357,18 +1369,18 @@ struct NotesWindow: View {
                     Image(systemName: "text.book.closed")
                         .font(.system(size: 27, weight: .ultraLight))
                         .foregroundStyle(.tertiary)
-                    Text(model.root == nil ? "Open a notes folder" : "Choose a note")
+                    Text(language.text(model.root == nil ? "Open a notes folder" : "Choose a note"))
                         .font(.title3.weight(.medium))
                         .foregroundStyle(.secondary)
-                    Text(model.root == nil
+                    Text(language.text(model.root == nil
                          ? "Open your existing Markdown folder. Files stay where they are."
-                         : "Select a document in the sidebar, or search your PKS knowledge with ⌘F.")
+                         : "Select a document in the sidebar, or search your PKS knowledge with ⌘F."))
                         .font(.subheadline)
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 370)
                     if model.root == nil {
-                        Button("Choose Folder") { model.chooseWorkspace() }
+                        Button(language.text("Choose Folder")) { model.chooseWorkspace() }
                             .padding(.top, 6)
                     }
                 }
@@ -1381,7 +1393,7 @@ struct NotesWindow: View {
                     Image(systemName: "info.circle")
                     Text(message).font(.caption).lineLimit(2)
                     Spacer()
-                    Button("Dismiss") { model.message = nil }
+                    Button(language.text("Dismiss")) { model.message = nil }
                         .buttonStyle(.borderless)
                 }
                 .foregroundStyle(.secondary)
@@ -1394,7 +1406,7 @@ struct NotesWindow: View {
         .navigationTitle(model.selected?.deletingPathExtension().lastPathComponent
                          ?? model.previewPDF?.lastPathComponent
                          ?? model.previewSource?.title
-                         ?? "PKS Notes")
+                         ?? language.text("PKS Notes"))
     }
 
     @ViewBuilder
@@ -1449,7 +1461,7 @@ struct NotesWindow: View {
                     .frame(width: 20)
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) { switchReadingMode(to: .read) }
-                    .help("Double-click the margin to preview (⌘Return)")
+                    .help(language.text("Double-click the margin to preview (⌘Return)"))
             }
             // The old draft remains intact until an off-main file load succeeds.
             .disabled(model.loadingNote)
@@ -1478,6 +1490,7 @@ struct NotesWindow: View {
 
 /// PDFKit is part of macOS; no PDF renderer, server or extra dependency is bundled.
 private struct NativePDFPreview: View {
+    @Environment(\.notesLanguage) private var language
     let url: URL
     @State private var document: PDFDocument?
     @State private var attemptedURL: URL?
@@ -1491,19 +1504,19 @@ private struct NativePDFPreview: View {
                     Image(systemName: "doc.richtext")
                         .font(.system(size: 27, weight: .ultraLight))
                         .foregroundStyle(.tertiary)
-                    Text("Cannot preview this PDF")
+                    Text(language.text("Cannot preview this PDF"))
                         .font(.title3.weight(.medium))
-                    Text("The original file may be unavailable or damaged.")
+                    Text(language.text("The original file may be unavailable or damaged."))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                    Button("Open with Default App") {
+                    Button(language.text("Open with Default App")) {
                         NSWorkspace.shared.open(url)
                     }
                     .padding(.top, 6)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ProgressView("Opening PDF…")
+                ProgressView(language.text("Opening PDF…"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

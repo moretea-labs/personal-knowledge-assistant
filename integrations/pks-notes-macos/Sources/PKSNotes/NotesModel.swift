@@ -289,6 +289,7 @@ final class NotesModel: ObservableObject {
     @Published private(set) var searching = false
     @Published var message: String?
     @Published private(set) var searchStatus = "PKS search · 127.0.0.1:3217"
+    @Published private(set) var searchFailed = false
     @Published private(set) var backlinks: [NoteBacklink] = []
     @Published private(set) var loadingBacklinks = false
     @Published private(set) var relatedHits: [SearchHit] = []
@@ -344,19 +345,19 @@ final class NotesModel: ObservableObject {
         }
         if let configured = preferences.string(forKey: "PKSNotesWorkspace") {
             if configured.contains("/Mobile Documents/") {
-                message = "Select the existing iCloud folder once to grant macOS access."
+                message = AppLanguage.current.text("Select the existing iCloud folder once to grant macOS access.")
             } else {
                 let url = URL(fileURLWithPath: configured, isDirectory: true)
                 if FileManager.default.fileExists(atPath: url.path) { openWorkspace(url) }
             }
         } else {
-            message = "Choose your existing Markdown folder once. No account is required."
+            message = AppLanguage.current.text("Choose your existing Markdown folder once. No account is required.")
         }
     }
 
     func chooseWorkspace() {
         let panel = NSOpenPanel()
-        panel.message = "Choose the existing Markdown directory (no import or duplication)"
+        panel.message = AppLanguage.current.text("Choose the existing Markdown directory (no import or duplication)")
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
@@ -379,7 +380,7 @@ final class NotesModel: ObservableObject {
         } else {
             // An old bookmark must never silently reopen a different workspace.
             UserDefaults.standard.removeObject(forKey: "PKSNotesWorkspaceBookmark")
-            message = "Folder opened, but macOS could not save permanent access. Choose it again next launch."
+            message = AppLanguage.current.text("Folder opened, but macOS could not save permanent access. Choose it again next launch.")
         }
     }
 
@@ -389,7 +390,7 @@ final class NotesModel: ObservableObject {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: resolved.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
-            message = "Choose an existing Markdown folder."; return false
+            message = AppLanguage.current.text("Choose an existing Markdown folder."); return false
         }
         if root == resolved { return true }
         guard confirmLeavingNote(decision: navigationDecision) else { return false }
@@ -489,12 +490,12 @@ final class NotesModel: ObservableObject {
     /// The one local-file dispatch path shared by the tree, Markdown links and search.
     func openFile(_ url: URL, navigationDecision: UnsavedNoteDecision? = nil) {
         guard let root, WorkspaceFiles.contains(url, in: root) else {
-            message = "File is outside the selected workspace."; return
+            message = AppLanguage.current.text("File is outside the selected workspace."); return
         }
         var info = Darwin.stat()
         guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0,
               (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
-            message = "The original file is no longer available."; return
+            message = AppLanguage.current.text("The original file is no longer available."); return
         }
 
         if ["md", "markdown"].contains(url.pathExtension.lowercased()) {
@@ -527,7 +528,7 @@ final class NotesModel: ObservableObject {
         }
         guard let root, WorkspaceFiles.contains(url, in: root),
               ["md", "markdown"].contains(url.pathExtension.lowercased()) else {
-            message = "Only Markdown files inside the selected workspace can be edited."; return
+            message = AppLanguage.current.text("Only Markdown files inside the selected workspace can be edited."); return
         }
         guard confirmLeavingNote(decision: navigationDecision) else { return }
         loadNote(url)
@@ -672,7 +673,7 @@ final class NotesModel: ObservableObject {
     private func failOpeningNote(_ url: URL, identity: UUID, reason: String) {
         guard requestedNote == url, loadIdentity == identity else { return }
         cancelNoteLoad()
-        message = "Cannot open the note: \(reason)"
+        message = "\(AppLanguage.current.text("Cannot open the note")): \(reason)"
     }
 
     func save() {
@@ -685,20 +686,17 @@ final class NotesModel: ObservableObject {
             // Avoid overwriting iCloud or other editor changes without review.
             guard actual == savedModification,
                   try String(contentsOf: selected, encoding: .utf8) == baseline else {
-                message = "The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits."
+                message = AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
                 return
             }
             try draft.write(to: selected, atomically: true, encoding: .utf8)
             baseline = draft
             let updated = try FileManager.default.attributesOfItem(atPath: selected.path)
             savedModification = updated[.modificationDate] as? Date
-            // Successful saves are silent; the native toolbar only shows pending progress.
-            if message?.hasPrefix("Save failed:") == true ||
-               message?.hasPrefix("The file changed outside") == true {
-                message = nil
-            }
+            // Successful saves are silent. Existing notices are user-dismissed;
+            // localized presentation text is never used as save-state authority.
         } catch {
-            message = "Save failed: \(error.localizedDescription)"
+            message = "\(AppLanguage.current.text("Save failed")): \(error.localizedDescription)"
         }
     }
 
@@ -709,7 +707,7 @@ final class NotesModel: ObservableObject {
                  navigationDecision: UnsavedNoteDecision? = nil,
                  initialContent: String? = nil) -> URL? {
         guard let root else {
-            message = "Choose a notes folder before creating a note."; return nil
+            message = AppLanguage.current.text("Choose a notes folder before creating a note."); return nil
         }
         // An explicit folder action takes precedence over the currently open note.
         let folder = (parentFolder ?? selected?.deletingLastPathComponent() ?? root).standardizedFileURL
@@ -717,23 +715,23 @@ final class NotesModel: ObservableObject {
         guard (folder == root || WorkspaceFiles.contains(folder, in: root)),
               FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
-            message = "Choose a folder inside the Markdown workspace."; return nil
+            message = AppLanguage.current.text("Choose a folder inside the Markdown workspace."); return nil
         }
         let filename: String
         if let name {
             guard let normalized = WorkspaceFiles.safeNewNoteName(name) else {
-                message = "Enter a simple note name without slashes."; return nil
+                message = AppLanguage.current.text("Enter a simple note name without slashes."); return nil
             }
             filename = normalized
         } else {
             guard let available = WorkspaceFiles.nextUntitledName(in: folder) else {
-                message = "No available filename for a new note."; return nil
+                message = AppLanguage.current.text("No available filename for a new note."); return nil
             }
             filename = available
         }
         let url = folder.appendingPathComponent(filename)
         guard WorkspaceFiles.contains(url, in: root) else {
-            message = "Invalid note path."; return nil
+            message = AppLanguage.current.text("Invalid note path."); return nil
         }
         guard confirmLeavingNote(decision: navigationDecision) else { return nil }
 
@@ -743,7 +741,7 @@ final class NotesModel: ObservableObject {
             Darwin.open($0, O_WRONLY | O_CREAT | O_EXCL, mode_t(0o644))
         }
         guard descriptor >= 0 else {
-            message = "Cannot create note. The filename may already exist."; return nil
+            message = AppLanguage.current.text("Cannot create note. The filename may already exist."); return nil
         }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
@@ -756,7 +754,7 @@ final class NotesModel: ObservableObject {
         } catch {
             try? handle.close()
             try? FileManager.default.removeItem(at: url)
-            message = "Cannot create note: \(error.localizedDescription)"
+            message = "\(AppLanguage.current.text("Cannot create note")): \(error.localizedDescription)"
             return nil
         }
     }
@@ -766,11 +764,13 @@ final class NotesModel: ObservableObject {
         guard !text.isEmpty else {
             hits = []
             searching = false
+            searchFailed = false
             searchStatus = "PKS search · 127.0.0.1:3217"
             return
         }
         searching = true
-        searchStatus = "Searching PKS…"
+        searchFailed = false
+        searchStatus = AppLanguage.current.text("Searching PKS…")
         Task {
             do {
                 var parts = URLComponents(string: "http://127.0.0.1:3217/api/search")!
@@ -785,12 +785,18 @@ final class NotesModel: ObservableObject {
                 let results = try JSONDecoder().decode([SearchHit].self, from: data)
                 guard query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 hits = results
-                searchStatus = "\(hits.count) matches · \(groupedHits.count) documents · PKS"
+                searchFailed = false
+                searchStatus = String(
+                    format: "%d %@ · %d %@ · PKS",
+                    hits.count, AppLanguage.current.text("matches"),
+                    groupedHits.count, AppLanguage.current.text("documents")
+                )
             } catch {
                 guard query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 hits = []
-                searchStatus = "PKS offline · no fallback index"
-                message = "PKS search failed: \(error.localizedDescription)"
+                searchFailed = true
+                searchStatus = AppLanguage.current.text("PKS offline · no fallback index")
+                message = "\(AppLanguage.current.text("PKS search failed")): \(error.localizedDescription)"
             }
             if query.trimmingCharacters(in: .whitespacesAndNewlines) == text {
                 searching = false
@@ -809,7 +815,7 @@ final class NotesModel: ObservableObject {
         }
         guard let root, let selected,
               let resolved = WorkspaceFiles.resolveKnowledgeTarget(value, from: selected, in: root) else {
-            message = "Link target not available or is ambiguous in this workspace."
+            message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
             return false
         }
         openFile(resolved)
@@ -851,7 +857,7 @@ final class NotesModel: ObservableObject {
     func moveToTrash(_ item: URL, navigationDecision: UnsavedNoteDecision? = nil) -> URL? {
         let target = item.standardizedFileURL
         guard canManage(target) else {
-            message = "Only existing files inside the notes folder can be moved to Trash."
+            message = AppLanguage.current.text("Only existing files inside the notes folder can be moved to Trash.")
             return nil
         }
         let affectsCurrent = isInside(selected, item: target) || isInside(previewPDF, item: target)
@@ -883,7 +889,7 @@ final class NotesModel: ObservableObject {
             message = nil
             return destination as URL?
         } catch {
-            message = "Could not move to Trash: \(error.localizedDescription)"
+            message = "\(AppLanguage.current.text("Could not move to Trash")): \(error.localizedDescription)"
             return nil
         }
     }
@@ -895,29 +901,29 @@ final class NotesModel: ObservableObject {
                     navigationDecision: UnsavedNoteDecision? = nil) -> URL? {
         let target = item.standardizedFileURL
         guard canManage(target) else {
-            message = "Only existing files inside the notes folder can be renamed."
+            message = AppLanguage.current.text("Only existing files inside the notes folder can be renamed.")
             return nil
         }
         let stem = enteredName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !stem.isEmpty, stem != ".", stem != "..", !stem.hasPrefix("."),
               !stem.contains("/"), !stem.contains("\\"), !stem.contains(":"),
               !stem.contains("\0") else {
-            message = "Enter a filename without slashes or special path characters."
+            message = AppLanguage.current.text("Enter a filename without slashes or special path characters.")
             return nil
         }
         let isFolder = (try? target.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
         let suffix = isFolder || target.pathExtension.isEmpty ? "" : "." + target.pathExtension
         let bareName = !suffix.isEmpty && stem.lowercased().hasSuffix(suffix.lowercased())
             ? String(stem.dropLast(suffix.count)) : stem
-        guard !bareName.isEmpty else { message = "Enter a valid filename."; return nil }
+        guard !bareName.isEmpty else { message = AppLanguage.current.text("Enter a valid filename."); return nil }
         let destination = target.deletingLastPathComponent()
             .appendingPathComponent(bareName + suffix).standardizedFileURL
         guard let root, WorkspaceFiles.contains(destination, in: root) else {
-            message = "The new name is outside the notes folder."; return nil
+            message = AppLanguage.current.text("The new name is outside the notes folder."); return nil
         }
         if destination == target { return target }
         guard !FileManager.default.fileExists(atPath: destination.path) else {
-            message = "A file or folder with this name already exists."; return nil
+            message = AppLanguage.current.text("A file or folder with this name already exists."); return nil
         }
         let oldSelected = selected
         let oldPDF = previewPDF
@@ -947,7 +953,7 @@ final class NotesModel: ObservableObject {
             message = nil
             return destination
         } catch {
-            message = "Could not rename file: \(error.localizedDescription)"
+            message = "\(AppLanguage.current.text("Could not rename file")): \(error.localizedDescription)"
             return nil
         }
     }
@@ -958,25 +964,25 @@ final class NotesModel: ObservableObject {
         let folder = directory.standardizedFileURL
         guard canManage(target), let root,
               (folder == root.standardizedFileURL || WorkspaceFiles.contains(folder, in: root)) else {
-            message = "Choose a destination inside the notes folder."; return nil
+            message = AppLanguage.current.text("Choose a destination inside the notes folder."); return nil
         }
         var info = Darwin.stat()
         guard folder.path.withCString({ Darwin.lstat($0, &info) }) == 0,
               (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR) else {
-            message = "Choose an existing destination folder."; return nil
+            message = AppLanguage.current.text("Choose an existing destination folder."); return nil
         }
         var targetInfo = Darwin.stat()
         guard target.path.withCString({ Darwin.lstat($0, &targetInfo) }) == 0 else {
-            message = "The original item is no longer available."; return nil
+            message = AppLanguage.current.text("The original item is no longer available."); return nil
         }
         let targetIsDirectory = (targetInfo.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR)
         if targetIsDirectory && (folder == target || folder.path.hasPrefix(target.path + "/")) {
-            message = "A folder cannot be copied inside itself."; return nil
+            message = AppLanguage.current.text("A folder cannot be copied inside itself."); return nil
         }
 
         let destination = folder.appendingPathComponent(target.lastPathComponent).standardizedFileURL
         guard destination != target, !FileManager.default.fileExists(atPath: destination.path) else {
-            message = "The destination already contains an item with this name."; return nil
+            message = AppLanguage.current.text("The destination already contains an item with this name."); return nil
         }
 
         do {
@@ -985,7 +991,7 @@ final class NotesModel: ObservableObject {
             message = nil
             return destination
         } catch {
-            message = "Could not copy item: \(error.localizedDescription)"
+            message = "\(AppLanguage.current.text("Could not copy item")): \(error.localizedDescription)"
             return nil
         }
     }
@@ -997,26 +1003,26 @@ final class NotesModel: ObservableObject {
         let folder = directory.standardizedFileURL
         guard canManage(target), let root,
               (folder == root.standardizedFileURL || WorkspaceFiles.contains(folder, in: root)) else {
-            message = "Choose a destination inside the notes folder."; return nil
+            message = AppLanguage.current.text("Choose a destination inside the notes folder."); return nil
         }
         var info = Darwin.stat()
         guard folder.path.withCString({ Darwin.lstat($0, &info) }) == 0,
               (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR) else {
-            message = "Choose an existing destination folder."; return nil
+            message = AppLanguage.current.text("Choose an existing destination folder."); return nil
         }
         var targetInfo = Darwin.stat()
         guard target.path.withCString({ Darwin.lstat($0, &targetInfo) }) == 0 else {
-            message = "The original item is no longer available."; return nil
+            message = AppLanguage.current.text("The original item is no longer available."); return nil
         }
         let targetIsDirectory = (targetInfo.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR)
         if targetIsDirectory && (folder == target || folder.path.hasPrefix(target.path + "/")) {
-            message = "A folder cannot be moved inside itself."; return nil
+            message = AppLanguage.current.text("A folder cannot be moved inside itself."); return nil
         }
 
         let destination = folder.appendingPathComponent(target.lastPathComponent).standardizedFileURL
         if destination == target { return target }
         guard !FileManager.default.fileExists(atPath: destination.path) else {
-            message = "The destination already contains an item with this name."; return nil
+            message = AppLanguage.current.text("The destination already contains an item with this name."); return nil
         }
 
         let oldSelected = selected
@@ -1047,14 +1053,14 @@ final class NotesModel: ObservableObject {
             message = nil
             return destination
         } catch {
-            message = "Could not move item: \(error.localizedDescription)"
+            message = "\(AppLanguage.current.text("Could not move item")): \(error.localizedDescription)"
             return nil
         }
     }
 
     func revealInFinder(_ file: URL) {
         guard file.isFileURL, FileManager.default.fileExists(atPath: file.path) else {
-            message = "The original file is not available locally."
+            message = AppLanguage.current.text("The original file is not available locally.")
             return
         }
         NSWorkspace.shared.activateFileViewerSelecting([file])
@@ -1062,11 +1068,11 @@ final class NotesModel: ObservableObject {
 
     func openInDefaultApp(_ file: URL) {
         guard file.isFileURL, FileManager.default.fileExists(atPath: file.path) else {
-            message = "The original file is not available locally."
+            message = AppLanguage.current.text("The original file is not available locally.")
             return
         }
         if !NSWorkspace.shared.open(file) {
-            message = "No application could open \(file.lastPathComponent)."
+            message = "\(AppLanguage.current.text("No application could open")) \(file.lastPathComponent)."
         }
     }
 
@@ -1099,7 +1105,7 @@ final class NotesModel: ObservableObject {
     func copySource(_ value: String) {
         NSPasteboard.general.clearContents()
         if !NSPasteboard.general.setString(value, forType: .string) {
-            message = "Unable to copy source location."
+            message = AppLanguage.current.text("Unable to copy source location.")
         }
     }
 
@@ -1159,7 +1165,7 @@ final class NotesModel: ObservableObject {
                 // The user opened a different note or preview while the request was in flight.
             } catch {
                 guard !Task.isCancelled else { return }
-                message = "PKS preview failed: \(error.localizedDescription)"
+                message = "\(AppLanguage.current.text("PKS preview failed")): \(error.localizedDescription)"
             }
         }
     }

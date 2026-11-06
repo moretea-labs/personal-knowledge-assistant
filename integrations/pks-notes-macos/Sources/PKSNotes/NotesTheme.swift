@@ -30,14 +30,6 @@ enum NotesTheme: String, CaseIterable, Identifiable {
         }
     }
 
-    var appearance: ColorScheme? {
-        switch self {
-        case .system: nil
-        case .paper, .warm: .light
-        case .midnight, .graphite: .dark
-        }
-    }
-
     var canvas: Color {
         switch self {
         case .system: Color(nsColor: .textBackgroundColor)

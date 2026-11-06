@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 /// An editable Markdown-backed mind-map canvas. Markdown remains the only document authority.
 struct MindMapCanvas: View {
+    @Environment(\.notesLanguage) private var language
     @Binding var source: String
     let openLink: (String) -> Void
     let importOutline: (String, String) -> Bool
@@ -47,11 +48,11 @@ struct MindMapCanvas: View {
                             Image(systemName: "point.3.connected.trianglepath.dotted")
                                 .font(.system(size: 36, weight: .ultraLight))
                                 .foregroundStyle(.secondary)
-                            Text("Start with a central topic")
+                            Text(language.text("Start with a central topic"))
                                 .font(.headline)
-                            Text("The mind map is saved in the same Markdown note.")
+                            Text(language.text("The mind map is saved in the same Markdown note."))
                                 .foregroundStyle(.secondary)
-                            Button("Create Mind Map") {
+                            Button(language.text("Create Mind Map")) {
                                 source = MindMapOutline.createMap()
                                 startEditingNode(0, title: "New Mind Map")
                             }
@@ -84,11 +85,11 @@ struct MindMapCanvas: View {
                 }
             }
         }
-        .alert("Mind Map Import/Export", isPresented: Binding(
+        .alert(language.text("Mind Map Import/Export"), isPresented: Binding(
             get: { interchangeError != nil },
             set: { if !$0 { interchangeError = nil } }
         )) {
-            Button("OK", role: .cancel) { interchangeError = nil }
+            Button(language.text("OK"), role: .cancel) { interchangeError = nil }
         } message: {
             Text(interchangeError ?? "")
         }
@@ -124,19 +125,19 @@ struct MindMapCanvas: View {
 
     private var toolbar: some View {
         HStack {
-            Text("Mind Map").font(.headline)
+            Text(language.text("Mind Map")).font(.headline)
             Spacer()
-            Button("Add Child", systemImage: "plus") { addChild() }
+            Button(language.text("Add Child"), systemImage: "plus") { addChild() }
                 .disabled(nodes.isEmpty)
-                .help("Add child (Tab)")
+                .help(language.text("Add child (Tab)"))
                 .accessibilityIdentifier("pks-mind-map-add-child")
 
-            Button("Add Sibling", systemImage: "plus.square.on.square") { addSibling() }
+            Button(language.text("Add Sibling"), systemImage: "plus.square.on.square") { addSibling() }
                 .disabled(nodes.isEmpty)
-                .help("Add sibling (Return)")
+                .help(language.text("Add sibling (Return)"))
                 .accessibilityIdentifier("pks-mind-map-add-sibling")
 
-            Button("Rename", systemImage: "pencil") { beginRename() }
+            Button(language.text("Rename"), systemImage: "pencil") { beginRename() }
                 .disabled(selectedID == nil)
 
             Button {
@@ -144,7 +145,7 @@ struct MindMapCanvas: View {
             } label: {
                 Image(systemName: "arrow.left")
             }
-            .help("Promote node")
+            .help(language.text("Promote node"))
             .disabled(selectedID == nil || shiftedSource(deeper: false) == nil)
 
             Button {
@@ -152,10 +153,10 @@ struct MindMapCanvas: View {
             } label: {
                 Image(systemName: "arrow.right")
             }
-            .help("Make child of previous sibling")
+            .help(language.text("Make child of previous sibling"))
             .disabled(selectedID == nil || shiftedSource(deeper: true) == nil)
 
-            Button("Delete Leaf", systemImage: "trash") { deleteSelectedLeaf() }
+            Button(language.text("Delete Leaf"), systemImage: "trash") { deleteSelectedLeaf() }
             .disabled(selectedID == nil || MindMapOutline.deleteLeaf(in: source, nodeID: selectedID ?? -1) == nil)
 
             Divider().frame(height: 18)
@@ -165,36 +166,36 @@ struct MindMapCanvas: View {
             } label: {
                 Image(systemName: "arrow.down.right.and.arrow.up.left")
             }
-            .help("Fit map to window")
+            .help(language.text("Fit map to window"))
 
             Button { zoom = clampedZoom(zoom - 0.15) } label: {
                 Image(systemName: "minus.magnifyingglass")
             }
-            .help("Zoom out")
+            .help(language.text("Zoom out"))
             Text("(Int(zoom * 100))%")
                 .font(.caption.monospacedDigit())
                 .frame(width: 45)
             Button { zoom = clampedZoom(zoom + 0.15) } label: {
                 Image(systemName: "plus.magnifyingglass")
             }
-            .help("Zoom in")
+            .help(language.text("Zoom in"))
 
             Menu {
-                Button("Import MindNode v9 Package…") { importMindNode() }
-                Button("Export MindNode v9 Using Template…") { exportMindNode() }
+                Button(language.text("Import MindNode v9 Package…")) { importMindNode() }
+                Button(language.text("Export MindNode v9 Using Template…")) { exportMindNode() }
                     .disabled(nodes.isEmpty)
-                Button("Import OPML from MindNode…") { importOPML() }
-                Button("Export OPML for MindNode…") { exportOPML() }
+                Button(language.text("Import OPML from MindNode…")) { importOPML() }
+                Button(language.text("Export OPML for MindNode…")) { exportOPML() }
                     .disabled(nodes.isEmpty)
                 Divider()
-                Button("Export PNG Image…") { exportPNG() }
+                Button(language.text("Export PNG Image…")) { exportPNG() }
                     .disabled(nodes.isEmpty)
-                Button("Export PDF…") { exportPDF() }
+                Button(language.text("Export PDF…")) { exportPDF() }
                     .disabled(nodes.isEmpty)
             } label: {
                 Image(systemName: "square.and.arrow.up.on.square")
             }
-            .help("MindNode v9 package interchange, OPML, PNG and PDF export")
+            .help(language.text("MindNode v9 package interchange, OPML, PNG and PDF export"))
             .accessibilityIdentifier("pks-mind-map-interchange")
         }
         .padding(16)
@@ -262,7 +263,7 @@ struct MindMapCanvas: View {
             }
 
             if editingNodeID == node.id {
-                TextField("Node title", text: $renameTitle)
+                TextField(language.text("Node title"), text: $renameTitle)
                     .textFieldStyle(.plain)
                     .font(.system(size: node.depth == 0 ? 16 : 14, weight: .medium))
                     .focused($titleEditorFocused)
@@ -287,8 +288,8 @@ struct MindMapCanvas: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Open (link.label)")
-                .accessibilityLabel("Open linked note (link.label)")
+                .help("\(language.text("Open linked note")) · \(link.label)")
+                .accessibilityLabel("\(language.text("Open linked note")) \(link.label)")
             }
         }
         .padding(.horizontal, 13)
@@ -388,7 +389,7 @@ struct MindMapCanvas: View {
         guard savePanel.runModal() == .OK, let destination = savePanel.url else { return }
         do {
             try MindNodePackage.exportOutline(source, usingTemplate: template, to: destination)
-            interchangeError = "New MindNode v9 package exported. Check it in MindNode before relying on it; original template and Markdown were not changed."
+            interchangeError = language.text("New MindNode v9 package exported. Check it in MindNode before relying on it; original template and Markdown were not changed.")
         } catch {
             interchangeError = error.localizedDescription
         }
@@ -396,8 +397,8 @@ struct MindMapCanvas: View {
 
     private func importMindNode() {
         let panel = NSOpenPanel()
-        panel.title = "Import MindNode Package"
-        panel.message = "Select a .mindnode package. Only the node hierarchy is imported; original files are not modified."
+        panel.title = language.text("Import MindNode Package")
+        panel.message = language.text("Select a .mindnode package. Only the node hierarchy is imported; original files are not modified.")
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = false
@@ -405,7 +406,7 @@ struct MindMapCanvas: View {
         do {
             let markdown = try MindNodePackage.importOutline(from: url)
             if importOutline(markdown, url.deletingPathExtension().lastPathComponent) {
-                interchangeError = "MindNode hierarchy imported into a new Markdown note. Themes, images, notes, tasks and cross-connections are not imported."
+                interchangeError = language.text("MindNode hierarchy imported into a new Markdown note. Themes, images, notes, tasks and cross-connections are not imported.")
             }
         } catch {
             interchangeError = error.localizedDescription
@@ -414,7 +415,7 @@ struct MindMapCanvas: View {
 
     private func importOPML() {
         let panel = NSOpenPanel()
-        panel.title = "Import Mind Map from OPML"
+        panel.title = language.text("Import Mind Map from OPML")
         panel.allowedContentTypes = [UTType(filenameExtension: "opml") ?? .xml]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -430,7 +431,7 @@ struct MindMapCanvas: View {
         do {
             let data = try MindMapInterchange.exportOPML(source)
             let panel = NSSavePanel()
-            panel.title = "Export for MindNode (OPML)"
+            panel.title = language.text("Export for MindNode (OPML)")
             panel.allowedContentTypes = [UTType(filenameExtension: "opml") ?? .xml]
             panel.nameFieldStringValue = "Mind Map.opml"
             guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -446,7 +447,7 @@ struct MindMapCanvas: View {
         guard !nodes.isEmpty else { return }
         let size = mapLayout.size
         guard size.width * size.height <= 20_000_000 else {
-            interchangeError = "This map is too large for a single PNG. Try PDF."
+            interchangeError = language.text("This map is too large for a single PNG. Try PDF.")
             return
         }
         let content = spatialCanvas(mapLayout)
@@ -458,7 +459,7 @@ struct MindMapCanvas: View {
               let tiff = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiff),
               let data = bitmap.representation(using: .png, properties: [:]) else {
-            interchangeError = "Cannot render this mind map as an image."
+            interchangeError = language.text("Cannot render this mind map as an image.")
             return
         }
         saveExport(data, type: .png, extensionName: "png")
@@ -476,7 +477,7 @@ struct MindMapCanvas: View {
         view.layoutSubtreeIfNeeded()
         let data = view.dataWithPDF(inside: view.bounds)
         guard !data.isEmpty else {
-            interchangeError = "Cannot render this mind map as a PDF."
+            interchangeError = language.text("Cannot render this mind map as a PDF.")
             return
         }
         saveExport(data, type: .pdf, extensionName: "pdf")
@@ -484,7 +485,7 @@ struct MindMapCanvas: View {
 
     private func saveExport(_ data: Data, type: UTType, extensionName: String) {
         let panel = NSSavePanel()
-        panel.title = "Export Mind Map"
+        panel.title = language.text("Export Mind Map")
         panel.allowedContentTypes = [type]
         panel.nameFieldStringValue = "Mind Map.\(extensionName)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
