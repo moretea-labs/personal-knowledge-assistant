@@ -72,9 +72,20 @@ enum ReadingMode: String, CaseIterable {
     }
 }
 
+private struct PreviewWarmupKey: Hashable {
+    let identity: String
+    let source: String
+    let enabled: Bool
+}
+
 struct NotesWindow: View {
     @EnvironmentObject private var model: NotesModel
     @State private var mode: ReadingMode = .edit
+    @AppStorage("PKSNotesReadingTheme") private var themeID = NotesTheme.system.rawValue
+    @State private var previewCache: MarkdownPreviewSnapshot?
+    @State private var visibleTreeRows: [NoteTreePresentation.Row] = []
+
+    private var theme: NotesTheme { NotesTheme.restored(themeID) }
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarTab: SidebarTab = .notes
     @State private var newNoteName = ""
@@ -120,6 +131,22 @@ struct NotesWindow: View {
                 }
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                Menu {
+                    ForEach(NotesTheme.allCases) { option in
+                        Button {
+                            themeID = option.rawValue
+                        } label: {
+                            Label(option.name, systemImage: theme == option ? "checkmark.circle.fill" : option.symbol)
+                        }
+                        .accessibilityIdentifier("pks-theme-\(option.rawValue)")
+                    }
+                } label: {
+                    Image(systemName: "paintpalette")
+                }
+                .menuIndicator(.hidden)
+                .help("Choose reading theme")
+                .accessibilityIdentifier("pks-theme-menu")
+
                 if model.autoSavePending && model.selected != nil {
                     ProgressView()
                         .controlSize(.small)
@@ -163,9 +190,41 @@ struct NotesWindow: View {
                 .help("File actions and workspace options")
             }
         }
+        .preferredColorScheme(theme.appearance)
+        .task(id: PreviewWarmupKey(
+            identity: model.selected?.path ?? "",
+            source: model.body,
+            enabled: mode == .edit && model.selected != nil && !model.loadingNote
+        )) {
+            guard mode == .edit, !model.loadingNote, model.externalBody == nil,
+                  let identity = model.selected?.path else { return }
+            let input = model.draft
+            guard previewCache?.matches(identity: identity, source: input, matchID: nil) != true
+            else { return }
+            // Idle-only parse in the background; no preview view is mounted or laid out.
+            do { try await Task.sleep(for: .milliseconds(520)) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            let parser = Task.detached(priority: .utility) {
+                MarkdownPreviewParsing.prepare(input, match: nil)
+            }
+            defer { parser.cancel() }
+            let sections = await parser.value
+            guard !Task.isCancelled, model.selected?.path == identity,
+                  model.draft == input, mode == .edit else { return }
+            previewCache = MarkdownPreviewSnapshot(identity: identity, source: input,
+                                                    matchID: nil, sections: sections)
+        }
+        .onReceive(model.$files) { files in
+            visibleTreeRows = NoteTreePresentation.visibleRows(files, expandedPaths: expandedFolderPaths)
+        }
+        .onChange(of: expandedFolderPaths) { _, expanded in
+            visibleTreeRows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expanded)
+        }
         .onChange(of: model.root) { _, _ in
             expandedFolderPaths.removeAll()
             treeCursorPath = nil
+            previewCache = nil
         }
         .onChange(of: model.selected) { _, note in
             if let note, let root = model.root {
@@ -349,7 +408,7 @@ struct NotesWindow: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    ForEach(NoteTreePresentation.visibleRows(model.files, expandedPaths: expandedFolderPaths)) { row in
+                    ForEach(visibleTreeRows) { row in
                         HStack(spacing: 7) {
                             if row.item.isFolder {
                                 Button {
@@ -451,7 +510,7 @@ struct NotesWindow: View {
                 case .right: mapped = .right
                 default: return
                 }
-                let rows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expandedFolderPaths)
+                let rows = visibleTreeRows
                 if let next = NoteTreePresentation.navigate(mapped, rows: rows,
                                                            focusedPath: treeCursorPath ?? model.selected?.path,
                                                            expandedPaths: expandedFolderPaths) {
@@ -461,7 +520,7 @@ struct NotesWindow: View {
             }
             .onKeyPress(.return) {
                 guard sidebarTab == .notes, treeFocused else { return .ignored }
-                let rows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expandedFolderPaths)
+                let rows = visibleTreeRows
                 guard let item = rows.first(where: { $0.id == treeCursorPath })?.item else {
                     return .ignored
                 }
@@ -577,8 +636,10 @@ struct NotesWindow: View {
     private var editor: some View {
         TextEditor(text: $model.draft)
             .font(.system(size: 15, design: .monospaced))
+            .foregroundColor(theme.ink)
+            .tint(theme == .warm ? Color.brown : .accentColor)
             .scrollContentBackground(.hidden)
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(theme.canvas)
             .padding(.horizontal, 22)
             .padding(.vertical, 16)
             // The old draft remains intact until an off-main file load succeeds.
@@ -587,7 +648,9 @@ struct NotesWindow: View {
     }
 
     private var renderedNote: some View {
-        MarkdownPreviewPane(source: model.body, live: mode == .split)
+        MarkdownPreviewPane(source: model.body, live: mode == .split,
+                            identity: model.selected?.path ?? model.previewSource?.documentId ?? "",
+                            theme: theme, cache: $previewCache)
             // A different note must never briefly display another file's parsed document.
             .id(model.selected?.path ?? model.previewSource?.documentId ?? "empty")
     }

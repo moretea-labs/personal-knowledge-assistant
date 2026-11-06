@@ -98,6 +98,32 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(model.message?.contains("changed outside") == true)
     }
 
+    func testReadingThemeDefaultsAndParsedPreviewCacheIdentity() {
+        XCTAssertEqual(NotesTheme.allCases.map(\.rawValue),
+                       ["system", "paper", "warm", "midnight"])
+        XCTAssertEqual(NotesTheme.restored("nonexistent"), .system)
+        XCTAssertEqual(NotesTheme.restored("warm"), .warm)
+        XCTAssertEqual(NotesTheme.midnight.appearance, .dark)
+        XCTAssertEqual(NotesTheme.warm.appearance, .light)
+        XCTAssertNil(NotesTheme.system.appearance)
+
+        let markdown = "# 标题\n\nSome **bold** Markdown and a [link](x.md)."
+        let blocks = MarkdownPreviewParsing.prepare(markdown, match: nil)
+        let cache = MarkdownPreviewSnapshot(
+            identity: "/vault/one.md", source: markdown,
+            matchID: nil, sections: blocks
+        )
+        XCTAssertEqual(cache.sections.count, 1)
+        XCTAssertTrue(cache.matches(identity: "/vault/one.md", source: markdown, matchID: nil))
+        // Theme and Edit/Split/Read mode intentionally do NOT participate in parse identity.
+        for _ in NotesTheme.allCases {
+            XCTAssertTrue(cache.matches(identity: "/vault/one.md", source: markdown, matchID: nil))
+        }
+        XCTAssertFalse(cache.matches(identity: "/vault/two.md", source: markdown, matchID: nil))
+        XCTAssertFalse(cache.matches(identity: "/vault/one.md", source: markdown + "\nEdit", matchID: nil))
+        XCTAssertFalse(cache.matches(identity: "/vault/one.md", source: markdown, matchID: "new-hit"))
+    }
+
     func testChineseSearchDecoding() throws {
         let json = Data("""
         [{"documentId":"doc_test","chunkId":"chunk_test","title":"中文学习.md",
