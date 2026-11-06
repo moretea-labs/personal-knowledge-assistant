@@ -12,8 +12,9 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 ## Features
 
 - Native Mac window; double-click the app or note title to zoom/restore, in addition to standard macOS title-bar controls; separate Notes and Search sidebar tabs
-- Folder navigation, nested Markdown notes and Chinese filenames; double-click a folder name or click its chevron to expand/collapse (including empty folders); active note auto-reveals its parent folders
+- Mixed-file folder navigation (Markdown, PDF, and other regular files) with Chinese filenames; double-click a folder name or click its chevron to expand/collapse (including empty folders); active Markdown note auto-reveals its parent folders
 - Markdown edit, read, and split preview modes (powered by MarkdownUI 2.4.1)
+- In-place read-only PDF preview with macOS PDFKit (continuous pages, native zoom and text selection); other local files open in the system default app instead of being interpreted as Markdown
 - In-workspace Markdown links and images, with path containment checks
 - PKS ranked cross-source search; view snippets and read out-of-workspace results without editing them
 - Search result source labels with per-result ellipsis/right-click actions; Finder reveal, default app open, and path copy for local/managed files
@@ -42,6 +43,6 @@ The canonical folder is `~/Library/Mobile Documents/com~apple~CloudDocs/学习�
 
 ## Verification
 
-The Swift tests cover Chinese PKS result decoding, recursive folder browsing, safe note names, symlink/traversal protection, in-workspace Markdown links/images, real temporary-file save and overwrite-conflict detection. Check the installed Mac window separately and ensure the local PKS service is running before using Search.
+The Swift tests cover Chinese PKS result decoding, mixed-file recursive folder browsing, native PDF navigation and unsaved-change guard, safe note names, symlink/traversal protection, in-workspace Markdown links/images, real temporary-file save and overwrite-conflict detection. Check the installed Mac window separately and ensure the local PKS service is running before using Search.
 
 The app does not implement remote access or its own synchronization. Large or not-yet-downloaded iCloud items can still take time to open. Avoid simultaneous edits from multiple applications.
