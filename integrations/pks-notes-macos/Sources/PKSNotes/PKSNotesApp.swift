@@ -75,6 +75,7 @@ enum ReadingMode: String, CaseIterable {
 struct NotesWindow: View {
     @EnvironmentObject private var model: NotesModel
     @State private var mode: ReadingMode = .edit
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarTab: SidebarTab = .notes
     @State private var newNoteName = ""
     @State private var creatingNote = false
@@ -85,36 +86,82 @@ struct NotesWindow: View {
     @FocusState private var treeFocused: Bool
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
-                .navigationSplitViewColumnWidth(min: 280, ideal: 330, max: 440)
+                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 370)
         } detail: {
             detail
         }
         .toolbar {
-            ToolbarItemGroup {
+            ToolbarItem(placement: .principal) {
+                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
+                    HStack(spacing: 2) {
+                        ForEach(ReadingMode.allCases, id: \.self) { choice in
+                            Button {
+                                mode = choice
+                            } label: {
+                                Label(choice.rawValue, systemImage: choice.symbol)
+                                    .font(.system(size: 12, weight: mode == choice ? .semibold : .regular))
+                                    .padding(.horizontal, 9)
+                                    .padding(.vertical, 5)
+                                    .background(
+                                        mode == choice ? Color(nsColor: .controlBackgroundColor) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 6)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .keyboardShortcut(choice.shortcut, modifiers: .command)
+                            .accessibilityIdentifier("pks-mode-\(choice.rawValue.lowercased())")
+                            .help("Switch to \(choice.rawValue) Markdown")
+                        }
+                    }
+                    .padding(2)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    model.save()
+                } label: {
+                    Image(systemName: model.isDirty ? "square.and.arrow.down.fill" : "square.and.arrow.down")
+                }
+                .disabled(model.selected == nil || model.loadingNote || !model.isDirty)
+                .help(model.isDirty ? "Save changes (⌘S)" : "All changes saved")
+
+                Button {
+                    newNoteParent = nil
+                    creatingNote = true
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .help("New Markdown note (⌘N)")
+                .keyboardShortcut("n", modifiers: .command)
+
                 Button {
                     sidebarTab = .search
                     searchFieldFocused = true
                 } label: {
                     Image(systemName: "magnifyingglass")
                 }
-                .help("Focus PKS search (⌘F)")
+                .help("Search PKS knowledge (⌘F)")
                 .keyboardShortcut("f", modifiers: .command)
-                Button(action: { model.refresh() }) {
-                    Image(systemName: "arrow.clockwise")
-                }.help("Refresh Markdown folders")
-                Button(action: {
-                    newNoteParent = nil
-                    creatingNote = true
-                }) {
-                    Image(systemName: "square.and.pencil")
+
+                Menu {
+                    if let file = model.selected ?? model.previewPDF ?? model.previewSource?.localFileURL {
+                        fileActions(file)
+                        Divider()
+                    } else if let link = model.previewSource?.webURL {
+                        Button("Open Source in Browser", systemImage: "globe") { model.openSourceLink(link) }
+                        Button("Copy Source Link", systemImage: "link") { model.copySource(link.absoluteString) }
+                        Divider()
+                    }
+                    Button("Refresh Files", systemImage: "arrow.clockwise") { model.refresh() }
+                    Button("Choose Folder…", systemImage: "folder") { model.chooseWorkspace() }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
-                .help("New Markdown note (⌘N)")
-                .keyboardShortcut("n", modifiers: .command)
-                Button(action: { model.chooseWorkspace() }) {
-                    Image(systemName: "folder")
-                }.help("Choose an existing folder")
+                .menuIndicator(.hidden)
+                .help("File actions and workspace options")
             }
         }
         .onChange(of: model.root) { _, _ in
@@ -145,21 +192,7 @@ struct NotesWindow: View {
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 9) {
-                Image(systemName: "square.stack.3d.up")
-                    .foregroundStyle(.tint)
-                Text("PKS Notes")
-                    .font(.headline)
-                    .onTapGesture(count: 2) { NSApp.keyWindow?.zoom(nil) }
-                    .help("Double-click to zoom or restore the window")
-                Spacer()
-                Image(systemName: model.searching ? "arrow.triangle.2.circlepath" :
-                      model.searchStatus.hasPrefix("PKS offline") ? "exclamationmark.circle" : "circle")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }.padding(.horizontal, 14).padding(.top, 10)
-
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -180,10 +213,13 @@ struct NotesWindow: View {
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
             .padding(.horizontal, 10)
 
-            Text(model.searchStatus)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 14)
+            if model.searching || model.searchStatus.hasPrefix("PKS offline") {
+                Text(model.searchStatus)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.horizontal, 14)
+            }
 
             Picker("Sidebar", selection: $sidebarTab) {
                 ForEach(SidebarTab.allCases, id: \.self) { tab in
@@ -487,8 +523,6 @@ struct NotesWindow: View {
                     Button("Choose Folder") { model.chooseWorkspace() }
                 }
             } else {
-                header
-                Divider()
                 reader
             }
             if let message = model.message {
@@ -504,90 +538,7 @@ struct NotesWindow: View {
                 .background(.thinMaterial)
             }
         }
-        .navigationTitle(model.selected?.deletingPathExtension().lastPathComponent ?? model.previewPDF?.lastPathComponent ?? "PKS Notes")
-    }
-
-    private var header: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 7) {
-                    Text(model.title).font(.headline).lineLimit(1)
-                    if model.loadingNote {
-                        ProgressView().controlSize(.mini)
-                        Text("Opening…").font(.caption2).foregroundStyle(.secondary)
-                    } else if model.isDirty {
-                        Text("Unsaved")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                    }
-                }
-                    .onTapGesture(count: 2) { NSApp.keyWindow?.zoom(nil) }
-                    .help("Double-click to zoom or restore the window")
-                Text(model.selected?.path ?? model.previewPDF?.path ?? model.previewSource?.uri ?? "PKS search · external source")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .textSelection(.enabled)
-            }
-            Spacer()
-            if let url = model.selected ?? model.previewPDF ?? model.previewSource?.localFileURL {
-                Menu {
-                    fileActions(url)
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .menuStyle(.borderlessButton)
-                .help("File actions: Finder, open, copy path")
-            } else if let url = model.previewSource?.webURL {
-                Menu {
-                    Button("Open Source in Browser", systemImage: "globe") {
-                        model.openSourceLink(url)
-                    }
-                    Button("Copy Source Link", systemImage: "link") {
-                        model.copySource(url.absoluteString)
-                    }
-                } label: {
-                    Image(systemName: "link")
-                }
-                .menuStyle(.borderlessButton)
-                .help("Source actions")
-            }
-            if model.externalBody == nil && model.previewPDF == nil {
-                HStack(spacing: 2) {
-                    ForEach(ReadingMode.allCases, id: \.self) { choice in
-                        Button {
-                            mode = choice
-                        } label: {
-                            Label(choice.rawValue, systemImage: choice.symbol)
-                                .font(.system(size: 12, weight: mode == choice ? .semibold : .regular))
-                                .padding(.horizontal, 9)
-                                .padding(.vertical, 6)
-                                .frame(minWidth: 75)
-                                .background(
-                                    mode == choice ? Color(nsColor: .controlBackgroundColor) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 6)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .keyboardShortcut(choice.shortcut, modifiers: .command)
-                        .accessibilityIdentifier("pks-mode-\(choice.rawValue.lowercased())")
-                        .help("Switch to \(choice.rawValue) Markdown")
-                    }
-                }
-                .padding(3)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
-
-                Button(action: { model.save() }) {
-                    Label(model.isDirty ? "Save changes" : "Save", systemImage: "square.and.arrow.down")
-                }
-                .disabled(model.selected == nil || model.loadingNote || !model.isDirty)
-            } else {
-                Label("Read-only", systemImage: "lock")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .navigationTitle(model.selected == nil && model.previewPDF == nil && model.externalBody == nil ? "PKS Notes" : model.title)
     }
 
     @ViewBuilder
