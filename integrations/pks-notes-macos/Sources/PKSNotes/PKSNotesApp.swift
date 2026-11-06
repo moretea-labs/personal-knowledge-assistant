@@ -64,7 +64,9 @@ struct NotesWindow: View {
     @State private var creatingNote = false
     @State private var newNoteParent: URL?
     @State private var expandedFolderPaths: Set<String> = []
+    @State private var treeCursorPath: String?
     @FocusState private var searchFieldFocused: Bool
+    @FocusState private var treeFocused: Bool
 
     var body: some View {
         NavigationSplitView {
@@ -101,10 +103,12 @@ struct NotesWindow: View {
         }
         .onChange(of: model.root) { _, _ in
             expandedFolderPaths.removeAll()
+            treeCursorPath = nil
         }
         .onChange(of: model.selected) { _, note in
             if let note, let root = model.root {
                 expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: note, in: root))
+                treeCursorPath = note.path
             }
         }
         .alert("New Markdown note", isPresented: $creatingNote) {
@@ -282,6 +286,8 @@ struct NotesWindow: View {
                         HStack(spacing: 7) {
                             if row.item.isFolder {
                                 Button {
+                                    treeCursorPath = row.id
+                                    treeFocused = true
                                     toggleFolder(row.item.url)
                                 } label: {
                                     Image(systemName: expandedFolderPaths.contains(row.item.id) ? "chevron.down" : "chevron.right")
@@ -298,13 +304,23 @@ struct NotesWindow: View {
                                     .font(.system(size: 12))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
-                                    .onTapGesture(count: 2) { toggleFolder(row.item.url) }
+                                    .onTapGesture(count: 2) {
+                                        treeCursorPath = row.id
+                                        treeFocused = true
+                                        toggleFolder(row.item.url)
+                                    }
+                                    .simultaneousGesture(TapGesture(count: 1).onEnded {
+                                        treeCursorPath = row.id
+                                        treeFocused = true
+                                    })
                                     .help("Double-click to expand or collapse")
                             } else {
                                 Image(systemName: row.item.iconName)
                                     .foregroundStyle(.secondary)
                                     .frame(width: 14)
                                 Button {
+                                    treeCursorPath = row.id
+                                    treeFocused = true
                                     model.openFile(row.item.url)
                                 } label: {
                                     Text(row.item.name)
@@ -320,8 +336,10 @@ struct NotesWindow: View {
                         }
                         .padding(.leading, CGFloat(row.depth) * 17)
                         .padding(.vertical, 2)
-                        .background(model.selected == row.item.url || model.previewPDF == row.item.url
-                                    ? Color.accentColor.opacity(0.12) : Color.clear,
+                        .background(treeFocused && treeCursorPath == row.id
+                                    ? Color.accentColor.opacity(0.22)
+                                    : model.selected == row.item.url || model.previewPDF == row.item.url
+                                        ? Color.accentColor.opacity(0.12) : Color.clear,
                                     in: RoundedRectangle(cornerRadius: 5))
                         .contextMenu {
                             if row.item.isFolder {
@@ -354,12 +372,46 @@ struct NotesWindow: View {
                 }
             }
             .listStyle(.sidebar)
+            .focusable(sidebarTab == .notes)
+            .focused($treeFocused)
+            .onMoveCommand { direction in
+                guard sidebarTab == .notes else { return }
+                let mapped: NoteTreePresentation.Direction
+                switch direction {
+                case .up: mapped = .up
+                case .down: mapped = .down
+                case .left: mapped = .left
+                case .right: mapped = .right
+                default: return
+                }
+                let rows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expandedFolderPaths)
+                if let next = NoteTreePresentation.navigate(mapped, rows: rows,
+                                                           focusedPath: treeCursorPath ?? model.selected?.path,
+                                                           expandedPaths: expandedFolderPaths) {
+                    treeCursorPath = next.path
+                    expandedFolderPaths = next.expanded
+                }
+            }
+            .onKeyPress(.return) {
+                guard sidebarTab == .notes, treeFocused else { return .ignored }
+                let rows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expandedFolderPaths)
+                guard let item = rows.first(where: { $0.id == treeCursorPath })?.item else {
+                    return .ignored
+                }
+                if item.isFolder { toggleFolder(item.url) }
+                else { model.openFile(item.url) }
+                return .handled
+            }
         }
     }
 
     private func toggleFolder(_ url: URL) {
         if !expandedFolderPaths.insert(url.path).inserted {
             expandedFolderPaths.remove(url.path)
+            // Keep keyboard focus visible when collapsing a parent folder.
+            if let focused = treeCursorPath, focused.hasPrefix(url.path + "/") {
+                treeCursorPath = url.path
+            }
         }
     }
 
@@ -404,7 +456,13 @@ struct NotesWindow: View {
 
     private var detail: some View {
         VStack(spacing: 0) {
-            if model.selected == nil && model.previewPDF == nil && model.externalBody == nil {
+            if model.loadingNote && model.selected == nil && model.previewPDF == nil && model.externalBody == nil {
+                ContentUnavailableView {
+                    Label("Opening Markdown…", systemImage: "doc.text")
+                } description: {
+                    ProgressView().controlSize(.small)
+                }
+            } else if model.selected == nil && model.previewPDF == nil && model.externalBody == nil {
                 ContentUnavailableView {
                     Label("Your Markdown, indexed by PKS", systemImage: "doc.text.magnifyingglass")
                 } description: {
@@ -438,7 +496,10 @@ struct NotesWindow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 7) {
                     Text(model.title).font(.headline).lineLimit(1)
-                    if model.isDirty {
+                    if model.loadingNote {
+                        ProgressView().controlSize(.mini)
+                        Text("Opening…").font(.caption2).foregroundStyle(.secondary)
+                    } else if model.isDirty {
                         Text("Unsaved")
                             .font(.caption2)
                             .foregroundStyle(.orange)
@@ -457,9 +518,10 @@ struct NotesWindow: View {
                 Menu {
                     fileActions(url)
                 } label: {
-                    Label("File actions", systemImage: "folder")
+                    Image(systemName: "ellipsis.circle")
                 }
-                .help("Show the original file in Finder or open another app")
+                .menuStyle(.borderlessButton)
+                .help("File actions: Finder, open, copy path")
             } else if let url = model.previewSource?.webURL {
                 Menu {
                     Button("Open Source in Browser", systemImage: "globe") {
@@ -469,23 +531,28 @@ struct NotesWindow: View {
                         model.copySource(url.absoluteString)
                     }
                 } label: {
-                    Label("Source actions", systemImage: "link")
+                    Image(systemName: "link")
                 }
+                .menuStyle(.borderlessButton)
+                .help("Source actions")
             }
             if model.externalBody == nil && model.previewPDF == nil {
-                Picker("View", selection: $mode) {
-                    ForEach(ReadingMode.allCases, id: \.self) { option in
-                        Text(option.rawValue).tag(option)
-                    }
+                Menu {
+                    Button("Split: Edit and Preview", systemImage: "rectangle.split.2x1") { mode = .split }
+                    Button("Edit Markdown", systemImage: "square.and.pencil") { mode = .edit }
+                    Button("Read Preview", systemImage: "doc.richtext") { mode = .read }
+                } label: {
+                    Label(mode.rawValue, systemImage: mode == .split ? "rectangle.split.2x1"
+                          : mode == .edit ? "square.and.pencil" : "doc.richtext")
                 }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(width: 184)
+                .menuStyle(.borderlessButton)
+                .frame(width: 92)
+                .help("Switch Markdown editing and preview modes")
 
                 Button(action: { model.save() }) {
                     Label(model.isDirty ? "Save changes" : "Save", systemImage: "square.and.arrow.down")
                 }
-                .disabled(model.selected == nil || !model.isDirty)
+                .disabled(model.selected == nil || model.loadingNote || !model.isDirty)
             } else {
                 Label("Read-only", systemImage: "lock")
                     .foregroundStyle(.secondary)
@@ -519,6 +586,8 @@ struct NotesWindow: View {
             .scrollContentBackground(.hidden)
             .background(Color(nsColor: .textBackgroundColor))
             .padding(10)
+            // The old draft remains intact until an off-main file load succeeds.
+            .disabled(model.loadingNote)
             .accessibilityIdentifier("pks-markdown-editor")
     }
 
@@ -551,8 +620,10 @@ struct NotesWindow: View {
                             .id(section.id)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(26)
+                .frame(maxWidth: 820, alignment: .topLeading)
+                .frame(maxWidth: .infinity, alignment: .top)
+                .padding(.horizontal, 22)
+                .padding(.vertical, 26)
             }
             .onAppear { jumpToMatch(scroll, sections: sections) }
             .onChange(of: model.matchJumpSequence) { _, _ in

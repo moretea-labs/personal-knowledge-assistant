@@ -3,6 +3,15 @@ import XCTest
 @testable import PKSNotes
 
 final class PKSNotesTests: XCTestCase {
+    @MainActor
+    private func waitForNote(_ model: NotesModel, _ url: URL) async {
+        for _ in 0..<150 {
+            if model.selected == url && !model.loadingNote { return }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTFail("Timed out waiting for Markdown to open: \(url.path) — \(model.message ?? "no error")")
+    }
+
     func testChineseSearchDecoding() throws {
         let json = Data("""
         [{"documentId":"doc_test","chunkId":"chunk_test","title":"中文学习.md",
@@ -78,6 +87,37 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(NoteTreePresentation.ancestorPaths(for: note, in: root), [parent.path, folder.path])
     }
 
+    func testKeyboardTreeNavigationHonorsVisibleRowsAndParentDisclosure() {
+        let root = URL(fileURLWithPath: "/tmp/pks-nav-test")
+        let folder = root.appendingPathComponent("Projects")
+        let subfolder = folder.appendingPathComponent("Nested")
+        let file = subfolder.appendingPathComponent("note.md")
+        let sibling = root.appendingPathComponent("Root.md")
+        let tree = [
+            NoteItem(url: folder, children: [
+                NoteItem(url: subfolder, children: [NoteItem(url: file, children: nil)])
+            ]),
+            NoteItem(url: sibling, children: nil)
+        ]
+        let collapsed = NoteTreePresentation.visibleRows(tree, expandedPaths: [])
+        XCTAssertEqual(NoteTreePresentation.navigate(.down, rows: collapsed,
+                                                      focusedPath: nil, expandedPaths: [])?.path, folder.path)
+        let expandedParent = NoteTreePresentation.navigate(.right, rows: collapsed,
+                                                           focusedPath: folder.path, expandedPaths: [])
+        XCTAssertEqual(expandedParent?.expanded, [folder.path])
+        let rows = NoteTreePresentation.visibleRows(tree, expandedPaths: [folder.path])
+        XCTAssertEqual(NoteTreePresentation.navigate(.right, rows: rows, focusedPath: folder.path,
+                                                      expandedPaths: [folder.path])?.path, subfolder.path)
+        XCTAssertEqual(NoteTreePresentation.navigate(.left, rows: rows, focusedPath: subfolder.path,
+                                                      expandedPaths: [folder.path])?.path, folder.path)
+        XCTAssertEqual(NoteTreePresentation.navigate(.down, rows: rows, focusedPath: subfolder.path,
+                                                      expandedPaths: [folder.path])?.path, sibling.path)
+        XCTAssertEqual(NoteTreePresentation.navigate(.up, rows: rows, focusedPath: folder.path,
+                                                      expandedPaths: [folder.path])?.path, folder.path)
+        XCTAssertEqual(NoteTreePresentation.navigate(.left, rows: rows, focusedPath: folder.path,
+                                                      expandedPaths: [folder.path])?.expanded, [])
+    }
+
     func testEmptyFolderRemainsNavigable() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -90,7 +130,7 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
-    func testPDFPreviewHonorsUnsavedNoteAndMarkdownReopens() throws {
+    func testPDFPreviewHonorsUnsavedNoteAndMarkdownReopens() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")
         defer {
@@ -112,6 +152,7 @@ final class PKSNotesTests: XCTestCase {
         let model = NotesModel()
         model.openWorkspace(root)
         model.openFile(note)
+        await waitForNote(model, note)
         model.draft = "# Unsaved"
         model.openFile(pdf, navigationDecision: .cancel)
         XCTAssertEqual(model.selected, note)
@@ -124,12 +165,13 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(model.previewPDF, pdf)
         XCTAssertFalse(model.isDirty)
         model.openFile(note)
+        await waitForNote(model, note)
         XCTAssertNil(model.previewPDF)
         XCTAssertEqual(model.draft, "# Original")
     }
 
     @MainActor
-    func testNewNoteUsesCurrentFolderWithoutOverwritingExisting() throws {
+    func testNewNoteUsesCurrentFolderWithoutOverwritingExisting() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")
         defer {
@@ -148,7 +190,9 @@ final class PKSNotesTests: XCTestCase {
         model.openWorkspace(root)
         XCTAssertNil(model.message)
         model.openNote(existing)
+        await waitForNote(model, existing)
         model.newNote(named: "新笔记")
+        await waitForNote(model, folder.appendingPathComponent("新笔记.md"))
         XCTAssertEqual(model.selected, folder.appendingPathComponent("新笔记.md"))
         XCTAssertTrue(fm.fileExists(atPath: folder.appendingPathComponent("新笔记.md").path))
         XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("新笔记.md").path))
@@ -161,7 +205,7 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
-    func testNavigationSaveDiscardCancelAndConflict() throws {
+    func testNavigationSaveDiscardCancelAndConflict() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")
         defer {
@@ -182,6 +226,7 @@ final class PKSNotesTests: XCTestCase {
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(root))
         model.openNote(first)
+        await waitForNote(model, first)
         model.draft = "# Pending"
         model.openNote(first) // No false dirty warning on the selected note.
         XCTAssertEqual(model.draft, "# Pending")
@@ -195,10 +240,12 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(model.draft, "# Pending")
 
         model.openNote(second, navigationDecision: .save)
+        await waitForNote(model, second)
         XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "# Pending")
         XCTAssertEqual(model.selected, second)
         model.draft = "# Edited but discarded"
         model.openNote(first, navigationDecision: .discard)
+        await waitForNote(model, first)
         XCTAssertEqual(model.selected, first)
         XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "# Second")
 
@@ -212,7 +259,7 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
-    func testCreateNoteInsideSelectedFolderWithSafeCancellation() throws {
+    func testCreateNoteInsideSelectedFolderWithSafeCancellation() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")
         defer {
@@ -233,6 +280,7 @@ final class PKSNotesTests: XCTestCase {
         let model = NotesModel()
         model.openWorkspace(root)
         model.openNote(existing)
+        await waitForNote(model, existing)
         model.draft = "# Unsaved"
         model.newNote(named: "draft", in: chosen, navigationDecision: .cancel)
         XCTAssertFalse(fm.fileExists(atPath: chosen.appendingPathComponent("draft.md").path))
@@ -240,12 +288,13 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: outside.appendingPathComponent("escape.md").path))
         XCTAssertEqual(model.draft, "# Unsaved")
         model.newNote(named: "draft", in: chosen, navigationDecision: .discard)
+        await waitForNote(model, chosen.appendingPathComponent("draft.md"))
         XCTAssertEqual(model.selected, chosen.appendingPathComponent("draft.md"))
         XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "# Original")
     }
 
     @MainActor
-    func testEditSaveAndExternalModificationConflict() throws {
+    func testEditSaveAndExternalModificationConflict() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")
         defer {
@@ -262,6 +311,7 @@ final class PKSNotesTests: XCTestCase {
         let model = NotesModel()
         model.openWorkspace(folder)
         model.openNote(file)
+        await waitForNote(model, file)
         XCTAssertEqual(model.draft, "# Original")
         model.draft = "# First saved edit"
         model.save()
@@ -374,7 +424,50 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
-    func testSameNoteResultNavigationPreservesUnsavedDraft() throws {
+    func testLargeMarkdownLoadLatestSelectionAndFailurePreservesDraft() async throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let large = root.appendingPathComponent("large.md")
+        let latest = root.appendingPathComponent("latest.md")
+        let missing = root.appendingPathComponent("missing.md")
+        try String(repeating: "# Long section\nbody content\n", count: 200_000)
+            .write(to: large, atomically: true, encoding: .utf8)
+        try "# Latest".write(to: latest, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        model.openWorkspace(root)
+        model.openNote(large)
+        XCTAssertTrue(model.loadingNote)
+        model.openNote(latest)
+        await waitForNote(model, latest)
+        XCTAssertEqual(model.draft, "# Latest")
+        try? await Task.sleep(nanoseconds: 130_000_000)
+        XCTAssertEqual(model.selected, latest)
+        XCTAssertEqual(model.draft, "# Latest")
+
+        model.draft = "# Preserve unsaved source"
+        model.openNote(missing, navigationDecision: .discard)
+        for _ in 0..<100 {
+            if !model.loadingNote { break }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertFalse(model.loadingNote)
+        XCTAssertEqual(model.selected, latest)
+        XCTAssertEqual(model.draft, "# Preserve unsaved source")
+        XCTAssertEqual(try String(contentsOf: latest, encoding: .utf8), "# Latest")
+        XCTAssertTrue(model.message?.contains("Cannot open the note") == true)
+    }
+
+    @MainActor
+    func testSameNoteResultNavigationPreservesUnsavedDraft() async throws {
         let fm = FileManager.default
         let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -384,6 +477,7 @@ final class PKSNotesTests: XCTestCase {
         let model = NotesModel()
         model.openWorkspace(folder)
         model.openNote(note)
+        await waitForNote(model, note)
         model.draft = "# Section\nUncommitted changes"
         model.query = "Section"
         let hit = SearchHit(documentId: "doc", chunkId: "chunk", title: "测试",
