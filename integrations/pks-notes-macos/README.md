@@ -11,8 +11,8 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 
 ## Features
 
-- Native continuous macOS work surface with a single flat title bar, native sidebar and minimal separation; direct Edit/Split/Read controls with gentle transitions and no stacked search/mode cards or custom selection shadows
-- Mixed-file folder navigation (Markdown, PDF and other regular files) with Chinese filenames; tree disclosure expansion is computed only when folder state or the file scan changes, not on each Markdown keystroke; double-click/chevrons and keyboard navigation remain available
+- Native continuous macOS work surface with a single flat title bar, generous document-first reading, comfortable 13-point file navigation and restrained search; direct Edit/Split/Read controls with gentle transitions and no stacked cards or custom shadows
+- Mixed-file folder navigation (Markdown, PDF and other regular files) with Chinese filenames; file rows are readable and folder disclosure expansion is computed only when folder state or the file scan changes. Double-click/chevrons and keyboard navigation remain available. The last successfully opened Markdown note restores safely on next launch only if still present inside the chosen workspace.
 - Direct one-click Edit, Split and Read controls (⌘1/⌘2/⌘3) in the native title bar; one window-owned parsed Markdown snapshot survives view switching, idle editing prepares the preview off the main thread, and long notes without cross-section reference definitions render lazily by heading to reduce first-layout overhead
 - Four complete Markdown typography themes: System (native balanced), Paper (airy rounded editorial), Warm (serif long-form), Midnight (dense monospace technical). Each changes font family/size, heading proportions, line/paragraph spacing, list/quote/code/table styling and reading column width, not merely colors. Title bar 'Aa' opens a native inspector with live font-size, line-spacing and reading-width adjustments, persisted across launches and resettable. Theme and adjustments do not change Markdown source.
 - Native read-only PDFKit preview with zoom and text selection; other files use macOS default applications
@@ -24,7 +24,7 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 - Web-source browser/open-link actions; opaque URI fallback copies the source identifier without guessing a file path
 - The note tree and title-bar ellipsis menu offer contextual file actions; missing files report a non-destructive error
 - Debounced local Markdown autosave after 650 ms of inactivity, and immediate flush on note switch / quit. Saving shows only a small toolbar progress indicator. An external-edit conflict preserves the draft and retains native Save / Discard / Cancel protection before leaving
-- Cmd+N creates a Markdown note; Cmd+F focuses PKS search; Cmd+O selects the existing workspace; folder right-click offers New Note Here
+- Cmd+P opens a native, keyboard-operated Quick Open palette across the already-scanned vault tree (filename and parent-folder matching); Cmd+N creates a note and enters Edit, Cmd+F focuses PKS search, Cmd+O selects the existing workspace, and folder right-click offers New Note Here
 - Markdown loads and preview parsing run off main actor; only changed Split drafts are debounced (~260 ms), already-parsed content survives view/theme changes, and canceled stale tasks cannot replace newer drafts
 - Cmd+S is still available for immediate saves; no persistent Save button or success banner, and concurrent external edits are checked before every write
 - Create notes beside the selected note (or at the workspace root), or explicitly inside a folder via its context menu; note destinations are validated in-vault

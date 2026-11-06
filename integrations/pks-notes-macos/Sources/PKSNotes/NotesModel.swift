@@ -275,7 +275,21 @@ final class NotesModel: ObservableObject {
         activeMatch = nil
         draft = ""
         baseline = ""
+        restoreLastOpenedNote(in: resolved)
         return true
+    }
+
+    /// Reopen only a previously selected Markdown file inside this exact workspace.
+    /// The original file remains authoritative and reading still happens off-main.
+    private func restoreLastOpenedNote(in root: URL) {
+        guard let path = UserDefaults.standard.string(forKey: "PKSNotesLastOpenedMarkdown") else { return }
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        guard WorkspaceFiles.contains(url, in: root),
+              ["md", "markdown"].contains(url.pathExtension.lowercased()) else { return }
+        var info = Darwin.stat()
+        guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else { return }
+        openNote(url)
     }
 
     func refresh() {
@@ -431,6 +445,7 @@ final class NotesModel: ObservableObject {
             matchJumpSequence &+= 1
         }
         cancelNoteLoad()
+        UserDefaults.standard.set(url.path, forKey: "PKSNotesLastOpenedMarkdown")
         message = nil
     }
 

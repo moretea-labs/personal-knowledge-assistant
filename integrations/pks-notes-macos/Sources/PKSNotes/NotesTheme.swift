@@ -98,12 +98,12 @@ extension NotesTheme {
         switch self {
         case .system:
             ReadingTypography(
-                design: .default, bodySize: 16,
-                heading1: 1.85, heading2: 1.40, heading3: 1.16,
-                headingWeight: .semibold, lineSpacing: 0.27,
-                paragraphSpacing: 1.08, headingSpacing: 1.35,
-                pageWidth: 740, quoteInset: 12, codePadding: 16,
-                codeCorner: 7, listSpacing: 0.25
+                design: .default, bodySize: 16.5,
+                heading1: 1.92, heading2: 1.44, heading3: 1.17,
+                headingWeight: .semibold, lineSpacing: 0.33,
+                paragraphSpacing: 1.18, headingSpacing: 1.45,
+                pageWidth: 720, quoteInset: 12, codePadding: 16,
+                codeCorner: 7, listSpacing: 0.34
             )
         case .paper:
             ReadingTypography(

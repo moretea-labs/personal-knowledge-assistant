@@ -80,7 +80,7 @@ private struct PreviewWarmupKey: Hashable {
 
 struct NotesWindow: View {
     @EnvironmentObject private var model: NotesModel
-    @State private var mode: ReadingMode = .edit
+    @State private var mode: ReadingMode = .read
     @AppStorage("PKSNotesReadingTheme") private var themeID = NotesTheme.system.rawValue
     @AppStorage("PKSNotesFontAdjustment") private var fontAdjustment = 0.0
     @AppStorage("PKSNotesLineAdjustment") private var lineAdjustment = 0.0
@@ -88,6 +88,14 @@ struct NotesWindow: View {
     @State private var showingTypography = false
     @State private var previewCache: MarkdownPreviewSnapshot?
     @State private var visibleTreeRows: [NoteTreePresentation.Row] = []
+    @State private var allOpenableFiles: [NoteItem] = []
+    @State private var showingQuickOpen = false
+    @State private var quickOpenQuery = ""
+    @State private var quickOpenIndex = 0
+
+    private var quickOpenMatches: [NoteItem] {
+        NoteTreePresentation.quickOpen(allOpenableFiles, query: quickOpenQuery)
+    }
 
     private var theme: NotesTheme { NotesTheme.restored(themeID) }
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -99,11 +107,12 @@ struct NotesWindow: View {
     @State private var treeCursorPath: String?
     @FocusState private var searchFieldFocused: Bool
     @FocusState private var treeFocused: Bool
+    @FocusState private var quickOpenFocused: Bool
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
-                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 370)
+                .navigationSplitViewColumnWidth(min: 235, ideal: 278, max: 365)
         } detail: {
             detail
         }
@@ -134,6 +143,15 @@ struct NotesWindow: View {
                 }
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    openQuickPicker()
+                } label: {
+                    Image(systemName: "doc.text.magnifyingglass")
+                }
+                .keyboardShortcut("p", modifiers: .command)
+                .help("Quick Open Note (⌘P)")
+                .accessibilityIdentifier("pks-quick-open-button")
+
                 Button {
                     showingTypography = true
                 } label: {
@@ -171,6 +189,10 @@ struct NotesWindow: View {
                 .keyboardShortcut("f", modifiers: .command)
 
                 Menu {
+                    Button("Quick Open Note…", systemImage: "doc.text.magnifyingglass") {
+                        openQuickPicker()
+                    }
+                    Divider()
                     if let file = model.selected ?? model.previewPDF ?? model.previewSource?.localFileURL {
                         fileActions(file)
                         Divider()
@@ -215,6 +237,7 @@ struct NotesWindow: View {
         }
         .onReceive(model.$files) { files in
             visibleTreeRows = NoteTreePresentation.visibleRows(files, expandedPaths: expandedFolderPaths)
+            allOpenableFiles = NoteTreePresentation.openableFiles(files)
         }
         .onChange(of: expandedFolderPaths) { _, expanded in
             visibleTreeRows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expanded)
@@ -230,10 +253,14 @@ struct NotesWindow: View {
                 treeCursorPath = note.path
             }
         }
+        .sheet(isPresented: $showingQuickOpen) {
+            quickOpenSheet
+        }
         .alert("New Markdown note", isPresented: $creatingNote) {
             TextField("Note name", text: $newNoteName)
             Button("Create") {
                 model.newNote(named: newNoteName, in: newNoteParent)
+                mode = .edit
                 newNoteName = ""
                 newNoteParent = nil
             }
@@ -245,6 +272,114 @@ struct NotesWindow: View {
             Text(newNoteParent.map { "Creates a Markdown file inside \($0.lastPathComponent)." }
                  ?? "Creates a Markdown file beside the selected note, or at the workspace root.")
         }
+    }
+
+    private func openQuickPicker() {
+        quickOpenQuery = ""
+        quickOpenIndex = 0
+        showingQuickOpen = true
+    }
+
+    private func openQuickMatch(_ item: NoteItem) {
+        showingQuickOpen = false
+        model.openFile(item.url)
+    }
+
+    private var quickOpenSheet: some View {
+        let matches = quickOpenMatches
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search files…", text: $quickOpenQuery)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 17))
+                    .focused($quickOpenFocused)
+                    .onSubmit {
+                        guard !matches.isEmpty else { return }
+                        openQuickMatch(matches[min(quickOpenIndex, matches.count - 1)])
+                    }
+                    .onKeyPress(.downArrow) {
+                        quickOpenIndex = min(quickOpenIndex + 1, max(0, matches.count - 1))
+                        return .handled
+                    }
+                    .onKeyPress(.upArrow) {
+                        quickOpenIndex = max(0, quickOpenIndex - 1)
+                        return .handled
+                    }
+                    .accessibilityIdentifier("pks-quick-open-input")
+                Button {
+                    showingQuickOpen = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .keyboardShortcut(.cancelAction)
+                .help("Cancel (Esc)")
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 20)
+            Divider()
+                .opacity(0.45)
+            if matches.isEmpty {
+                Text(quickOpenQuery.isEmpty ? "Type a name to find a note in your library."
+                     : "No files match your search.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(matches.indices, id: \.self) { i in
+                            let item = matches[i]
+                            Button {
+                                openQuickMatch(item)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: item.iconName)
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 20)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.name)
+                                            .font(.system(size: 14, weight: i == quickOpenIndex ? .semibold : .regular))
+                                            .foregroundStyle(.primary)
+                                            .lineLimit(1)
+                                        Text(item.url.deletingLastPathComponent().lastPathComponent)
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    if i == quickOpenIndex {
+                                        Image(systemName: "return")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(
+                                    i == quickOpenIndex ? Color.accentColor.opacity(0.085) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 8)
+                                )
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("pks-quick-open-\(item.id)")
+                        }
+                    }
+                    .padding(8)
+                }
+            }
+        }
+        .frame(width: 560, height: matches.isEmpty ? 176 : min(470, max(238, CGFloat(matches.count) * 54 + 83)))
+        .background(Color(nsColor: .windowBackgroundColor))
+        .animation(.easeOut(duration: 0.16), value: matches.isEmpty)
+        .onChange(of: quickOpenQuery) { _, _ in quickOpenIndex = 0 }
+        .onAppear { quickOpenFocused = true }
     }
 
     private var typographyInspector: some View {
@@ -331,25 +466,26 @@ struct NotesWindow: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: 9) {
                 Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Search all PKS knowledge", text: $model.query)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                TextField("Search notes and knowledge", text: $model.query)
+                    .font(.system(size: 13))
                     .textFieldStyle(.plain)
                     .focused($searchFieldFocused)
                     .accessibilityIdentifier("pks-search-input")
                     .onSubmit { model.search(); sidebarTab = .search }
                 if model.searching {
                     ProgressView().controlSize(.mini)
-                } else {
-                    Button { model.search(); sidebarTab = .search } label: {
-                        Image(systemName: "arrow.right.circle.fill")
-                    }.buttonStyle(.borderless)
                 }
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 9)
+            .background(Color.primary.opacity(0.042), in: RoundedRectangle(cornerRadius: 9))
+            .padding(.horizontal, 12)
             .padding(.top, 12)
-            .padding(.bottom, 10)
+            .padding(.bottom, 12)
 
             if model.searching || model.searchStatus.hasPrefix("PKS offline") {
                 Text(model.searchStatus)
@@ -370,7 +506,7 @@ struct NotesWindow: View {
                             Image(systemName: tab == .notes ? "folder" : "text.magnifyingglass")
                             Text(tab == .notes ? "Files" : "Results")
                         }
-                        .font(.system(size: 12, weight: sidebarTab == tab ? .semibold : .regular))
+                        .font(.system(size: 13, weight: sidebarTab == tab ? .semibold : .regular))
                         .foregroundStyle(sidebarTab == tab ? Color.accentColor : Color.secondary)
                         .padding(.vertical, 9)
                         .contentShape(Rectangle())
@@ -506,7 +642,7 @@ struct NotesWindow: View {
                                 .accessibilityLabel(expandedFolderPaths.contains(row.item.id)
                                                     ? "Collapse \(row.item.name)" : "Expand \(row.item.name)")
                                 Label(row.item.name, systemImage: "folder")
-                                    .font(.system(size: 12))
+                                    .font(.system(size: 13, weight: .medium))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
                                     .onTapGesture(count: 2) {
@@ -521,7 +657,9 @@ struct NotesWindow: View {
                                     .help("Double-click to expand or collapse")
                             } else {
                                 Image(systemName: row.item.iconName)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(model.selected == row.item.url || model.previewPDF == row.item.url
+                                                     ? Color.accentColor : Color.secondary)
+                                    .font(.system(size: 12))
                                     .frame(width: 14)
                                 Button {
                                     treeCursorPath = row.id
@@ -529,7 +667,8 @@ struct NotesWindow: View {
                                     model.openFile(row.item.url)
                                 } label: {
                                     Text(row.item.name)
-                                        .font(.system(size: 12))
+                                        .font(.system(size: 13, weight: model.selected == row.item.url
+                                                      || model.previewPDF == row.item.url ? .semibold : .regular))
                                         .foregroundColor(model.selected == row.item.url || model.previewPDF == row.item.url ? .accentColor : .primary)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .contentShape(Rectangle())
@@ -540,7 +679,7 @@ struct NotesWindow: View {
                             }
                         }
                         .padding(.leading, CGFloat(row.depth) * 17)
-                        .padding(.vertical, 2)
+                        .padding(.vertical, 5)
                         .contextMenu {
                             if row.item.isFolder {
                                 Button("New Note Here", systemImage: "square.and.pencil") {
@@ -556,12 +695,18 @@ struct NotesWindow: View {
                     }
                 } header: {
                     HStack {
-                        Text(model.root?.path.contains("Mobile Documents") == true ? "Files · iCloud" : "Files · local")
+                        Text(model.root?.lastPathComponent ?? "Library")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                         Spacer()
                         Button(action: { model.chooseWorkspace() }) {
-                            Image(systemName: "folder.badge.gearshape")
+                            Image(systemName: "folder")
+                                .font(.system(size: 12))
                         }
                         .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Change notes folder")
                     }
                 }
                 }
@@ -699,7 +844,9 @@ struct NotesWindow: View {
             }
         }
         .background(theme.canvas)
-        .navigationTitle(model.selected == nil && model.previewPDF == nil && model.externalBody == nil ? "PKS Notes" : model.title)
+        .navigationTitle(model.selected?.deletingPathExtension().lastPathComponent
+                         ?? (model.selected == nil && model.previewPDF == nil && model.externalBody == nil
+                             ? "PKS Notes" : model.title))
     }
 
     @ViewBuilder
