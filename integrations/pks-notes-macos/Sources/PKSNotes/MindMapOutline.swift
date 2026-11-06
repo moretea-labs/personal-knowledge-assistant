@@ -164,3 +164,67 @@ extension MindMapOutline {
         return lines.joined(separator: "\n")
     }
 }
+
+extension MindMapOutline {
+    /// Move a pure Markdown list subtree under another structural node.
+    /// The moved list remains canonical Markdown; headings are anchors, not movable nodes.
+    static func moveListSubtree(in source: String, nodeID: Int, asChildOf targetID: Int) -> String? {
+        guard nodeID != targetID else { return nil }
+        let parsed = nodes(in: source)
+        guard let sourcePosition = parsed.firstIndex(where: { $0.id == nodeID }),
+              parsed.contains(where: { $0.id == targetID }) else { return nil }
+
+        var lines = source.components(separatedBy: "\n")
+        guard lines.indices.contains(nodeID), lines.indices.contains(targetID) else { return nil }
+
+        func listPrefix(_ line: String) -> Bool {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) })
+        }
+
+        guard listPrefix(lines[nodeID]) else { return nil }
+
+        let sourceNode = parsed[sourcePosition]
+        let endLine: Int = {
+            guard sourcePosition + 1 < parsed.count else { return lines.count }
+            for candidate in parsed[(sourcePosition + 1)...] where candidate.depth <= sourceNode.depth {
+                return candidate.id
+            }
+            return lines.count
+        }()
+
+        guard !(nodeID..<endLine).contains(targetID) else { return nil }
+        for index in nodeID..<endLine {
+            let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty && !listPrefix(lines[index]) { return nil }
+        }
+
+        let targetLine = lines[targetID]
+        let targetTrimmed = targetLine.trimmingCharacters(in: .whitespaces)
+        let targetIsList = listPrefix(targetLine)
+        let targetHashes = targetTrimmed.prefix(while: { $0 == "#" }).count
+        guard targetIsList || ((1...6).contains(targetHashes) && targetTrimmed.dropFirst(targetHashes).first == " ") else {
+            return nil
+        }
+
+        let sourceIndent = lines[nodeID].prefix(while: { $0 == " " }).count
+        let targetIndent = targetLine.prefix(while: { $0 == " " }).count
+        let desiredIndent = targetIsList ? targetIndent + 2 : 0
+        let delta = desiredIndent - sourceIndent
+
+        var moved = Array(lines[nodeID..<endLine])
+        for index in moved.indices where !moved[index].trimmingCharacters(in: .whitespaces).isEmpty {
+            let currentIndent = moved[index].prefix(while: { $0 == " " }).count
+            let nextIndent = currentIndent + delta
+            guard nextIndent >= 0 else { return nil }
+            moved[index] = String(repeating: " ", count: nextIndent) + moved[index].dropFirst(currentIndent)
+        }
+
+        lines.removeSubrange(nodeID..<endLine)
+        let removedCount = endLine - nodeID
+        let adjustedTarget = targetID > nodeID ? targetID - removedCount : targetID
+        guard lines.indices.contains(adjustedTarget) else { return nil }
+        lines.insert(contentsOf: moved, at: adjustedTarget + 1)
+        return lines.joined(separator: "\n")
+    }
+}

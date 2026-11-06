@@ -64,3 +64,28 @@ extension MindMapOutlineTests {
         XCTAssertNil(MindMapOutline.shiftListSubtree(in: "# Root\n- Root item", nodeID: 1, deeper: false))
     }
 }
+
+
+extension MindMapOutlineTests {
+    func testMoveListSubtreeReparentsWholeBranch() {
+        let source = "# Root\n- A\n  - A1\n- B\n- C"
+        XCTAssertEqual(
+            MindMapOutline.moveListSubtree(in: source, nodeID: 1, asChildOf: 3),
+            "# Root\n- B\n  - A\n    - A1\n- C"
+        )
+        XCTAssertEqual(
+            MindMapOutline.moveListSubtree(in: source, nodeID: 4, asChildOf: 1),
+            "# Root\n- A\n  - C\n  - A1\n- B"
+        )
+    }
+
+    func testMoveListSubtreeCanAttachToHeadingAndRejectCycles() {
+        let source = "# Root\n- A\n  - A1\n- B"
+        XCTAssertEqual(
+            MindMapOutline.moveListSubtree(in: source, nodeID: 3, asChildOf: 0),
+            "# Root\n- B\n- A\n  - A1"
+        )
+        XCTAssertNil(MindMapOutline.moveListSubtree(in: source, nodeID: 1, asChildOf: 2))
+        XCTAssertNil(MindMapOutline.moveListSubtree(in: source, nodeID: 0, asChildOf: 3))
+    }
+}

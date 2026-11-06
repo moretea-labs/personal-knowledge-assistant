@@ -9,6 +9,7 @@ struct MindMapCanvas: View {
     @State private var renaming = false
     @State private var collapsed: Set<Int> = []
     @State private var zoom: CGFloat = 1.0
+    @State private var dropTargetID: Int?
     @FocusState private var canvasFocused: Bool
 
     private var nodes: [MindMapNode] { MindMapOutline.nodes(in: source) }
@@ -110,7 +111,29 @@ struct MindMapCanvas: View {
                                 .allowsHitTesting(false)
                             }
                         }
+                        .overlay {
+                            if dropTargetID == node.id {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
+                                    .allowsHitTesting(false)
+                            }
+                        }
                         .contentShape(Rectangle())
+                        .draggable(String(node.id))
+                        .dropDestination(for: String.self) { items, _ in
+                            guard let raw = items.first,
+                                  let draggedID = Int(raw),
+                                  let updated = MindMapOutline.moveListSubtree(
+                                    in: source, nodeID: draggedID, asChildOf: node.id
+                                  ) else { return false }
+                            source = updated
+                            selectedID = nil
+                            collapsed.removeAll()
+                            dropTargetID = nil
+                            return true
+                        } isTargeted: { targeted in
+                            dropTargetID = targeted ? node.id : nil
+                        }
                         .onTapGesture {
                             selectedID = node.id
                             canvasFocused = true
