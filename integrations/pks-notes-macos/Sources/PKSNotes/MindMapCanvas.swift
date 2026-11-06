@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 struct MindMapCanvas: View {
     @Binding var source: String
     let openLink: (String) -> Void
-    let importOutline: (String, String) -> Void
+    let importOutline: (String, String) -> Bool
     @State private var selectedID: Int?
     @State private var renameTitle = ""
     @State private var renaming = false
@@ -185,6 +185,7 @@ struct MindMapCanvas: View {
             .help("Zoom in")
 
             Menu {
+                Button("Import MindNode v9 Package…") { importMindNode() }
                 Button("Import OPML from MindNode…") { importOPML() }
                 Button("Export OPML for MindNode…") { exportOPML() }
                     .disabled(nodes.isEmpty)
@@ -196,7 +197,7 @@ struct MindMapCanvas: View {
             } label: {
                 Image(systemName: "square.and.arrow.up.on.square")
             }
-            .help("MindNode-compatible OPML import/export")
+            .help("MindNode v9 import, OPML interchange, image and PDF export")
             .accessibilityIdentifier("pks-mind-map-interchange")
         }
         .padding(16)
@@ -357,6 +358,24 @@ struct MindMapCanvas: View {
         selectedID = nil
     }
 
+    private func importMindNode() {
+        let panel = NSOpenPanel()
+        panel.title = "Import MindNode Package"
+        panel.message = "Select a .mindnode package. Only the node hierarchy is imported; original files are not modified."
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let markdown = try MindNodePackage.importOutline(from: url)
+            if importOutline(markdown, url.deletingPathExtension().lastPathComponent) {
+                interchangeError = "MindNode hierarchy imported into a new Markdown note. Themes, images, notes, tasks and cross-connections are not imported."
+            }
+        } catch {
+            interchangeError = error.localizedDescription
+        }
+    }
+
     private func importOPML() {
         let panel = NSOpenPanel()
         panel.title = "Import Mind Map from OPML"
@@ -365,7 +384,7 @@ struct MindMapCanvas: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let text = try MindMapInterchange.importOPML(Data(contentsOf: url))
-            importOutline(text, url.deletingPathExtension().lastPathComponent)
+            _ = importOutline(text, url.deletingPathExtension().lastPathComponent)
         } catch {
             interchangeError = error.localizedDescription
         }

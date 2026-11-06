@@ -1379,9 +1379,11 @@ struct NotesWindow: View {
                 openLink: { target in _ = model.openKnowledgeLink(target) },
                 importOutline: { markdown, name in
                     // Import into a new note rather than overwriting the active note.
-                    if model.newNote(named: name, initialContent: markdown) != nil {
-                        showingMindMap = true
+                    guard model.newNote(named: name, initialContent: markdown) != nil else {
+                        return false
                     }
+                    showingMindMap = true
+                    return true
                 }
             )
         } else if model.externalBody != nil || mode == .read {
