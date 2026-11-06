@@ -31,6 +31,15 @@ struct PKSNotesApp: App {
             // This single-window editor uses Cmd+N for a note, not another app window.
             CommandGroup(replacing: .newItem) {}
             CommandMenu("PKS") {
+                Button("New Markdown Note") {
+                    NotificationCenter.default.post(name: NotesMenuEvent.newNote, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                Button("Quick Open…") {
+                    NotificationCenter.default.post(name: NotesMenuEvent.quickOpen, object: nil)
+                }
+                .keyboardShortcut("p", modifiers: .command)
+                Divider()
                 Button("Save Markdown") { model.save() }
                     .keyboardShortcut("s", modifiers: .command)
                 Button("Search Knowledge") { model.search() }
@@ -51,11 +60,22 @@ enum NotesGeometry {
     static let treeIconWidth: CGFloat = 18
     static let treeTextGap: CGFloat = 8
     static let treeIndent: CGFloat = 16
-    static let treeRowHeight: CGFloat = 36
-    static let sidebarInset: CGFloat = 12
+    static let treeRowHeight: CGFloat = 32
+    static let sidebarInset: CGFloat = 14
     static let symbolSize: CGFloat = 14
     static let toolbarTarget: CGFloat = 28
-    static let selectionCorner: CGFloat = 8
+    static let selectionCorner: CGFloat = 9
+
+    static func workspaceTitle(_ root: URL?) -> String {
+        guard let root else { return "PKS Library" }
+        let name = root.lastPathComponent
+        return name == "com~apple~CloudDocs" ? "iCloud Drive" : name
+    }
+}
+
+private enum NotesMenuEvent {
+    static let quickOpen = Notification.Name("PKSNotesMenuQuickOpen")
+    static let newNote = Notification.Name("PKSNotesMenuNewNote")
 }
 
 private enum SidebarTab: String, CaseIterable {
@@ -125,34 +145,28 @@ struct NotesWindow: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
-                .navigationSplitViewColumnWidth(min: 235, ideal: 278, max: 365)
+                .navigationSplitViewColumnWidth(min: 205, ideal: 242, max: 325)
         } detail: {
             detail
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
-                    HStack(spacing: 2) {
+                    HStack(spacing: 1) {
                         ForEach(ReadingMode.allCases, id: \.self) { choice in
                             Button {
                                 withAnimation(.easeOut(duration: 0.16)) {
                                     mode = choice
                                 }
                             } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: choice.symbol)
-                                        .font(.system(size: 13, weight: .medium))
-                                        .frame(width: NotesGeometry.symbolSize,
-                                               height: NotesGeometry.symbolSize)
-                                    Text(choice.rawValue)
-                                        .font(.system(size: 12,
-                                                      weight: mode == choice ? .semibold : .regular))
-                                }
-                                .foregroundStyle(mode == choice ? Color.primary : Color.secondary)
-                                .padding(.horizontal, 8)
-                                .frame(height: NotesGeometry.toolbarTarget)
-                                .background(mode == choice ? Color.primary.opacity(0.075) : .clear,
-                                            in: RoundedRectangle(cornerRadius: NotesGeometry.selectionCorner))
+                                Text(choice.rawValue)
+                                    .font(.system(size: 12,
+                                                  weight: mode == choice ? .semibold : .medium))
+                                    .foregroundStyle(mode == choice ? Color.primary : Color.secondary)
+                                    .padding(.horizontal, 12)
+                                    .frame(height: 26)
+                                    .background(mode == choice ? Color.primary.opacity(0.085) : .clear,
+                                                in: Capsule())
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -161,19 +175,11 @@ struct NotesWindow: View {
                             .help("Switch to \(choice.rawValue) Markdown")
                         }
                     }
-                    .padding(.horizontal, 2)
+                    .padding(3)
+                    .background(Color.primary.opacity(0.045), in: Capsule())
                 }
             }
             ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    openQuickPicker()
-                } label: {
-                    toolbarSymbol("doc.text.magnifyingglass")
-                }
-                .keyboardShortcut("p", modifiers: .command)
-                .help("Quick Open Note (⌘P)")
-                .accessibilityIdentifier("pks-quick-open-button")
-
                 Button {
                     showingTypography = true
                 } label: {
@@ -193,15 +199,7 @@ struct NotesWindow: View {
                 }
 
                 Button {
-                    newNoteParent = nil
-                    creatingNote = true
-                } label: {
-                    toolbarSymbol("square.and.pencil")
-                }
-                .help("New Markdown note (⌘N)")
-                .keyboardShortcut("n", modifiers: .command)
-
-                Button {
+                    columnVisibility = .all
                     sidebarTab = .search
                     searchFieldFocused = true
                 } label: {
@@ -233,6 +231,13 @@ struct NotesWindow: View {
             }
         }
         .preferredColorScheme(theme.appearance)
+        .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.quickOpen)) { _ in
+            openQuickPicker()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.newNote)) { _ in
+            newNoteParent = nil
+            creatingNote = true
+        }
         .task(id: PreviewWarmupKey(
             identity: model.selected?.path ?? "",
             source: model.body,
@@ -497,65 +502,149 @@ struct NotesWindow: View {
         .frame(width: 288)
     }
 
+    /// Bear/Panda-inspired quiet navigation tint. Editorial content retains its own
+    /// untouched white/paper canvas; no translucent cards or decorative shadows.
+    private var sidebarCanvas: Color {
+        switch theme {
+        case .system: Color(red: 0.972, green: 0.978, blue: 0.975)
+        case .paper: Color(red: 0.976, green: 0.978, blue: 0.981)
+        case .warm: Color(red: 0.958, green: 0.944, blue: 0.922)
+        case .midnight: Color(red: 0.132, green: 0.145, blue: 0.163)
+        }
+    }
+
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Library identity belongs at the top of the navigation column, not
+            // inside a system List section whose background and insets vary by OS.
+            HStack(spacing: 9) {
+                Image(systemName: "books.vertical")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                Menu {
+                    Button("Choose Notes Folder…", systemImage: "folder") {
+                        model.chooseWorkspace()
+                    }
+                    if let root = model.root {
+                        Button("Show in Finder", systemImage: "arrow.up.forward.app") {
+                            model.revealInFinder(root)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(NotesGeometry.workspaceTitle(model.root))
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .menuIndicator(.hidden)
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("pks-workspace-menu")
+                .help("Choose a different notes folder")
+                Button {
+                    newNoteParent = nil
+                    creatingNote = true
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 14, weight: .medium))
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("New Markdown Note (⌘N)")
+                .accessibilityIdentifier("pks-new-note-button")
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 49)
+            .padding(.top, 5)
+
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
-                    .frame(width: NotesGeometry.treeIconWidth)
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.tertiary)
-                TextField("Search notes and knowledge", text: $model.query)
-                    .font(.system(size: 13))
+                    .frame(width: 18)
+                TextField("Search knowledge…", text: $model.query)
                     .textFieldStyle(.plain)
+                    .font(.system(size: 12.5))
                     .focused($searchFieldFocused)
                     .accessibilityIdentifier("pks-search-input")
                     .onSubmit { model.search(); sidebarTab = .search }
-                if model.searching {
+                if !model.query.isEmpty {
+                    Button {
+                        model.query = ""
+                        model.search()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear search")
+                    .accessibilityIdentifier("pks-search-clear")
+                } else if model.searching {
                     ProgressView().controlSize(.mini)
                 }
             }
             .padding(.horizontal, 11)
-            .frame(height: NotesGeometry.treeRowHeight)
-            .background(Color.primary.opacity(0.042), in: RoundedRectangle(cornerRadius: NotesGeometry.selectionCorner))
+            .frame(height: 33)
+            .background(Color.primary.opacity(0.025),
+                        in: RoundedRectangle(cornerRadius: 9))
+            .overlay {
+                RoundedRectangle(cornerRadius: 9)
+                    .strokeBorder(Color.primary.opacity(0.055), lineWidth: 0.5)
+            }
             .padding(.horizontal, NotesGeometry.sidebarInset)
-            .padding(.top, 12)
+            .padding(.top, 7)
             .padding(.bottom, 12)
+
+            Picker("Library view", selection: $sidebarTab) {
+                Label("Files", systemImage: "folder")
+                    .tag(SidebarTab.notes)
+                Label("Results", systemImage: "text.magnifyingglass")
+                    .tag(SidebarTab.search)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+            .padding(.horizontal, NotesGeometry.sidebarInset)
+            .padding(.bottom, 11)
+            .accessibilityIdentifier("pks-sidebar-selector")
 
             if model.searching || model.searchStatus.hasPrefix("PKS offline") {
                 Text(model.searchStatus)
-                    .font(.caption2)
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
             }
 
-            HStack(spacing: 18) {
-                ForEach(SidebarTab.allCases, id: \.self) { tab in
-                    Button {
-                        withAnimation(.easeOut(duration: 0.14)) {
-                            sidebarTab = tab
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: tab == .notes ? "folder" : "text.magnifyingglass")
-                                .font(.system(size: NotesGeometry.symbolSize, weight: .regular))
-                                .frame(width: NotesGeometry.treeIconWidth)
-                            Text(tab == .notes ? "Files" : "Results")
-                        }
-                        .font(.system(size: 13, weight: sidebarTab == tab ? .semibold : .regular))
-                        .foregroundStyle(sidebarTab == tab ? Color.accentColor : Color.secondary)
-                        .padding(.vertical, 9)
-                        .contentShape(Rectangle())
+            if sidebarTab == .notes {
+                HStack(spacing: 6) {
+                    Text("FILES")
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(0.7)
+                        .foregroundStyle(.tertiary)
+                    Spacer(minLength: 0)
+                    if model.loadingFiles {
+                        ProgressView().controlSize(.mini)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("pks-sidebar-\(tab.rawValue.lowercased())")
                 }
-                Spacer(minLength: 0)
+                .padding(.horizontal, 18)
+                .frame(height: 25)
+                .padding(.bottom, 3)
             }
-            .padding(.horizontal, NotesGeometry.sidebarInset)
-            .padding(.bottom, 4)
 
-            List {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
                 if sidebarTab == .search {
                 if !model.hits.isEmpty {
                     Section("PKS results · across all sources") {
@@ -654,7 +743,7 @@ struct NotesWindow: View {
                         .foregroundStyle(.secondary)
                 }
                 } else {
-                Section {
+                Group {
                     if model.loadingFiles {
                         HStack {
                             ProgressView().controlSize(.small)
@@ -699,7 +788,7 @@ struct NotesWindow: View {
 
                             if row.item.isFolder {
                                 Text(row.item.name)
-                                    .font(.system(size: 13, weight: .medium))
+                                    .font(.system(size: 12.5, weight: .medium))
                                     .foregroundStyle(.primary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .lineLimit(1)
@@ -723,8 +812,8 @@ struct NotesWindow: View {
                                     model.openFile(row.item.url)
                                 } label: {
                                     Text(row.item.name)
-                                        .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                                        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                                        .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
+                                        .foregroundStyle(.primary)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .lineLimit(1)
                                         .frame(height: NotesGeometry.treeRowHeight)
@@ -736,13 +825,12 @@ struct NotesWindow: View {
                             }
                         }
                         .padding(.leading, CGFloat(row.depth) * NotesGeometry.treeIndent)
-                        .background(isSelected ? Color.accentColor.opacity(0.075)
+                        .background(isSelected ? Color.accentColor.opacity(0.11)
                                     : treeFocused && treeCursorPath == row.id
-                                        ? Color.primary.opacity(0.045) : .clear,
+                                        ? Color.primary.opacity(0.04) : .clear,
                                     in: RoundedRectangle(cornerRadius: NotesGeometry.selectionCorner))
-                        .listRowInsets(EdgeInsets(top: 1, leading: NotesGeometry.sidebarInset,
-                                                 bottom: 1, trailing: NotesGeometry.sidebarInset))
-                        .listRowSeparator(.hidden)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
                         .contextMenu {
                             if row.item.isFolder {
                                 Button("New Note Here", systemImage: "square.and.pencil") {
@@ -756,27 +844,12 @@ struct NotesWindow: View {
                         .help(row.item.url.path)
                         .accessibilityIdentifier(row.item.isFolder ? "pks-folder-\(row.item.name)" : row.item.id)
                     }
-                } header: {
-                    HStack {
-                        Text(model.root?.lastPathComponent ?? "Library")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        Spacer()
-                        Button(action: { model.chooseWorkspace() }) {
-                            Image(systemName: "folder")
-                                .font(.system(size: NotesGeometry.symbolSize))
-                                .frame(width: NotesGeometry.toolbarTarget, height: NotesGeometry.toolbarTarget)
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.secondary)
-                        .help("Change notes folder")
-                    }
                 }
                 }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 16)
             }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
             .focusable(sidebarTab == .notes)
             .focused($treeFocused)
             .onMoveCommand { direction in
@@ -808,6 +881,7 @@ struct NotesWindow: View {
                 return .handled
             }
         }
+        .background(sidebarCanvas)
     }
 
     private func toggleFolder(_ url: URL) {
