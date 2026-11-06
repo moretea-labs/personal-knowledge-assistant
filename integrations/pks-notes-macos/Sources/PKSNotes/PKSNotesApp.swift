@@ -50,15 +50,31 @@ private enum SidebarTab: String, CaseIterable {
     case search = "Search"
 }
 
-private enum ReadingMode: String, CaseIterable {
-    case split = "Split"
+enum ReadingMode: String, CaseIterable {
     case edit = "Edit"
+    case split = "Split"
     case read = "Read"
+
+    var symbol: String {
+        switch self {
+        case .edit: "square.and.pencil"
+        case .split: "rectangle.split.2x1"
+        case .read: "book"
+        }
+    }
+
+    var shortcut: KeyEquivalent {
+        switch self {
+        case .edit: "1"
+        case .split: "2"
+        case .read: "3"
+        }
+    }
 }
 
 struct NotesWindow: View {
     @EnvironmentObject private var model: NotesModel
-    @State private var mode: ReadingMode = .split
+    @State private var mode: ReadingMode = .edit
     @State private var sidebarTab: SidebarTab = .notes
     @State private var newNoteName = ""
     @State private var creatingNote = false
@@ -537,17 +553,29 @@ struct NotesWindow: View {
                 .help("Source actions")
             }
             if model.externalBody == nil && model.previewPDF == nil {
-                Menu {
-                    Button("Split: Edit and Preview", systemImage: "rectangle.split.2x1") { mode = .split }
-                    Button("Edit Markdown", systemImage: "square.and.pencil") { mode = .edit }
-                    Button("Read Preview", systemImage: "doc.richtext") { mode = .read }
-                } label: {
-                    Label(mode.rawValue, systemImage: mode == .split ? "rectangle.split.2x1"
-                          : mode == .edit ? "square.and.pencil" : "doc.richtext")
+                HStack(spacing: 2) {
+                    ForEach(ReadingMode.allCases, id: \.self) { choice in
+                        Button {
+                            mode = choice
+                        } label: {
+                            Label(choice.rawValue, systemImage: choice.symbol)
+                                .font(.system(size: 12, weight: mode == choice ? .semibold : .regular))
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 6)
+                                .frame(minWidth: 75)
+                                .background(
+                                    mode == choice ? Color(nsColor: .controlBackgroundColor) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 6)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .keyboardShortcut(choice.shortcut, modifiers: .command)
+                        .accessibilityIdentifier("pks-mode-\(choice.rawValue.lowercased())")
+                        .help("Switch to \(choice.rawValue) Markdown")
+                    }
                 }
-                .menuStyle(.borderlessButton)
-                .frame(width: 92)
-                .help("Switch Markdown editing and preview modes")
+                .padding(3)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
 
                 Button(action: { model.save() }) {
                     Label(model.isDirty ? "Save changes" : "Save", systemImage: "square.and.arrow.down")
@@ -592,59 +620,9 @@ struct NotesWindow: View {
     }
 
     private var renderedNote: some View {
-        // Keep ordinary Markdown rendering whole, preserving cross-section
-        // references/footnotes. Segment only when positioning a PKS search hit.
-        let sections = model.activeMatch == nil
-            ? [MarkdownSection(id: 0, heading: nil, markdown: model.body)]
-            : MarkdownSection.sections(in: model.body)
-        return ScrollViewReader { scroll in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
-                    ForEach(sections) { section in
-                        Markdown(section.markdown)
-                            .markdownTheme(.gitHub)
-                            .markdownImageProvider(LocalMarkdownImageProvider(note: model.selected, root: model.root))
-                            .environment(\.openURL, OpenURLAction { url in
-                                if url.scheme == nil || url.isFileURL {
-                                    if !model.openInternalLink(url) {
-                                        model.message = "Link target not available in this workspace."
-                                    }
-                                    return .handled
-                                }
-                                return ["http", "https"].contains(url.scheme?.lowercased() ?? "")
-                                    ? .systemAction : .discarded
-                            })
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 4)
-                            .id(section.id)
-                    }
-                }
-                .frame(maxWidth: 820, alignment: .topLeading)
-                .frame(maxWidth: .infinity, alignment: .top)
-                .padding(.horizontal, 22)
-                .padding(.vertical, 26)
-            }
-            .onAppear { jumpToMatch(scroll, sections: sections) }
-            .onChange(of: model.matchJumpSequence) { _, _ in
-                jumpToMatch(scroll, sections: sections)
-            }
-        }
-        .background(Color(nsColor: .textBackgroundColor))
-        .accessibilityIdentifier("pks-markdown-preview")
-    }
-
-    private func jumpToMatch(_ proxy: ScrollViewProxy, sections: [MarkdownSection]) {
-        guard let hit = model.activeMatch,
-              let target = MarkdownSection.targetIndex(in: sections,
-                                                       headingPath: hit.headingPath,
-                                                       snippet: hit.snippet,
-                                                       query: model.matchedQuery) else { return }
-        DispatchQueue.main.async {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                proxy.scrollTo(target, anchor: .top)
-            }
-        }
+        MarkdownPreviewPane(source: model.body, live: mode == .split)
+            // A different note must never briefly display another file's parsed document.
+            .id(model.selected?.path ?? model.previewSource?.documentId ?? "empty")
     }
 
 }

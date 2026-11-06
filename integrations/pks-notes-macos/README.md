@@ -13,7 +13,7 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 
 - Native Mac window; double-click the app or note title to zoom/restore, in addition to standard macOS title-bar controls; separate Notes and Search sidebar tabs
 - Mixed-file folder navigation (Markdown, PDF and other regular files) with Chinese filenames; double-click folders or click chevrons to expand/collapse, use arrow keys to navigate the tree and Return to open files
-- Markdown edit, read and split preview modes (MarkdownUI 2.4.1), with compact menus and centered reading layout
+- Direct one-click Edit, Split and Read controls (⌘1/⌘2/⌘3); default Edit mode avoids unnecessary parsing, and MarkdownUI 2.4.1 retains centered reading layout
 - Native read-only PDFKit preview with zoom and text selection; other files use macOS default applications
 - In-workspace Markdown links and images, with path containment checks
 - PKS ranked cross-source search; view snippets and read out-of-workspace results without editing them
@@ -24,7 +24,7 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 - The note tree and current note header also offer file actions; missing files report a non-destructive error
 - Native Save / Discard / Cancel when leaving a dirty note (including search, new note, workspace and quit); external PKS previews respect Discard, while stale results and save conflicts never overwrite current edits
 - Cmd+N creates a Markdown note; Cmd+F focuses PKS search; Cmd+O selects the existing workspace; folder right-click offers New Note Here
-- Markdown files are read on a background task to avoid blocking the Mac UI during iCloud hydration or large-file loading; newer requests cancel and supersede older ones, and file-open errors preserve the existing editor draft
+- Markdown loads and preview parsing run off the main actor; Split mode debounces live updates by 320 ms, reuses parsed content when changing views, cancels superseded work and preserves the editor draft on errors
 - Save via Cmd+S; protect unsaved edits and detect concurrent content changes before writing
 - Create notes beside the selected note (or at the workspace root), or explicitly inside a folder via its context menu; note destinations are validated in-vault
 
