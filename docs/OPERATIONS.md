@@ -59,4 +59,6 @@ Do not manually write this JSON into Forge controller state. Install it through 
 ./scripts/install-macos.sh
 ```
 
-This installs a user LaunchAgent and keeps the provider/socket available for Forge after login.
+The canonical standalone installation is `~/.local/share/personal-knowledge-system` with the single user LaunchAgent `com.personal-knowledge.pks`. The installer updates this path in place, verifies HTTP readiness, and retains the previous compiled files for rollback. It does **not** create the older `personal-knowledge-assistant` installation or change Forge Runtime.
+
+The standalone daemon and the Forge-managed `personal_knowledge` registration share the same SQLite authority but have separate lifecycle operations. Update the Forge external registration through its authorized `plugin_management.install_registration` action with the actual external-registration revision guard; do not write files under Forge controller state manually.
