@@ -49,7 +49,7 @@ struct MarkdownPreviewPane: View {
                     LazyVStack(alignment: .leading, spacing: 4) {
                         ForEach(rendered) { part in
                             Markdown(part.content)
-                                .markdownTheme(.gitHub)
+                                .markdownTheme(.pksReading)
                                 .markdownImageProvider(LocalMarkdownImageProvider(note: model.selected, root: model.root))
                                 .environment(\.openURL, OpenURLAction { url in
                                     if url.scheme == nil || url.isFileURL {
@@ -67,10 +67,10 @@ struct MarkdownPreviewPane: View {
                                 .id(part.id)
                         }
                     }
-                    .frame(maxWidth: 820, alignment: .topLeading)
+                    .frame(maxWidth: 740, alignment: .topLeading)
                     .frame(maxWidth: .infinity, alignment: .top)
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 26)
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 36)
                 }
             }
             .onChange(of: renderedRevision) { _, _ in
@@ -116,4 +116,72 @@ struct MarkdownPreviewPane: View {
             scroll.scrollTo(target, anchor: .top)
         }
     }
+}
+
+private extension Theme {
+    /// Editorial reading layout: native text colors, quieter headings and comfortable CJK spacing.
+    /// The Markdown parser and source file remain unchanged.
+    static let pksReading = Theme.basic
+        .text {
+            FontSize(16)
+        }
+        .heading1 { configuration in
+            configuration.label
+                .markdownTextStyle {
+                    FontWeight(.bold)
+                    FontSize(.em(1.85))
+                }
+                .markdownMargin(top: .rem(0.7), bottom: .rem(1.1))
+        }
+        .heading2 { configuration in
+            configuration.label
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1.4))
+                }
+                .markdownMargin(top: .rem(1.75), bottom: .rem(0.7))
+        }
+        .heading3 { configuration in
+            configuration.label
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1.16))
+                }
+                .markdownMargin(top: .rem(1.35), bottom: .rem(0.55))
+        }
+        .paragraph { configuration in
+            configuration.label
+                .fixedSize(horizontal: false, vertical: true)
+                .relativeLineSpacing(.em(0.32))
+                .markdownMargin(top: .zero, bottom: .em(1.15))
+        }
+        .blockquote { configuration in
+            HStack(alignment: .top, spacing: 12) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.secondary.opacity(0.35))
+                    .frame(width: 3)
+                configuration.label
+                    .foregroundStyle(.secondary)
+            }
+            .markdownMargin(top: .rem(0.5), bottom: .rem(1))
+        }
+        .code {
+            FontFamilyVariant(.monospaced)
+            FontSize(.em(0.89))
+        }
+        .codeBlock { configuration in
+            ScrollView(.horizontal) {
+                configuration.label
+                    .fixedSize(horizontal: false, vertical: true)
+                    .relativeLineSpacing(.em(0.25))
+                    .markdownTextStyle {
+                        FontFamilyVariant(.monospaced)
+                        FontSize(.em(0.87))
+                    }
+                    .padding(18)
+            }
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .markdownMargin(top: .rem(0.7), bottom: .rem(1.3))
+        }
 }

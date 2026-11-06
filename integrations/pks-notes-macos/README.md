@@ -13,7 +13,7 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 
 - Native Mac title bar with a single compact toolbar, standard double-click-to-zoom window behavior, and separate Notes/Search sidebar tabs; no redundant app-title or document-header rows
 - Mixed-file folder navigation (Markdown, PDF and other regular files) with Chinese filenames; double-click folders or click chevrons to expand/collapse, use arrow keys to navigate the tree and Return to open files
-- Direct one-click Edit, Split and Read controls (⌘1/⌘2/⌘3); default Edit mode avoids unnecessary parsing, and MarkdownUI 2.4.1 retains centered reading layout
+- Direct one-click Edit, Split and Read controls (⌘1/⌘2/⌘3) in the native title bar; default Edit mode avoids unnecessary parsing; centered MarkdownUI reading uses calm native typography rather than a GitHub theme
 - Native read-only PDFKit preview with zoom and text selection; other files use macOS default applications
 - In-workspace Markdown links and images, with path containment checks
 - PKS ranked cross-source search; view snippets and read out-of-workspace results without editing them
@@ -22,10 +22,10 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 - Search title/summary keywords are highlighted; click a match section to scroll the Markdown preview to its heading (or first matching heading section) without changing the source file
 - Web-source browser/open-link actions; opaque URI fallback copies the source identifier without guessing a file path
 - The note tree and title-bar ellipsis menu offer contextual file actions; missing files report a non-destructive error
-- Native Save / Discard / Cancel when leaving a dirty note (including search, new note, workspace and quit); external PKS previews respect Discard, while stale results and save conflicts never overwrite current edits
+- Debounced local Markdown autosave after 650 ms of inactivity, and immediate flush on note switch / quit. Saving shows only a small toolbar progress indicator. An external-edit conflict preserves the draft and retains native Save / Discard / Cancel protection before leaving
 - Cmd+N creates a Markdown note; Cmd+F focuses PKS search; Cmd+O selects the existing workspace; folder right-click offers New Note Here
 - Markdown loads and preview parsing run off the main actor; Split mode debounces live updates by 320 ms, reuses parsed content when changing views, cancels superseded work and preserves the editor draft on errors
-- Save via Cmd+S; protect unsaved edits and detect concurrent content changes before writing
+- Cmd+S is still available for immediate saves; no persistent Save button or success banner, and concurrent external edits are checked before every write
 - Create notes beside the selected note (or at the workspace root), or explicitly inside a folder via its context menu; note destinations are validated in-vault
 
 ## Development and installation
@@ -47,6 +47,6 @@ The app bundle copies `Resources/AppIcon.icns` into `Contents/Resources` and dec
 
 ## Verification
 
-The Swift tests cover Chinese PKS result decoding, mixed-file recursive folder browsing, native PDF navigation and unsaved-change guard, safe note names, symlink/traversal protection, in-workspace Markdown links/images, real temporary-file save and overwrite-conflict detection. Check the installed Mac window separately and ensure the local PKS service is running before using Search.
+The Swift tests cover Chinese PKS result decoding, mixed-file browsing, native PDF navigation, autosave debounce/navigation flush and external-write safety, safe note names, traversal protection, Markdown links/images, real temporary-file save and conflict detection. Check the installed Mac window separately and ensure the local PKS service is running before using Search.
 
 The app does not implement remote access or its own synchronization. Large or not-yet-downloaded iCloud items can still take time to open. Avoid simultaneous edits from multiple applications.
