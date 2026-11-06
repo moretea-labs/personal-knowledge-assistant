@@ -7,6 +7,7 @@ struct MindMapCanvas: View {
     @State private var renameTitle = ""
     @State private var renaming = false
     @State private var collapsed: Set<Int> = []
+    @State private var zoom: CGFloat = 1.0
 
     private var nodes: [MindMapNode] { MindMapOutline.nodes(in: source) }
 
@@ -34,6 +35,18 @@ struct MindMapCanvas: View {
                     collapsed.removeAll()
                 }.disabled(selectedID == nil)
                 Button("Rename", systemImage: "pencil") { beginRename() }.disabled(selectedID == nil)
+                Button("Delete Leaf", systemImage: "trash") {
+                    guard let id = selectedID, let updated = MindMapOutline.deleteLeaf(in: source, nodeID: id) else { return }
+                    source = updated
+                    selectedID = nil
+                }
+                .disabled(selectedID == nil || MindMapOutline.deleteLeaf(in: source, nodeID: selectedID ?? -1) == nil)
+                Divider().frame(height: 18)
+                Button { zoom = max(0.65, zoom - 0.15) } label: { Image(systemName: "minus.magnifyingglass") }
+                    .help("Zoom out")
+                Text("\(Int(zoom * 100))%").font(.caption.monospacedDigit()).frame(width: 45)
+                Button { zoom = min(1.75, zoom + 0.15) } label: { Image(systemName: "plus.magnifyingglass") }
+                    .help("Zoom in")
             }
             .padding(16)
             Divider()
@@ -49,16 +62,40 @@ struct MindMapCanvas: View {
                             } label: {
                                 Image(systemName: collapsed.contains(node.id) ? "chevron.right" : "chevron.down")
                             }.buttonStyle(.plain)
+                            Image(systemName: "circle.fill")
+                                .font(.system(size: 5))
+                                .foregroundStyle(.tertiary)
                             Text(node.title).font(.system(size: node.depth == 0 ? 17 : 14, weight: .medium))
+                            if !MindMapOutline.links(in: node.title).isEmpty {
+                                Image(systemName: "link")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .help(MindMapOutline.links(in: node.title).map(\.target).joined(separator: ", "))
+                            }
                         }
                         .padding(.horizontal, 16).padding(.vertical, 12)
                         .background(selectedID == node.id ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
                         .padding(.leading, CGFloat(node.depth) * 40)
+                        .overlay(alignment: .leading) {
+                            if node.depth > 0 {
+                                Path { path in
+                                    let x = CGFloat(node.depth) * 40 - 18
+                                    path.move(to: CGPoint(x: x, y: -7))
+                                    path.addLine(to: CGPoint(x: x, y: 22))
+                                    path.addQuadCurve(to: CGPoint(x: x + 13, y: 35), control: CGPoint(x: x, y: 35))
+                                }
+                                .stroke(Color.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                                .allowsHitTesting(false)
+                            }
+                        }
                         .contentShape(Rectangle())
                         .onTapGesture { selectedID = node.id }
                         .onTapGesture(count: 2) { selectedID = node.id; beginRename() }
                     }
-                }.padding(32).frame(minWidth: 500, maxWidth: .infinity, alignment: .leading)
+                }
+                .scaleEffect(zoom, anchor: .topLeading)
+                .padding(32)
+                .frame(minWidth: 500 * zoom, maxWidth: .infinity, alignment: .leading)
             }
         }
         .alert("Rename Node", isPresented: $renaming) {

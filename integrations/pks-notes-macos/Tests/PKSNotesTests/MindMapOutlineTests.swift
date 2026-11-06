@@ -26,3 +26,22 @@ extension MindMapOutlineTests {
         XCTAssertEqual(MindMapOutline.addChild(in: "# Root\n- Existing", parentID: 1), "# Root\n- Existing\n  - New idea")
     }
 }
+
+extension MindMapOutlineTests {
+    func testLeafDeletionDoesNotDiscardDescendantsOrHeadings() {
+        XCTAssertEqual(MindMapOutline.deleteLeaf(in: "# Root\n- A\n- B", nodeID: 1), "# Root\n- B")
+        XCTAssertNil(MindMapOutline.deleteLeaf(in: "# Root\n- Parent\n  - Child", nodeID: 1))
+        XCTAssertNil(MindMapOutline.deleteLeaf(in: "# Root\n- Child", nodeID: 0))
+    }
+}
+
+
+extension MindMapOutlineTests {
+    func testWikiAndMarkdownLinksRemainCanonical() {
+        let source = "# Project\n- [[Notes/Design|Design notes]]\n- [Spec](../spec.md)"
+        let nodes = MindMapOutline.nodes(in: source)
+        XCTAssertEqual(MindMapOutline.links(in: nodes[1].title), [.init(label: "Design notes", target: "Notes/Design")])
+        XCTAssertEqual(MindMapOutline.links(in: nodes[2].title), [.init(label: "Spec", target: "../spec.md")])
+        XCTAssertEqual(MindMapOutline.rename(in: source, nodeID: 1, to: "[[Notes/Architecture]]"), "# Project\n- [[Notes/Architecture]]\n- [Spec](../spec.md)")
+    }
+}

@@ -53,6 +53,21 @@ extension MindMapOutline {
         return lines.joined(separator: "\n")
     }
 
+    /// Delete a leaf only: never silently discard child nodes or prose attached to a heading.
+    static func deleteLeaf(in source: String, nodeID: Int) -> String? {
+        let parsed = nodes(in: source)
+        guard let position = parsed.firstIndex(where: { $0.id == nodeID }) else { return nil }
+        let node = parsed[position]
+        if position + 1 < parsed.count && parsed[position + 1].depth > node.depth { return nil }
+        var lines = source.components(separatedBy: "\n")
+        guard lines.indices.contains(nodeID) else { return nil }
+        // Only list items can be removed without potentially orphaning prose/sections.
+        let trimmed = lines[nodeID].trimmingCharacters(in: .whitespaces)
+        guard ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) else { return nil }
+        lines.remove(at: nodeID)
+        return lines.joined(separator: "\n")
+    }
+
     static func addChild(in source: String, parentID: Int, title: String = "New idea") -> String? {
         var lines = source.components(separatedBy: "\n")
         guard nodes(in: source).contains(where: { $0.id == parentID }), lines.indices.contains(parentID) else { return nil }
@@ -61,5 +76,36 @@ extension MindMapOutline {
         let isList = ["- ", "* ", "+ "].contains(where: { line.trimmingCharacters(in: .whitespaces).hasPrefix($0) })
         lines.insert(String(repeating: " ", count: indent + (isList ? 2 : 0)) + "- " + title, at: parentID + 1)
         return lines.joined(separator: "\n")
+    }
+}
+
+
+/// A note relationship extracted from existing Markdown syntax; no second graph database.
+struct MindMapLink: Equatable {
+    let label: String
+    let target: String
+}
+
+extension MindMapOutline {
+    static func links(in title: String) -> [MindMapLink] {
+        let patterns = [#"\[\[([^\]\n]+)\]\]"#, #"\[([^\]\n]+)\]\(([^)\n]+)\)"#]
+        var links: [MindMapLink] = []
+        let range = NSRange(title.startIndex..<title.endIndex, in: title)
+        for (index, pattern) in patterns.enumerated() {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            for match in regex.matches(in: title, range: range) {
+                guard let labelRange = Range(match.range(at: 1), in: title) else { continue }
+                let raw = String(title[labelRange])
+                if index == 0 {
+                    let parts = raw.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+                    let target = String(parts[0]).trimmingCharacters(in: .whitespaces)
+                    let label = parts.count == 2 ? String(parts[1]) : target
+                    if !target.isEmpty { links.append(.init(label: label, target: target)) }
+                } else if let targetRange = Range(match.range(at: 2), in: title) {
+                    links.append(.init(label: raw, target: String(title[targetRange])))
+                }
+            }
+        }
+        return links
     }
 }
