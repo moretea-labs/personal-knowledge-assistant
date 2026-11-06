@@ -188,6 +188,7 @@ struct NotesWindow: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarTab: SidebarTab = .notes
     @State private var pendingEditorFocus: URL?
+    @State private var pendingMindMapOpen: URL?
     @State private var renameCandidate: URL?
     @State private var renameValue = ""
     @State private var showingRename = false
@@ -348,6 +349,9 @@ struct NotesWindow: View {
                     Button("Quick Open Note…", systemImage: "doc.text.magnifyingglass") {
                         openQuickPicker()
                     }
+                    Button("New Mind Map", systemImage: "point.3.connected.trianglepath.dotted") {
+                        beginNewMindMap()
+                    }
                     Divider()
                     if let file = model.selected ?? model.previewPDF ?? model.previewSource?.localFileURL {
                         fileActions(file)
@@ -424,7 +428,12 @@ struct NotesWindow: View {
             previewCache = nil
         }
         .onChange(of: model.selected) { _, note in
-            showingMindMap = false
+            let openAsMap = note != nil && note == pendingMindMapOpen
+            showingMindMap = openAsMap
+            if openAsMap {
+                pendingMindMapOpen = nil
+                mode = .read
+            }
             showingBacklinks = false
             if let note, let root = model.root {
                 expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: note, in: root))
@@ -523,6 +532,23 @@ struct NotesWindow: View {
         }
     }
 
+    private func beginNewMindMap(in folder: URL? = nil) {
+        if model.root == nil {
+            model.chooseWorkspace()
+            guard model.root != nil else { return }
+        }
+        guard let created = model.newNote(
+            in: folder, initialContent: MindMapOutline.createMap()
+        ) else { return }
+        pendingEditorFocus = nil
+        pendingMindMapOpen = created
+        if model.selected == created {
+            pendingMindMapOpen = nil
+            showingMindMap = true
+            mode = .read
+        }
+    }
+
     private func openQuickPicker() {
         quickOpenQuery = ""
         quickOpenIndex = 0
@@ -600,10 +626,12 @@ struct NotesWindow: View {
                                             .font(.system(size: 14, weight: i == quickOpenIndex ? .semibold : .regular))
                                             .foregroundStyle(.primary)
                                             .lineLimit(1)
-                                        Text(item.url.deletingLastPathComponent().lastPathComponent)
+                                        Text(NoteTreePresentation.quickOpenFolder(for: item.url, in: model.root))
                                             .font(.system(size: 11))
                                             .foregroundStyle(.secondary)
                                             .lineLimit(1)
+                                            .truncationMode(.middle)
+                                            .help(NoteTreePresentation.quickOpenFolder(for: item.url, in: model.root))
                                     }
                                     Spacer()
                                     if i == quickOpenIndex {

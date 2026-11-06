@@ -186,6 +186,8 @@ struct MindMapCanvas: View {
 
             Menu {
                 Button("Import MindNode v9 Package…") { importMindNode() }
+                Button("Export MindNode v9 Using Template…") { exportMindNode() }
+                    .disabled(nodes.isEmpty)
                 Button("Import OPML from MindNode…") { importOPML() }
                 Button("Export OPML for MindNode…") { exportOPML() }
                     .disabled(nodes.isEmpty)
@@ -197,7 +199,7 @@ struct MindMapCanvas: View {
             } label: {
                 Image(systemName: "square.and.arrow.up.on.square")
             }
-            .help("MindNode v9 import, OPML interchange, image and PDF export")
+            .help("MindNode v9 package interchange, OPML, PNG and PDF export")
             .accessibilityIdentifier("pks-mind-map-interchange")
         }
         .padding(16)
@@ -206,6 +208,11 @@ struct MindMapCanvas: View {
     @ViewBuilder
     private func spatialCanvas(_ layout: MindMapLayoutSnapshot) -> some View {
         let byID = Dictionary(uniqueKeysWithValues: layout.placements.map { ($0.id, $0) })
+        // Build once per rendered map. Never reparse the full Markdown for each card.
+        let allNodes = nodes
+        let parentIDs = Set(allNodes.indices.dropLast().compactMap { index -> Int? in
+            allNodes[index + 1].depth > allNodes[index].depth ? allNodes[index].id : nil
+        })
         ZStack(alignment: .topLeading) {
             ForEach(layout.placements) { placement in
                 if let parentID = placement.parentID, let parent = byID[parentID] {
@@ -214,7 +221,7 @@ struct MindMapCanvas: View {
             }
 
             ForEach(layout.placements) { placement in
-                nodeCard(placement.node)
+                nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id))
                     .frame(width: placement.size.width, height: placement.size.height)
                     .position(placement.center)
             }
@@ -245,9 +252,9 @@ struct MindMapCanvas: View {
     }
 
     @ViewBuilder
-    private func nodeCard(_ node: MindMapNode) -> some View {
+    private func nodeCard(_ node: MindMapNode, hasChildren: Bool) -> some View {
         HStack(spacing: 9) {
-            if hasChildren(node) {
+            if hasChildren {
                 Button {
                     if !collapsed.insert(node.id).inserted { collapsed.remove(node.id) }
                 } label: {
@@ -358,6 +365,29 @@ struct MindMapCanvas: View {
         selectedID = nil
     }
 
+    private func exportMindNode() {
+        let sourcePanel = NSOpenPanel()
+        sourcePanel.title = "Choose a MindNode v9 Template"
+        sourcePanel.message = "A real MindNode v9 document is needed to preserve native package structure. The template will remain unchanged."
+        sourcePanel.canChooseDirectories = true
+        sourcePanel.canChooseFiles = true
+        sourcePanel.allowsMultipleSelection = false
+        guard sourcePanel.runModal() == .OK, let template = sourcePanel.url else { return }
+
+        let savePanel = NSSavePanel()
+        savePanel.title = "Export Native MindNode v9"
+        savePanel.directoryURL = template.deletingLastPathComponent()
+        savePanel.nameFieldStringValue = "Mind Map.mindnode"
+        savePanel.allowedContentTypes = [UTType(filenameExtension: "mindnode", conformingTo: .package) ?? .package]
+        guard savePanel.runModal() == .OK, let destination = savePanel.url else { return }
+        do {
+            try MindNodePackage.exportOutline(source, usingTemplate: template, to: destination)
+            interchangeError = "New MindNode v9 package exported. Check it in MindNode before relying on it; original template and Markdown were not changed."
+        } catch {
+            interchangeError = error.localizedDescription
+        }
+    }
+
     private func importMindNode() {
         let panel = NSOpenPanel()
         panel.title = "Import MindNode Package"
@@ -454,12 +484,6 @@ struct MindMapCanvas: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { try data.write(to: url, options: .atomic) }
         catch { interchangeError = error.localizedDescription }
-    }
-
-    private func hasChildren(_ node: MindMapNode) -> Bool {
-        guard let index = nodes.firstIndex(where: { $0.id == node.id }),
-              index + 1 < nodes.count else { return false }
-        return nodes[index + 1].depth > node.depth
     }
 
     private func clampedZoom(_ value: CGFloat) -> CGFloat {

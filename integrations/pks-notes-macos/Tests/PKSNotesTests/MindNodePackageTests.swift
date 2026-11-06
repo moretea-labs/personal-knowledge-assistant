@@ -53,6 +53,52 @@ final class MindNodePackageTests: XCTestCase {
         XCTAssertThrowsError(try MindNodePackage.importOutline(from: invalid))
     }
 
+    func testNativeV9TemplateExportRoundTripsAndDoesNotModifySource() throws {
+        let (base, template) = try fixture()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let templateFile = template.appendingPathComponent("contents.xml")
+        let before = try Data(contentsOf: templateFile)
+        let destination = base.appendingPathComponent("Export.mindnode", isDirectory: true)
+        let markdown = "# New & Project\n- Topic <A>\n  - Nested \"idea\"\n- Second\n"
+        try MindNodePackage.exportOutline(markdown, usingTemplate: template, to: destination)
+        XCTAssertEqual(try MindNodePackage.importOutline(from: destination), markdown)
+        XCTAssertEqual(try Data(contentsOf: templateFile), before)
+        XCTAssertThrowsError(try MindNodePackage.exportOutline(markdown, usingTemplate: template, to: destination))
+        XCTAssertEqual(try MindNodePackage.importOutline(from: destination), markdown,
+                       "A collision must never overwrite the existing export")
+    }
+
+    func testNativeExportRejectsProseAndMultipleRootsWithoutCreatingFiles() throws {
+        let (base, template) = try fixture()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let destination = base.appendingPathComponent("Invalid.mindnode", isDirectory: true)
+        for invalid in [
+            "An ordinary note without a map",
+            "# First\n# Second\n",
+            "# Root\nA paragraph must not silently disappear.\n- Topic",
+            "# Root\n- A\n    - Indentation gap"
+        ] {
+            XCTAssertThrowsError(try MindNodePackage.exportOutline(
+                invalid, usingTemplate: template, to: destination
+            ), invalid)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        }
+    }
+
+    func testNativeExportRejectsTemplateSymlinks() throws {
+        let (base, template) = try fixture()
+        defer { try? FileManager.default.removeItem(at: base) }
+        try FileManager.default.createSymbolicLink(
+            at: template.appendingPathComponent("Unsafe"),
+            withDestinationURL: URL(fileURLWithPath: "/etc/hosts")
+        )
+        let destination = base.appendingPathComponent("UnsafeOutput.mindnode", isDirectory: true)
+        XCTAssertThrowsError(try MindNodePackage.exportOutline(
+            "# Root\n- Child\n", usingTemplate: template, to: destination
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    }
+
     func testRejectsNonPackageFileAndMissingContents() throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)

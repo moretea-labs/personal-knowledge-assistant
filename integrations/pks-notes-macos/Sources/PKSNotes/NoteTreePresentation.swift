@@ -33,6 +33,20 @@ enum NoteTreePresentation {
         return result
     }
 
+    /// Show a note's folder path relative to its selected workspace.
+    /// This makes identically named notes in import/backup folders distinguishable.
+    static func quickOpenFolder(for url: URL, in root: URL?) -> String {
+        let parent = url.deletingLastPathComponent().standardizedFileURL
+        guard let root else { return parent.lastPathComponent }
+        let base = root.standardizedFileURL.path
+        let parentPath = parent.path
+        guard parentPath == base || parentPath.hasPrefix(base + "/") else {
+            return parent.lastPathComponent
+        }
+        let relative = String(parentPath.dropFirst(base.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return relative.isEmpty ? "Workspace Root" : relative
+    }
+
     /// Case/diacritic-insensitive native file matching, without another search index.
     /// Name prefix matches precede name substring, then parent-folder path matches.
     static func quickOpen(_ files: [NoteItem], query: String, limit: Int = 24) -> [NoteItem] {

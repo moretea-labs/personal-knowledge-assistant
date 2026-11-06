@@ -580,6 +580,18 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(fm.fileExists(atPath: outsideNote.path))
     }
 
+    func testQuickOpenDisplaysWorkspaceRelativeFoldersToDisambiguateCopies() {
+        let root = URL(fileURLWithPath: "/tmp/Notes")
+        let canonical = root.appendingPathComponent("技术学习/大数据学习路线.md")
+        let backup = root.appendingPathComponent("导入暂存/backup/技术学习/大数据学习路线.md")
+        XCTAssertEqual(NoteTreePresentation.quickOpenFolder(for: canonical, in: root), "技术学习")
+        XCTAssertEqual(NoteTreePresentation.quickOpenFolder(for: backup, in: root),
+                       "导入暂存/backup/技术学习")
+        XCTAssertEqual(NoteTreePresentation.quickOpenFolder(
+            for: root.appendingPathComponent("Home.md"), in: root), "Workspace Root")
+        XCTAssertEqual(NoteTreePresentation.quickOpenFolder(for: canonical, in: nil), "技术学习")
+    }
+
     @MainActor
     func testNewNoteUsesCurrentFolderWithoutOverwritingExisting() async throws {
         let defaults = UserDefaults.standard
