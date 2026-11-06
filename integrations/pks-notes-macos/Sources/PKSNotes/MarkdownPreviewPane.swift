@@ -11,33 +11,56 @@ struct ParsedMarkdownSection: Identifiable {
 
 enum MarkdownPreviewParsing {
     static func prepare(_ text: String, match: SearchHit?) -> [ParsedMarkdownSection] {
-        // Preserve whole-document references/footnotes unless a search match needs section navigation.
-        let parts = match == nil
-            ? [MarkdownSection(id: 0, heading: nil, markdown: text)]
-            : MarkdownSection.sections(in: text)
+        // A single giant Markdown view lays out the entire document on the main thread.
+        // Large notes without shared reference definitions can be split at headings:
+        // LazyVStack then constructs only the nearby section views. Keep whole-document
+        // parsing for reference links and footnotes (e.g. [ref]: or [^note]:) because
+        // their definitions may be used in another section.
+        let lazySections = text.utf8.count >= 24_000 && !text.contains("]:")
+        let parts = match != nil || lazySections
+            ? MarkdownSection.sections(in: text)
+            : [MarkdownSection(id: 0, heading: nil, markdown: text)]
         return parts.map { ParsedMarkdownSection(source: $0, content: MarkdownContent($0.markdown)) }
     }
 }
 
-/// View-local parsed snapshot. The NotesModel is still the sole authority for Markdown text.
+/// One transient, parsed snapshot belongs to the window, surviving Edit / Split / Read
+/// transitions. Neither parsed blocks nor theme preferences are Markdown content authorities.
+struct MarkdownPreviewSnapshot {
+    let identity: String
+    let source: String
+    let matchID: String?
+    let sections: [ParsedMarkdownSection]
+
+    func matches(identity: String, source: String, matchID: String?) -> Bool {
+        self.identity == identity && self.source == source && self.matchID == matchID
+    }
+}
+
+/// Native preview uses a window-owned parsed snapshot, independent of view lifetime.
 struct MarkdownPreviewPane: View {
     @EnvironmentObject private var model: NotesModel
     let source: String
     let live: Bool
-
-    private struct DocumentKey: Hashable {
-        let source: String
-        let matchID: String?
-    }
+    let identity: String
+    let theme: NotesTheme
+    @Binding var cache: MarkdownPreviewSnapshot?
 
     private struct RenderKey: Hashable {
-        let document: DocumentKey
+        let identity: String
+        let source: String
+        let matchID: String?
         let live: Bool
     }
 
-    @State private var rendered: [ParsedMarkdownSection] = []
-    @State private var renderedDocument: DocumentKey?
     @State private var renderedRevision = 0
+
+    private var rendered: [ParsedMarkdownSection] {
+        guard let cache,
+              cache.matches(identity: identity, source: source, matchID: model.activeMatch?.id)
+        else { return [] }
+        return cache.sections
+    }
 
     var body: some View {
         ScrollViewReader { scroll in
@@ -49,7 +72,8 @@ struct MarkdownPreviewPane: View {
                     LazyVStack(alignment: .leading, spacing: 4) {
                         ForEach(rendered) { part in
                             Markdown(part.content)
-                                .markdownTheme(.pksReading)
+                                .markdownTheme(.pksReading(theme))
+                                .font(.system(size: 16, design: theme.readingFont))
                                 .markdownImageProvider(LocalMarkdownImageProvider(note: model.selected, root: model.root))
                                 .environment(\.openURL, OpenURLAction { url in
                                     if url.scheme == nil || url.isFileURL {
@@ -73,6 +97,7 @@ struct MarkdownPreviewPane: View {
                     .padding(.vertical, 36)
                 }
             }
+            .onAppear { jumpToMatch(scroll) }
             .onChange(of: renderedRevision) { _, _ in
                 jumpToMatch(scroll)
             }
@@ -80,28 +105,31 @@ struct MarkdownPreviewPane: View {
                 jumpToMatch(scroll)
             }
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(theme.canvas)
         .accessibilityIdentifier("pks-markdown-preview")
-        .task(id: RenderKey(document: DocumentKey(source: source, matchID: model.activeMatch?.id),
-                            live: live)) {
-            let document = DocumentKey(source: source, matchID: model.activeMatch?.id)
-            // Switching Split -> Read reuses already-parsed content when it is up to date.
-            guard renderedDocument != document else { return }
-            // Split coalesces even initial rapid typing; Read flushes to the latest text.
-            if live {
-                do { try await Task.sleep(for: .milliseconds(320)) }
+        .task(id: RenderKey(identity: identity, source: source,
+                            matchID: model.activeMatch?.id, live: live)) {
+            let match = model.activeMatch
+            let matchID = match?.id
+            guard cache?.matches(identity: identity, source: source, matchID: matchID) != true
+            else { return }
+
+            // Only debounce edits to the *same* open document. First preview has no artificial delay.
+            if live, let old = cache, old.identity == identity, old.source != source {
+                do { try await Task.sleep(for: .milliseconds(260)) }
                 catch { return }
             }
             guard !Task.isCancelled else { return }
-            let match = model.activeMatch
+            let input = source
+            let documentID = identity
             let parser = Task.detached(priority: .userInitiated) {
-                MarkdownPreviewParsing.prepare(document.source, match: match)
+                MarkdownPreviewParsing.prepare(input, match: match)
             }
             defer { parser.cancel() }
-            let result = await parser.value
+            let sections = await parser.value
             guard !Task.isCancelled else { return }
-            rendered = result
-            renderedDocument = document
+            cache = MarkdownPreviewSnapshot(identity: documentID, source: input,
+                                            matchID: matchID, sections: sections)
             renderedRevision &+= 1
         }
     }
@@ -121,8 +149,10 @@ struct MarkdownPreviewPane: View {
 private extension Theme {
     /// Editorial reading layout: native text colors, quieter headings and comfortable CJK spacing.
     /// The Markdown parser and source file remain unchanged.
-    static let pksReading = Theme.basic
+    static func pksReading(_ theme: NotesTheme) -> Theme {
+        Theme.basic
         .text {
+            ForegroundColor(theme.ink)
             FontSize(16)
         }
         .heading1 { configuration in
@@ -158,10 +188,10 @@ private extension Theme {
         .blockquote { configuration in
             HStack(alignment: .top, spacing: 12) {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.secondary.opacity(0.35))
+                    .fill(theme.ink.opacity(0.30))
                     .frame(width: 3)
                 configuration.label
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.ink.opacity(0.75))
             }
             .markdownMargin(top: .rem(0.5), bottom: .rem(1))
         }
@@ -180,8 +210,9 @@ private extension Theme {
                     }
                     .padding(18)
             }
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(theme.codeBackground)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .markdownMargin(top: .rem(0.7), bottom: .rem(1.3))
         }
+    }
 }
