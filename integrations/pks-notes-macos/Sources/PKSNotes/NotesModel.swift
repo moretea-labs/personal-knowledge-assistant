@@ -182,6 +182,29 @@ enum WorkspaceFiles {
         return nil
     }
 
+    static func storePastedPNG(_ data: Data, for note: URL, in root: URL, stem: String = "pasted-image") -> String? {
+        guard contains(note, in: root), ["md", "markdown"].contains(note.pathExtension.lowercased()),
+              !data.isEmpty else { return nil }
+        let folder = note.deletingLastPathComponent().appendingPathComponent("attachments", isDirectory: true)
+        guard contains(folder, in: root) else { return nil }
+
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for index in 1...10_000 {
+                let suffix = index == 1 ? "" : "-\(index)"
+                let filename = stem + suffix + ".png"
+                let destination = folder.appendingPathComponent(filename)
+                if !FileManager.default.fileExists(atPath: destination.path) {
+                    try data.write(to: destination, options: .atomic)
+                    return "attachments/" + filename
+                }
+            }
+        } catch {
+            return nil
+        }
+        return nil
+    }
+
     static func safeNewNoteName(_ name: String) -> String? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != ".", trimmed != "..",
@@ -928,6 +951,106 @@ final class NotesModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    func copyItem(_ item: URL, to directory: URL) -> URL? {
+        let target = item.standardizedFileURL
+        let folder = directory.standardizedFileURL
+        guard canManage(target), let root,
+              (folder == root.standardizedFileURL || WorkspaceFiles.contains(folder, in: root)) else {
+            message = "Choose a destination inside the notes folder."; return nil
+        }
+        var info = Darwin.stat()
+        guard folder.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR) else {
+            message = "Choose an existing destination folder."; return nil
+        }
+        var targetInfo = Darwin.stat()
+        guard target.path.withCString({ Darwin.lstat($0, &targetInfo) }) == 0 else {
+            message = "The original item is no longer available."; return nil
+        }
+        let targetIsDirectory = (targetInfo.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR)
+        if targetIsDirectory && (folder == target || folder.path.hasPrefix(target.path + "/")) {
+            message = "A folder cannot be copied inside itself."; return nil
+        }
+
+        let destination = folder.appendingPathComponent(target.lastPathComponent).standardizedFileURL
+        guard destination != target, !FileManager.default.fileExists(atPath: destination.path) else {
+            message = "The destination already contains an item with this name."; return nil
+        }
+
+        do {
+            try FileManager.default.copyItem(at: target, to: destination)
+            refresh()
+            message = nil
+            return destination
+        } catch {
+            message = "Could not copy item: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    @discardableResult
+    func moveItem(_ item: URL, to directory: URL,
+                  navigationDecision: UnsavedNoteDecision? = nil) -> URL? {
+        let target = item.standardizedFileURL
+        let folder = directory.standardizedFileURL
+        guard canManage(target), let root,
+              (folder == root.standardizedFileURL || WorkspaceFiles.contains(folder, in: root)) else {
+            message = "Choose a destination inside the notes folder."; return nil
+        }
+        var info = Darwin.stat()
+        guard folder.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR) else {
+            message = "Choose an existing destination folder."; return nil
+        }
+        var targetInfo = Darwin.stat()
+        guard target.path.withCString({ Darwin.lstat($0, &targetInfo) }) == 0 else {
+            message = "The original item is no longer available."; return nil
+        }
+        let targetIsDirectory = (targetInfo.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR)
+        if targetIsDirectory && (folder == target || folder.path.hasPrefix(target.path + "/")) {
+            message = "A folder cannot be moved inside itself."; return nil
+        }
+
+        let destination = folder.appendingPathComponent(target.lastPathComponent).standardizedFileURL
+        if destination == target { return target }
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            message = "The destination already contains an item with this name."; return nil
+        }
+
+        let oldSelected = selected
+        let oldPDF = previewPDF
+        let oldRequested = requestedNote
+        let affected = isInside(oldSelected, item: target)
+            || isInside(oldPDF, item: target) || isInside(oldRequested, item: target)
+        if affected && !confirmLeavingNote(decision: navigationDecision) { return nil }
+
+        func rebased(_ url: URL?) -> URL? {
+            guard let url, isInside(url, item: target) else { return nil }
+            if url == target { return destination }
+            return destination.appendingPathComponent(String(url.path.dropFirst(target.path.count + 1)))
+        }
+
+        do {
+            try FileManager.default.moveItem(at: target, to: destination)
+            if let newSelected = rebased(oldSelected) ?? rebased(oldRequested) {
+                loadNote(newSelected)
+            } else if let newPDF = rebased(oldPDF) {
+                previewPDF = newPDF
+            }
+            if let previous = UserDefaults.standard.string(forKey: "PKSNotesLastOpenedMarkdown"),
+               let moved = rebased(URL(fileURLWithPath: previous)) {
+                UserDefaults.standard.set(moved.path, forKey: "PKSNotesLastOpenedMarkdown")
+            }
+            refresh()
+            message = nil
+            return destination
+        } catch {
+            message = "Could not move item: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     func revealInFinder(_ file: URL) {
         guard file.isFileURL, FileManager.default.fileExists(atPath: file.path) else {
             message = "The original file is not available locally."
@@ -949,6 +1072,27 @@ final class NotesModel: ObservableObject {
     func openSourceLink(_ url: URL) {
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    func importClipboardImage() -> String? {
+        guard let root, let selected else { return nil }
+        let pasteboard = NSPasteboard.general
+        let image: NSImage?
+        if let data = pasteboard.data(forType: .png) {
+            image = NSImage(data: data)
+        } else {
+            image = NSImage(pasteboard: pasteboard)
+        }
+
+        guard let image,
+              let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:]),
+              let relative = WorkspaceFiles.storePastedPNG(png, for: selected, in: root) else {
+            return nil
+        }
+        refresh()
+        return "![Pasted image](\(relative))"
     }
 
     func copySource(_ value: String) {

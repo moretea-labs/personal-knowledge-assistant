@@ -982,3 +982,143 @@ extension PKSNotesTests {
         )
     }
 }
+
+
+extension PKSNotesTests {
+    func testMarkdownEditingWrapsSelectionAndPrefixesLines() {
+        XCTAssertEqual(
+            MarkdownEditing.apply(.bold, to: "hello world", selection: NSRange(location: 0, length: 5)),
+            MarkdownEditResult(text: "**hello** world", selection: NSRange(location: 2, length: 5))
+        )
+        XCTAssertEqual(
+            MarkdownEditing.apply(.italic, to: "hello", selection: NSRange(location: 5, length: 0)),
+            MarkdownEditResult(text: "hello**", selection: NSRange(location: 6, length: 0))
+        )
+        XCTAssertEqual(
+            MarkdownEditing.apply(.link, to: "hello", selection: NSRange(location: 0, length: 5)),
+            MarkdownEditResult(text: "[hello](url)", selection: NSRange(location: 8, length: 3))
+        )
+        XCTAssertEqual(
+            MarkdownEditing.apply(.heading(2), to: "one\ntwo", selection: NSRange(location: 0, length: 7)).text,
+            "## one\n## two"
+        )
+        XCTAssertEqual(
+            MarkdownEditing.apply(.task, to: "one\ntwo", selection: NSRange(location: 0, length: 7)).text,
+            "- [ ] one\n- [ ] two"
+        )
+    }
+
+    func testMarkdownEditingInsertsAtSelection() {
+        XCTAssertEqual(
+            MarkdownEditing.insert("![Pasted image](attachments/a.png)",
+                                   into: "before after",
+                                   selection: NSRange(location: 7, length: 5)),
+            MarkdownEditResult(
+                text: "before ![Pasted image](attachments/a.png)",
+                selection: NSRange(location: 41, length: 0)
+            )
+        )
+    }
+
+    func testPastedPNGUsesWorkspaceLocalAttachmentAndCollisionSafeName() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let note = root.appendingPathComponent("Note.md")
+        try "# Note".write(to: note, atomically: true, encoding: .utf8)
+
+        let bytes = Data([0x89, 0x50, 0x4E, 0x47])
+        let first = WorkspaceFiles.storePastedPNG(bytes, for: note, in: root)
+        let second = WorkspaceFiles.storePastedPNG(bytes, for: note, in: root)
+        XCTAssertEqual(first, "attachments/pasted-image.png")
+        XCTAssertEqual(second, "attachments/pasted-image-2.png")
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(first!)), bytes)
+        XCTAssertNil(
+            WorkspaceFiles.storePastedPNG(bytes,
+                                          for: fm.temporaryDirectory.appendingPathComponent("Outside.md"),
+                                          in: root)
+        )
+    }
+
+    @MainActor
+    func testCopyAndMoveItemsStayInsideWorkspaceAndRebaseOpenNote() async throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let archive = root.appendingPathComponent("Archive", isDirectory: true)
+        let copies = root.appendingPathComponent("Copies", isDirectory: true)
+        let outside = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: archive, withIntermediateDirectories: true)
+        try fm.createDirectory(at: copies, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer {
+            try? fm.removeItem(at: root)
+            try? fm.removeItem(at: outside)
+        }
+
+        let note = root.appendingPathComponent("Note.md")
+        try "# Original".write(to: note, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        model.openWorkspace(root)
+        model.openNote(note)
+        await waitForNote(model, note)
+
+        let copied = model.copyItem(note, to: copies)
+        XCTAssertEqual(copied, copies.appendingPathComponent("Note.md"))
+        XCTAssertEqual(try String(contentsOf: copied!, encoding: .utf8), "# Original")
+        XCTAssertNil(model.copyItem(note, to: outside))
+
+        let moved = model.moveItem(note, to: archive, navigationDecision: .discard)
+        XCTAssertEqual(moved, archive.appendingPathComponent("Note.md"))
+        await waitForNote(model, archive.appendingPathComponent("Note.md"))
+        XCTAssertFalse(fm.fileExists(atPath: note.path))
+        XCTAssertEqual(model.selected, archive.appendingPathComponent("Note.md"))
+
+        // The workspace root is a valid destination even though path containment
+        // intentionally excludes root itself when validating document paths.
+        let copiedToRoot = model.copyItem(copied!, to: root)
+        XCTAssertEqual(copiedToRoot, note)
+        XCTAssertEqual(try String(contentsOf: copiedToRoot!, encoding: .utf8), "# Original")
+        try fm.removeItem(at: copiedToRoot!)
+
+        let returned = model.moveItem(moved!, to: root, navigationDecision: .discard)
+        XCTAssertEqual(returned, note)
+        await waitForNote(model, note)
+        XCTAssertEqual(model.selected, note)
+    }
+}
+
+
+extension PKSNotesTests {
+    @MainActor
+    func testMoveAndCopyFolderRejectDescendantDestination() throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let parent = root.appendingPathComponent("Parent", isDirectory: true)
+        let child = parent.appendingPathComponent("Child", isDirectory: true)
+        try fm.createDirectory(at: child, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let model = NotesModel()
+        model.openWorkspace(root)
+        XCTAssertNil(model.moveItem(parent, to: child, navigationDecision: .discard))
+        XCTAssertTrue(fm.fileExists(atPath: parent.path))
+        XCTAssertNil(model.copyItem(parent, to: child))
+        XCTAssertTrue(fm.fileExists(atPath: parent.path))
+    }
+}

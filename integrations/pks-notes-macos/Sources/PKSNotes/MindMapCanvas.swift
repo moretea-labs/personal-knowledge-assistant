@@ -10,6 +10,7 @@ struct MindMapCanvas: View {
     @State private var collapsed: Set<Int> = []
     @State private var zoom: CGFloat = 1.0
     @State private var dropTargetID: Int?
+    @State private var gestureBaseZoom: CGFloat?
     @FocusState private var canvasFocused: Bool
 
     private var nodes: [MindMapNode] { MindMapOutline.nodes(in: source) }
@@ -34,22 +35,36 @@ struct MindMapCanvas: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            ScrollView([.horizontal, .vertical]) {
-                if nodes.isEmpty {
-                    Text("Add Markdown headings or lists to begin.")
-                        .foregroundStyle(.secondary)
-                        .frame(minWidth: 560, minHeight: 320)
-                } else {
-                    spatialCanvas(mapLayout)
-                        .scaleEffect(zoom, anchor: .topLeading)
-                        .frame(
-                            width: mapLayout.size.width * zoom,
-                            height: mapLayout.size.height * zoom,
-                            alignment: .topLeading
-                        )
+            GeometryReader { viewport in
+                ScrollView([.horizontal, .vertical]) {
+                    if nodes.isEmpty {
+                        Text("Add Markdown headings or lists to begin.")
+                            .foregroundStyle(.secondary)
+                            .frame(minWidth: max(560, viewport.size.width),
+                                   minHeight: max(320, viewport.size.height))
+                    } else {
+                        spatialCanvas(mapLayout)
+                            .scaleEffect(zoom, anchor: .topLeading)
+                            .frame(
+                                width: max(viewport.size.width, mapLayout.size.width * zoom),
+                                height: max(viewport.size.height, mapLayout.size.height * zoom),
+                                alignment: .topLeading
+                            )
+                    }
+                }
+                .background(Color.primary.opacity(0.012))
+                .simultaneousGesture(
+                    MagnifyGesture()
+                        .onChanged { value in
+                            if gestureBaseZoom == nil { gestureBaseZoom = zoom }
+                            zoom = clampedZoom((gestureBaseZoom ?? zoom) * value.magnification)
+                        }
+                        .onEnded { _ in gestureBaseZoom = nil }
+                )
+                .onReceive(NotificationCenter.default.publisher(for: .pksMindMapFit)) { _ in
+                    fitToContent(viewport: viewport.size)
                 }
             }
-            .background(Color.primary.opacity(0.012))
         }
         .alert("Rename Node", isPresented: $renaming) {
             TextField("Title", text: $renameTitle)
@@ -121,14 +136,21 @@ struct MindMapCanvas: View {
 
             Divider().frame(height: 18)
 
-            Button { zoom = max(0.65, zoom - 0.15) } label: {
+            Button {
+                NotificationCenter.default.post(name: .pksMindMapFit, object: nil)
+            } label: {
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+            }
+            .help("Fit map to window")
+
+            Button { zoom = clampedZoom(zoom - 0.15) } label: {
                 Image(systemName: "minus.magnifyingglass")
             }
             .help("Zoom out")
             Text("(Int(zoom * 100))%")
                 .font(.caption.monospacedDigit())
                 .frame(width: 45)
-            Button { zoom = min(1.75, zoom + 0.15) } label: {
+            Button { zoom = clampedZoom(zoom + 0.15) } label: {
                 Image(systemName: "plus.magnifyingglass")
             }
             .help("Zoom in")
@@ -264,6 +286,17 @@ struct MindMapCanvas: View {
         return nodes[index + 1].depth > node.depth
     }
 
+    private func clampedZoom(_ value: CGFloat) -> CGFloat {
+        min(1.80, max(0.45, value))
+    }
+
+    private func fitToContent(viewport: CGSize) {
+        guard !mapLayout.placements.isEmpty else { return }
+        let horizontal = max(0.1, (viewport.width - 36) / mapLayout.size.width)
+        let vertical = max(0.1, (viewport.height - 36) / mapLayout.size.height)
+        zoom = clampedZoom(min(horizontal, vertical, 1.25))
+    }
+
     private func moveSelection(by offset: Int) {
         let rows = visible
         guard !rows.isEmpty else {
@@ -295,4 +328,8 @@ struct MindMapCanvas: View {
         source = updated
         collapsed.removeAll()
     }
+}
+
+extension Notification.Name {
+    static let pksMindMapFit = Notification.Name("PKSNotesMindMapFit")
 }

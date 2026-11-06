@@ -34,6 +34,38 @@ struct PKSNotesApp: App {
         .commands {
             // This single-window editor uses Cmd+N for a note, not another app window.
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .pasteboard) {
+                Button("Cut") { NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil) }
+                    .keyboardShortcut("x", modifiers: .command)
+                Button("Copy") { NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) }
+                    .keyboardShortcut("c", modifiers: .command)
+                Button("Paste") {
+                    NotificationCenter.default.post(name: NotesMenuEvent.paste, object: nil)
+                }
+                .keyboardShortcut("v", modifiers: .command)
+            }
+            CommandMenu("Markdown") {
+                Button("Bold") { NotesMenuEvent.postFormat("bold") }
+                    .keyboardShortcut("b", modifiers: .command)
+                Button("Italic") { NotesMenuEvent.postFormat("italic") }
+                    .keyboardShortcut("i", modifiers: .command)
+                Button("Inline Code") { NotesMenuEvent.postFormat("code") }
+                    .keyboardShortcut("e", modifiers: .command)
+                Button("Link") { NotesMenuEvent.postFormat("link") }
+                    .keyboardShortcut("k", modifiers: .command)
+                Divider()
+                Button("Heading 1") { NotesMenuEvent.postFormat("h1") }
+                    .keyboardShortcut("1", modifiers: [.command, .shift])
+                Button("Heading 2") { NotesMenuEvent.postFormat("h2") }
+                    .keyboardShortcut("2", modifiers: [.command, .shift])
+                Button("Heading 3") { NotesMenuEvent.postFormat("h3") }
+                    .keyboardShortcut("3", modifiers: [.command, .shift])
+                Divider()
+                Button("Bullet List") { NotesMenuEvent.postFormat("bullet") }
+                    .keyboardShortcut("8", modifiers: [.command, .shift])
+                Button("Task") { NotesMenuEvent.postFormat("task") }
+                    .keyboardShortcut("9", modifiers: [.command, .shift])
+            }
             CommandMenu("PKS") {
                 Button("New Markdown Note") {
                     NotificationCenter.default.post(name: NotesMenuEvent.newNote, object: nil)
@@ -91,6 +123,12 @@ private enum NotesMenuEvent {
     static let newNote = Notification.Name("PKSNotesMenuNewNote")
     static let search = Notification.Name("PKSNotesMenuSearch")
     static let toggleEdit = Notification.Name("PKSNotesToggleEditPreview")
+    static let paste = Notification.Name("PKSNotesPaste")
+    static let markdownFormat = Notification.Name("PKSNotesMarkdownFormat")
+
+    static func postFormat(_ value: String) {
+        NotificationCenter.default.post(name: markdownFormat, object: value)
+    }
 }
 
 private enum SidebarTab: String, CaseIterable {
@@ -157,6 +195,7 @@ struct NotesWindow: View {
     @State private var confirmingFolderTrash = false
     @State private var expandedFolderPaths: Set<String> = []
     @State private var treeCursorPath: String?
+    @State private var fileDropTargetPath: String?
     @FocusState private var searchFieldFocused: Bool
     @FocusState private var treeFocused: Bool
     @FocusState private var quickOpenFocused: Bool
@@ -340,6 +379,13 @@ struct NotesWindow: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.toggleEdit)) { _ in
             toggleEditPreview()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.markdownFormat)) { note in
+            guard let value = note.object as? String else { return }
+            applyMarkdownFormat(value)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.paste)) { _ in
+            handlePaste()
         }
         .task(id: PreviewWarmupKey(
             identity: model.selected?.path ?? "",
@@ -706,9 +752,35 @@ struct NotesWindow: View {
                         }
                         .padding(.leading, CGFloat(row.depth) * NotesGeometry.treeIndent)
                         .background(isSelected ? Color.primary.opacity(theme == .graphite ? 0.15 : 0.075)
-                                    : treeFocused && treeCursorPath == row.id
-                                        ? Color.primary.opacity(0.04) : .clear,
+                                    : fileDropTargetPath == row.id
+                                        ? theme.linkColor.opacity(0.12)
+                                        : treeFocused && treeCursorPath == row.id
+                                            ? Color.primary.opacity(0.04) : .clear,
                                     in: RoundedRectangle(cornerRadius: NotesGeometry.selectionCorner))
+                        .overlay {
+                            if row.item.isFolder && fileDropTargetPath == row.id {
+                                RoundedRectangle(cornerRadius: NotesGeometry.selectionCorner)
+                                    .stroke(theme.linkColor.opacity(0.75), lineWidth: 1.5)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .draggable(row.item.url)
+                        .dropDestination(for: URL.self) { urls, _ in
+                            guard row.item.isFolder,
+                                  let source = urls.first?.standardizedFileURL,
+                                  model.canManage(source),
+                                  source != row.item.url else { return false }
+                            let moved = model.moveItem(source, to: row.item.url)
+                            if moved != nil {
+                                expandedFolderPaths.insert(row.item.url.path)
+                                fileDropTargetPath = nil
+                                return true
+                            }
+                            return false
+                        } isTargeted: { targeted in
+                            guard row.item.isFolder else { return }
+                            fileDropTargetPath = targeted ? row.id : nil
+                        }
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
                         .contextMenu {
@@ -1082,6 +1154,12 @@ struct NotesWindow: View {
             Button("Rename…", systemImage: "pencil") {
                 beginRename(url)
             }
+            Button("Move to Folder…", systemImage: "folder.badge.gearshape") {
+                chooseDestination(for: url, copying: false)
+            }
+            Button("Copy to Folder…", systemImage: "doc.on.doc") {
+                chooseDestination(for: url, copying: true)
+            }
             Button(role: .destructive) {
                 requestMoveToTrash(url)
             } label: {
@@ -1105,6 +1183,80 @@ struct NotesWindow: View {
             Button("Copy Source Identifier", systemImage: "doc.on.doc") {
                 model.copySource(hit.uri)
             }
+        }
+    }
+
+    private func chooseDestination(for item: URL, copying: Bool) {
+        guard let root = model.root else { return }
+        let panel = NSOpenPanel()
+        panel.title = copying ? "Copy to Folder" : "Move to Folder"
+        panel.message = "Choose a destination inside the current notes workspace."
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = item.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        guard WorkspaceFiles.contains(folder, in: root) || folder.standardizedFileURL == root.standardizedFileURL else {
+            model.message = "Choose a destination inside the current notes workspace."
+            return
+        }
+        if copying {
+            _ = model.copyItem(item, to: folder)
+        } else {
+            _ = model.moveItem(item, to: folder)
+        }
+    }
+
+    private func applyMarkdownFormat(_ value: String) {
+        guard editorFocused, model.selected != nil,
+              model.externalBody == nil,
+              let textView = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
+        let command: MarkdownEditCommand
+        switch value {
+        case "bold": command = .bold
+        case "italic": command = .italic
+        case "code": command = .inlineCode
+        case "link": command = .link
+        case "h1": command = .heading(1)
+        case "h2": command = .heading(2)
+        case "h3": command = .heading(3)
+        case "bullet": command = .bullet
+        case "task": command = .task
+        default: return
+        }
+        let result = MarkdownEditing.apply(command, to: model.draft, selection: textView.selectedRange())
+        model.draft = result.text
+        DispatchQueue.main.async {
+            textView.setSelectedRange(result.selection)
+            textView.scrollRangeToVisible(result.selection)
+        }
+    }
+
+    private func handlePaste() {
+        guard editorFocused, model.selected != nil,
+              model.externalBody == nil,
+              let textView = NSApp.keyWindow?.firstResponder as? NSTextView else {
+            NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+            return
+        }
+
+        let pasteboard = NSPasteboard.general
+        let hasImage = pasteboard.data(forType: .png) != nil
+            || pasteboard.data(forType: .tiff) != nil
+            || NSImage(pasteboard: pasteboard) != nil
+        guard hasImage else {
+            NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+            return
+        }
+        guard let markdown = model.importClipboardImage() else {
+            model.message = "Could not save the pasted image inside this notes workspace."
+            return
+        }
+        let result = MarkdownEditing.insert(markdown, into: model.draft, selection: textView.selectedRange())
+        model.draft = result.text
+        DispatchQueue.main.async {
+            textView.setSelectedRange(result.selection)
+            textView.scrollRangeToVisible(result.selection)
         }
     }
 
