@@ -120,13 +120,12 @@ struct NotesWindow: View {
                 }
             }
             ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    model.save()
-                } label: {
-                    Image(systemName: model.isDirty ? "square.and.arrow.down.fill" : "square.and.arrow.down")
+                if model.autoSavePending && model.selected != nil {
+                    ProgressView()
+                        .controlSize(.small)
+                        .help("Saving Markdown automatically…")
+                        .accessibilityIdentifier("pks-autosave-progress")
                 }
-                .disabled(model.selected == nil || model.loadingNote || !model.isDirty)
-                .help(model.isDirty ? "Save changes (⌘S)" : "All changes saved")
 
                 Button {
                     newNoteParent = nil
@@ -221,14 +220,30 @@ struct NotesWindow: View {
                     .padding(.horizontal, 14)
             }
 
-            Picker("Sidebar", selection: $sidebarTab) {
+            HStack(spacing: 14) {
                 ForEach(SidebarTab.allCases, id: \.self) { tab in
-                    Text(tab.rawValue).tag(tab)
+                    Button {
+                        sidebarTab = tab
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: tab == .notes ? "folder" : "text.magnifyingglass")
+                            Text(tab == .notes ? "Files" : "Results")
+                        }
+                        .font(.system(size: 12, weight: sidebarTab == tab ? .semibold : .regular))
+                        .foregroundStyle(sidebarTab == tab ? .primary : .secondary)
+                        .padding(.vertical, 4)
+                        .overlay(alignment: .bottom) {
+                            if sidebarTab == tab {
+                                Capsule().fill(Color.accentColor).frame(height: 2)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("pks-sidebar-\(tab.rawValue.lowercased())")
                 }
+                Spacer(minLength: 0)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 14)
 
             List {
                 if sidebarTab == .search {
@@ -561,10 +576,11 @@ struct NotesWindow: View {
 
     private var editor: some View {
         TextEditor(text: $model.draft)
-            .font(.system(size: 14, design: .monospaced))
+            .font(.system(size: 15, design: .monospaced))
             .scrollContentBackground(.hidden)
             .background(Color(nsColor: .textBackgroundColor))
-            .padding(10)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 16)
             // The old draft remains intact until an off-main file load succeeds.
             .disabled(model.loadingNote)
             .accessibilityIdentifier("pks-markdown-editor")

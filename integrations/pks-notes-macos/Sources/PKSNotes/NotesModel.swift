@@ -147,7 +147,10 @@ final class NotesModel: ObservableObject {
     @Published private(set) var loadingNote = false
     @Published private(set) var selected: URL?
     @Published private(set) var previewPDF: URL?
-    @Published var draft: String = ""
+    @Published var draft: String = "" {
+        didSet { scheduleAutoSave() }
+    }
+    @Published private(set) var autoSavePending = false
     @Published private(set) var baseline: String = ""
     @Published private(set) var externalTitle: String?
     @Published private(set) var externalBody: String?
@@ -161,6 +164,7 @@ final class NotesModel: ObservableObject {
     @Published var message: String?
     @Published private(set) var searchStatus = "PKS search · 127.0.0.1:3217"
     private var savedModification: Date?
+    private var autoSaveTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var noteLoadTask: Task<Void, Never>?
     private var requestedNote: URL?
@@ -172,6 +176,24 @@ final class NotesModel: ObservableObject {
     var title: String { externalTitle ?? previewPDF?.lastPathComponent ?? selected?.lastPathComponent ?? "Select a note" }
     var body: String { externalBody ?? draft }
     var groupedHits: [SearchResultGroup] { SearchResultGroup.group(hits) }
+
+    /// The Markdown file remains the only writer/authority; the task only schedules save().
+    private func scheduleAutoSave() {
+        autoSaveTask?.cancel()
+        guard !loadingNote, isDirty, let note = selected else {
+            autoSavePending = false
+            return
+        }
+        autoSavePending = true
+        let snapshot = draft
+        autoSaveTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(650)) }
+            catch { return }
+            guard !Task.isCancelled, let self,
+                  self.selected == note, self.draft == snapshot, self.isDirty else { return }
+            self.save()
+        }
+    }
 
     init() {
         let preferences = UserDefaults.standard
@@ -278,6 +300,12 @@ final class NotesModel: ObservableObject {
     /// Discard only authorizes the destination; the old draft is kept if opening fails.
     func confirmLeavingNote(decision: UnsavedNoteDecision? = nil) -> Bool {
         guard isDirty else { return true }
+        // Ordinary navigation flushes pending autosave without a modal confirmation.
+        // On an external edit conflict, keep the existing Save/Discard/Cancel guard.
+        if decision == nil {
+            save()
+            if !isDirty { return true }
+        }
         let selectedDecision: UnsavedNoteDecision
         if let decision {
             selectedDecision = decision
@@ -415,6 +443,7 @@ final class NotesModel: ObservableObject {
     func save() {
         guard !loadingNote, isDirty, let root, let selected,
               WorkspaceFiles.contains(selected, in: root) else { return }
+        defer { autoSavePending = false }
         do {
             let attrs = try FileManager.default.attributesOfItem(atPath: selected.path)
             let actual = attrs[.modificationDate] as? Date
@@ -428,8 +457,11 @@ final class NotesModel: ObservableObject {
             baseline = draft
             let updated = try FileManager.default.attributesOfItem(atPath: selected.path)
             savedModification = updated[.modificationDate] as? Date
-            message = selected.path.contains("/Mobile Documents/")
-                ? "Saved to iCloud Markdown file." : "Saved to Markdown file."
+            // Successful saves are silent; the native toolbar only shows pending progress.
+            if message?.hasPrefix("Save failed:") == true ||
+               message?.hasPrefix("The file changed outside") == true {
+                message = nil
+            }
         } catch {
             message = "Save failed: \(error.localizedDescription)"
         }

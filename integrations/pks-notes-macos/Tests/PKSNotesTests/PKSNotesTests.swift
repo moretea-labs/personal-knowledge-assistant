@@ -44,6 +44,60 @@ final class PKSNotesTests: XCTestCase {
                                                   snippet: hit.snippet, query: "Search"), 1)
     }
 
+    @MainActor
+    func testDebouncedAutosaveFlushesOnNavigationAndNeverOverwritesExternalChanges() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let previous { defaults.set(previous, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        let first = folder.appendingPathComponent("first.md")
+        let second = folder.appendingPathComponent("second.md")
+        try "# First".write(to: first, atomically: true, encoding: .utf8)
+        try "# Second".write(to: second, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        model.openWorkspace(folder)
+        model.openNote(first)
+        await waitForNote(model, first)
+
+        model.draft = "# Updated automatically"
+        XCTAssertTrue(model.autoSavePending)
+        for _ in 0..<100 {
+            if !model.autoSavePending { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertFalse(model.autoSavePending)
+        XCTAssertFalse(model.isDirty)
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "# Updated automatically")
+        XCTAssertFalse(model.message?.contains("Saved to") == true)
+
+        model.draft = "# Flush before leaving"
+        model.openNote(second)
+        await waitForNote(model, second)
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "# Flush before leaving")
+
+        model.openNote(first)
+        await waitForNote(model, first)
+        model.draft = "# Local pending"
+        try "# External revision".write(to: first, atomically: true, encoding: .utf8)
+        for _ in 0..<100 {
+            if !model.autoSavePending { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertFalse(model.autoSavePending)
+        XCTAssertTrue(model.isDirty)
+        XCTAssertEqual(model.draft, "# Local pending")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "# External revision")
+        XCTAssertTrue(model.message?.contains("changed outside") == true)
+    }
+
     func testChineseSearchDecoding() throws {
         let json = Data("""
         [{"documentId":"doc_test","chunkId":"chunk_test","title":"中文学习.md",
