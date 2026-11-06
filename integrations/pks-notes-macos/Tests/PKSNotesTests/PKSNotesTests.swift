@@ -940,3 +940,45 @@ extension PKSNotesTests {
         XCTAssertNil(WorkspaceFiles.resolveKnowledgeTarget("Loose", from: current, in: root))
     }
 }
+
+
+extension PKSNotesTests {
+    func testWorkspaceBacklinksFindWikiAndMarkdownLinksWithoutDuplicateIndex() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let target = root.appendingPathComponent("Target.md")
+        let wiki = root.appendingPathComponent("Wiki.md")
+        let markdown = root.appendingPathComponent("Markdown.md")
+        let unrelated = root.appendingPathComponent("Other.md")
+        try "# Target".write(to: target, atomically: true, encoding: .utf8)
+        try "# Wiki\n- [[Target]]\n- [[Target|again]]".write(to: wiki, atomically: true, encoding: .utf8)
+        try "# Markdown\n[go](Target.md)".write(to: markdown, atomically: true, encoding: .utf8)
+        try "# Other\n[[Missing]]".write(to: unrelated, atomically: true, encoding: .utf8)
+
+        let tree = WorkspaceFiles.tree(in: root)
+        let backlinks = WorkspaceBacklinks.find(target: target, root: root, files: tree)
+        XCTAssertEqual(backlinks.map(\.source), [wiki, markdown])
+        XCTAssertEqual(backlinks.map(\.count), [2, 1])
+    }
+
+    func testKnowledgeTargetResolverUsesSuppliedCandidatesForUniqueBasename() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = root.appendingPathComponent("Nested", isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let current = root.appendingPathComponent("Current.md")
+        let target = folder.appendingPathComponent("Target.md")
+        try "# Current".write(to: current, atomically: true, encoding: .utf8)
+        try "# Target".write(to: target, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(
+            WorkspaceFiles.resolveKnowledgeTarget("Target", from: current, in: root, candidates: [current, target]),
+            target
+        )
+    }
+}

@@ -131,7 +131,12 @@ enum WorkspaceFiles {
 
     /// Resolve a WikiLink/Markdown note target through one deterministic workspace path.
     /// Exact relative/root paths win; basename fallback is accepted only when unique.
-    static func resolveKnowledgeTarget(_ rawTarget: String, from note: URL, in root: URL) -> URL? {
+    static func resolveKnowledgeTarget(
+        _ rawTarget: String,
+        from note: URL,
+        in root: URL,
+        candidates suppliedCandidates: [URL]? = nil
+    ) -> URL? {
         let trimmed = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -158,18 +163,11 @@ enum WorkspaceFiles {
 
         guard !decoded.contains("/") else { return nil }
         let wanted = URL(fileURLWithPath: decoded).deletingPathExtension().lastPathComponent
-        var matches: [URL] = []
-        func collect(_ items: [NoteItem]) {
-            for item in items {
-                if let children = item.children {
-                    collect(children)
-                } else if item.isMarkdown && item.url.deletingPathExtension().lastPathComponent == wanted {
-                    matches.append(item.url.standardizedFileURL)
-                }
-            }
+        let candidates = suppliedCandidates ?? WorkspaceBacklinks.markdownFiles(tree(in: root))
+        let matches = candidates.filter {
+            $0.deletingPathExtension().lastPathComponent == wanted
         }
-        collect(tree(in: root))
-        return matches.count == 1 ? matches[0] : nil
+        return matches.count == 1 ? matches[0].standardizedFileURL : nil
     }
 
     /// Deterministic collision-safe suggestion; O_EXCL remains the final writer guard.
@@ -191,6 +189,56 @@ enum WorkspaceFiles {
               !trimmed.contains("\0") else { return nil }
         let base = trimmed.hasSuffix(".md") ? String(trimmed.dropLast(3)) : trimmed
         return base.isEmpty ? nil : base + ".md"
+    }
+}
+
+struct NoteBacklink: Identifiable, Equatable {
+    let source: URL
+    let count: Int
+
+    var id: String { source.path }
+    var title: String { source.deletingPathExtension().lastPathComponent }
+}
+
+enum WorkspaceBacklinks {
+    static func markdownFiles(_ items: [NoteItem]) -> [URL] {
+        var result: [URL] = []
+        func collect(_ nodes: [NoteItem]) {
+            for item in nodes {
+                if let children = item.children {
+                    collect(children)
+                } else if item.isMarkdown {
+                    result.append(item.url.standardizedFileURL)
+                }
+            }
+        }
+        collect(items)
+        return result
+    }
+
+    static func find(target: URL, root: URL, files: [NoteItem]) -> [NoteBacklink] {
+        let target = target.standardizedFileURL
+        let candidates = markdownFiles(files)
+        var result: [NoteBacklink] = []
+
+        for source in candidates where source != target {
+            guard let content = try? String(contentsOf: source, encoding: .utf8) else { continue }
+            var count = 0
+            for line in content.components(separatedBy: .newlines) {
+                for link in MindMapOutline.links(in: line) {
+                    guard let resolved = WorkspaceFiles.resolveKnowledgeTarget(
+                        link.target, from: source, in: root, candidates: candidates
+                    ) else { continue }
+                    if resolved.standardizedFileURL == target { count += 1 }
+                }
+            }
+            if count > 0 { result.append(.init(source: source, count: count)) }
+        }
+
+        return result.sorted {
+            if $0.count != $1.count { return $0.count > $1.count }
+            return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
     }
 }
 
@@ -218,6 +266,8 @@ final class NotesModel: ObservableObject {
     @Published private(set) var searching = false
     @Published var message: String?
     @Published private(set) var searchStatus = "PKS search · 127.0.0.1:3217"
+    @Published private(set) var backlinks: [NoteBacklink] = []
+    @Published private(set) var loadingBacklinks = false
     private var savedModification: Date?
     private var autoSaveTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
@@ -226,6 +276,7 @@ final class NotesModel: ObservableObject {
     private var loadIdentity: UUID?
     private var pendingMatch: SearchHit?
     private var securityScopedFolder: URL?
+    private var backlinkTask: Task<Void, Never>?
 
     var isDirty: Bool { selected != nil && draft != baseline }
     var title: String { externalTitle ?? previewPDF?.lastPathComponent ?? selected?.lastPathComponent ?? "Select a note" }
@@ -321,6 +372,9 @@ final class NotesModel: ObservableObject {
         message = nil
         UserDefaults.standard.set(resolved.path, forKey: "PKSNotesWorkspace")
         files = []
+        backlinks = []
+        backlinkTask?.cancel()
+        loadingBacklinks = false
         refresh()
         selected = nil
         previewPDF = nil
@@ -501,7 +555,32 @@ final class NotesModel: ObservableObject {
         }
         cancelNoteLoad()
         UserDefaults.standard.set(url.path, forKey: "PKSNotesLastOpenedMarkdown")
+        backlinkTask?.cancel()
+        backlinks = []
+        loadingBacklinks = false
         message = nil
+    }
+
+    func loadBacklinks() {
+        guard let selected else { return }
+        refreshBacklinks(for: selected)
+    }
+
+    private func refreshBacklinks(for note: URL, files suppliedFiles: [NoteItem]? = nil) {
+        guard let root else { return }
+        backlinkTask?.cancel()
+        backlinks = []
+        loadingBacklinks = true
+        let snapshot = suppliedFiles ?? files
+        backlinkTask = Task.detached(priority: .utility) { [weak self] in
+            let found = WorkspaceBacklinks.find(target: note, root: root, files: snapshot)
+            guard !Task.isCancelled, let self else { return }
+            await MainActor.run {
+                guard self.selected == note, self.root == root else { return }
+                self.backlinks = found
+                self.loadingBacklinks = false
+            }
+        }
     }
 
     private func failOpeningNote(_ url: URL, identity: UUID, reason: String) {

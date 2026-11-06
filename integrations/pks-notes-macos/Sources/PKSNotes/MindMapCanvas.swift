@@ -9,6 +9,7 @@ struct MindMapCanvas: View {
     @State private var renaming = false
     @State private var collapsed: Set<Int> = []
     @State private var zoom: CGFloat = 1.0
+    @FocusState private var canvasFocused: Bool
 
     private var nodes: [MindMapNode] { MindMapOutline.nodes(in: source) }
 
@@ -110,8 +111,15 @@ struct MindMapCanvas: View {
                             }
                         }
                         .contentShape(Rectangle())
-                        .onTapGesture { selectedID = node.id }
-                        .onTapGesture(count: 2) { selectedID = node.id; beginRename() }
+                        .onTapGesture {
+                            selectedID = node.id
+                            canvasFocused = true
+                        }
+                        .onTapGesture(count: 2) {
+                            selectedID = node.id
+                            canvasFocused = true
+                            beginRename()
+                        }
                     }
                 }
                 .scaleEffect(zoom, anchor: .topLeading)
@@ -126,7 +134,37 @@ struct MindMapCanvas: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .focusable()
+        .focused($canvasFocused)
+        .onKeyPress(.downArrow) {
+            moveSelection(by: 1)
+            return .handled
+        }
+        .onKeyPress(.upArrow) {
+            moveSelection(by: -1)
+            return .handled
+        }
+        .onKeyPress(.return) {
+            guard selectedID != nil else { return .ignored }
+            beginRename()
+            return .handled
+        }
         .accessibilityIdentifier("pks-mind-map-canvas")
+    }
+
+    private func moveSelection(by offset: Int) {
+        let rows = visible
+        guard !rows.isEmpty else {
+            selectedID = nil
+            return
+        }
+        guard let selectedID,
+              let index = rows.firstIndex(where: { $0.id == selectedID }) else {
+            self.selectedID = offset < 0 ? rows.last?.id : rows.first?.id
+            return
+        }
+        let next = min(max(index + offset, 0), rows.count - 1)
+        self.selectedID = rows[next].id
     }
 
     private func beginRename() {

@@ -138,6 +138,7 @@ struct NotesWindow: View {
     @State private var visibleTreeRows: [NoteTreePresentation.Row] = []
     @State private var allOpenableFiles: [NoteItem] = []
     @State private var showingQuickOpen = false
+    @State private var showingBacklinks = false
     @State private var quickOpenQuery = ""
     @State private var quickOpenIndex = 0
 
@@ -204,6 +205,77 @@ struct NotesWindow: View {
                     .help(showingMindMap ? "Return to Markdown" : "Mind Map")
                     .accessibilityIdentifier("pks-mind-map-toggle")
                 }
+                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
+                    Button {
+                        showingBacklinks.toggle()
+                        if showingBacklinks { model.loadBacklinks() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            toolbarSymbol("link")
+                            if !model.backlinks.isEmpty {
+                                Text("\(model.backlinks.count)")
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help("Backlinks to this note")
+                    .accessibilityIdentifier("pks-backlinks-menu")
+                    .popover(isPresented: $showingBacklinks, arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            HStack {
+                                Text("Backlinks").font(.headline)
+                                Spacer()
+                                if model.loadingBacklinks {
+                                    ProgressView().controlSize(.small)
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            Divider()
+                            if model.loadingBacklinks {
+                                Text("Finding notes that link here…")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .padding(16)
+                            } else if model.backlinks.isEmpty {
+                                Text("No backlinks in this workspace.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .padding(16)
+                            } else {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ForEach(model.backlinks) { backlink in
+                                        Button {
+                                            showingBacklinks = false
+                                            model.openFile(backlink.source)
+                                        } label: {
+                                            HStack {
+                                                Image(systemName: "doc.text")
+                                                    .foregroundStyle(.secondary)
+                                                Text(backlink.title)
+                                                Spacer()
+                                                if backlink.count > 1 {
+                                                    Text("\(backlink.count)")
+                                                        .font(.caption.monospacedDigit())
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                            }
+                                            .contentShape(Rectangle())
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 7)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(6)
+                            }
+                        }
+                        .frame(width: 300)
+                    }
+                }
+
                 if model.autoSavePending && model.selected != nil {
                     ProgressView()
                         .controlSize(.small)
@@ -285,6 +357,7 @@ struct NotesWindow: View {
         }
         .onChange(of: model.selected) { _, note in
             showingMindMap = false
+            showingBacklinks = false
             if let note, let root = model.root {
                 expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: note, in: root))
                 treeCursorPath = note.path
