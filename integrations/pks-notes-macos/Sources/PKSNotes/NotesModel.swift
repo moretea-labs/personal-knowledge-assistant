@@ -268,6 +268,9 @@ final class NotesModel: ObservableObject {
     @Published private(set) var searchStatus = "PKS search · 127.0.0.1:3217"
     @Published private(set) var backlinks: [NoteBacklink] = []
     @Published private(set) var loadingBacklinks = false
+    @Published private(set) var relatedHits: [SearchHit] = []
+    @Published private(set) var loadingRelated = false
+    @Published private(set) var relatedError: String?
     private var savedModification: Date?
     private var autoSaveTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
@@ -277,11 +280,13 @@ final class NotesModel: ObservableObject {
     private var pendingMatch: SearchHit?
     private var securityScopedFolder: URL?
     private var backlinkTask: Task<Void, Never>?
+    private var relatedTask: Task<Void, Never>?
 
     var isDirty: Bool { selected != nil && draft != baseline }
     var title: String { externalTitle ?? previewPDF?.lastPathComponent ?? selected?.lastPathComponent ?? "Select a note" }
     var body: String { externalBody ?? draft }
     var groupedHits: [SearchResultGroup] { SearchResultGroup.group(hits) }
+    var outgoingLinks: [MindMapLink] { MindMapOutline.knowledgeLinks(in: draft) }
 
     /// The Markdown file remains the only writer/authority; the task only schedules save().
     private func scheduleAutoSave() {
@@ -375,6 +380,10 @@ final class NotesModel: ObservableObject {
         backlinks = []
         backlinkTask?.cancel()
         loadingBacklinks = false
+        relatedHits = []
+        relatedTask?.cancel()
+        loadingRelated = false
+        relatedError = nil
         refresh()
         selected = nil
         previewPDF = nil
@@ -558,12 +567,66 @@ final class NotesModel: ObservableObject {
         backlinkTask?.cancel()
         backlinks = []
         loadingBacklinks = false
+        relatedTask?.cancel()
+        relatedHits = []
+        loadingRelated = false
+        relatedError = nil
         message = nil
+    }
+
+    func loadRelationships() {
+        guard let selected else { return }
+        refreshBacklinks(for: selected)
+        loadRelatedNotes(for: selected)
     }
 
     func loadBacklinks() {
         guard let selected else { return }
         refreshBacklinks(for: selected)
+    }
+
+    private func loadRelatedNotes(for note: URL) {
+        relatedTask?.cancel()
+        relatedHits = []
+        relatedError = nil
+        loadingRelated = true
+        let queryText = note.deletingPathExtension().lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !queryText.isEmpty else {
+            loadingRelated = false
+            return
+        }
+
+        relatedTask = Task { [weak self] in
+            do {
+                var parts = URLComponents(string: "http://127.0.0.1:3217/api/search")!
+                parts.queryItems = [
+                    URLQueryItem(name: "q", value: queryText),
+                    URLQueryItem(name: "limit", value: "8")
+                ]
+                var request = URLRequest(url: parts.url!)
+                request.timeoutInterval = 6
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    throw URLError(.badServerResponse)
+                }
+                let results = try JSONDecoder().decode([SearchHit].self, from: data)
+                guard !Task.isCancelled, let self, self.selected == note else { return }
+
+                var seen: Set<String> = []
+                self.relatedHits = results.filter { hit in
+                    if hit.localFileURL?.standardizedFileURL == note.standardizedFileURL { return false }
+                    return seen.insert(hit.documentId).inserted
+                }
+                self.loadingRelated = false
+            } catch is CancellationError {
+            } catch {
+                guard !Task.isCancelled, let self, self.selected == note else { return }
+                self.relatedHits = []
+                self.relatedError = "PKS related search unavailable."
+                self.loadingRelated = false
+            }
+        }
     }
 
     private func refreshBacklinks(for note: URL, files suppliedFiles: [NoteItem]? = nil) {

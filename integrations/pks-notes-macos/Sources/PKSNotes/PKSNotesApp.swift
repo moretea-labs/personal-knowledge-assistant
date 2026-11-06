@@ -208,7 +208,7 @@ struct NotesWindow: View {
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
                     Button {
                         showingBacklinks.toggle()
-                        if showingBacklinks { model.loadBacklinks() }
+                        if showingBacklinks { model.loadRelationships() }
                     } label: {
                         HStack(spacing: 4) {
                             toolbarSymbol("link")
@@ -220,59 +220,81 @@ struct NotesWindow: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .help("Backlinks to this note")
-                    .accessibilityIdentifier("pks-backlinks-menu")
+                    .help("Links and related notes")
+                    .accessibilityIdentifier("pks-relationships-menu")
                     .popover(isPresented: $showingBacklinks, arrowEdge: .bottom) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            HStack {
-                                Text("Backlinks").font(.headline)
-                                Spacer()
-                                if model.loadingBacklinks {
-                                    ProgressView().controlSize(.small)
-                                }
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 12)
-                            Divider()
-                            if model.loadingBacklinks {
-                                Text("Finding notes that link here…")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                    .padding(16)
-                            } else if model.backlinks.isEmpty {
-                                Text("No backlinks in this workspace.")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                    .padding(16)
-                            } else {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    ForEach(model.backlinks) { backlink in
-                                        Button {
-                                            showingBacklinks = false
-                                            model.openFile(backlink.source)
-                                        } label: {
-                                            HStack {
-                                                Image(systemName: "doc.text")
-                                                    .foregroundStyle(.secondary)
-                                                Text(backlink.title)
-                                                Spacer()
-                                                if backlink.count > 1 {
-                                                    Text("\(backlink.count)")
-                                                        .font(.caption.monospacedDigit())
-                                                        .foregroundStyle(.secondary)
-                                                }
-                                            }
-                                            .contentShape(Rectangle())
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 7)
-                                        }
-                                        .buttonStyle(.plain)
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 0) {
+                                HStack {
+                                    Text("Relationships").font(.headline)
+                                    Spacer()
+                                    if model.loadingBacklinks || model.loadingRelated {
+                                        ProgressView().controlSize(.small)
                                     }
                                 }
-                                .padding(6)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+
+                                Divider()
+
+                                relationshipSectionTitle("Outgoing")
+                                if model.outgoingLinks.isEmpty {
+                                    relationshipEmpty("No links from this note.")
+                                } else {
+                                    ForEach(Array(model.outgoingLinks.enumerated()), id: \.offset) { _, link in
+                                        relationshipButton(
+                                            title: link.label,
+                                            detail: link.target,
+                                            symbol: "arrow.up.right"
+                                        ) {
+                                            showingBacklinks = false
+                                            _ = model.openKnowledgeLink(link.target)
+                                        }
+                                    }
+                                }
+
+                                Divider().padding(.vertical, 4)
+                                relationshipSectionTitle("Backlinks")
+                                if model.loadingBacklinks {
+                                    relationshipEmpty("Finding notes that link here…")
+                                } else if model.backlinks.isEmpty {
+                                    relationshipEmpty("No backlinks in this workspace.")
+                                } else {
+                                    ForEach(model.backlinks) { backlink in
+                                        relationshipButton(
+                                            title: backlink.title,
+                                            detail: backlink.count > 1 ? "\(backlink.count) references" : "1 reference",
+                                            symbol: "arrow.turn.up.left"
+                                        ) {
+                                            showingBacklinks = false
+                                            model.openFile(backlink.source)
+                                        }
+                                    }
+                                }
+
+                                Divider().padding(.vertical, 4)
+                                relationshipSectionTitle("Related · PKS")
+                                if model.loadingRelated {
+                                    relationshipEmpty("Finding related knowledge…")
+                                } else if let error = model.relatedError {
+                                    relationshipEmpty(error)
+                                } else if model.relatedHits.isEmpty {
+                                    relationshipEmpty("No related PKS results.")
+                                } else {
+                                    ForEach(model.relatedHits.prefix(6)) { hit in
+                                        relationshipButton(
+                                            title: hit.title,
+                                            detail: hit.sourceLabel,
+                                            symbol: "sparkles"
+                                        ) {
+                                            showingBacklinks = false
+                                            model.openResult(hit)
+                                        }
+                                    }
+                                }
                             }
                         }
-                        .frame(width: 300)
+                        .frame(width: 340, height: 430)
                     }
                 }
 
@@ -1084,6 +1106,54 @@ struct NotesWindow: View {
                 model.copySource(hit.uri)
             }
         }
+    }
+
+    @ViewBuilder
+    private func relationshipSectionTitle(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 5)
+    }
+
+    @ViewBuilder
+    private func relationshipEmpty(_ text: String) -> some View {
+        Text(text)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func relationshipButton(
+        title: String,
+        detail: String,
+        symbol: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: symbol)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).lineLimit(1)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+        }
+        .buttonStyle(.plain)
     }
 
     private var detail: some View {

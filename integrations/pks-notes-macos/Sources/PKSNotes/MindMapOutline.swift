@@ -228,3 +228,30 @@ extension MindMapOutline {
         return lines.joined(separator: "\n")
     }
 }
+
+
+extension MindMapOutline {
+    /// Extract user-authored knowledge links from Markdown while ignoring fenced code.
+    static func knowledgeLinks(in markdown: String) -> [MindMapLink] {
+        var result: [MindMapLink] = []
+        var seen: Set<String> = []
+        var fenceMarker: Character?
+
+        for line in markdown.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if let marker = trimmed.first, marker == "\u{60}" || marker == "~",
+               trimmed.prefix(while: { $0 == marker }).count >= 3 {
+                if fenceMarker == nil { fenceMarker = marker }
+                else if fenceMarker == marker { fenceMarker = nil }
+                continue
+            }
+            guard fenceMarker == nil else { continue }
+
+            for link in links(in: line) {
+                let key = link.target + "\u{0}" + link.label
+                if seen.insert(key).inserted { result.append(link) }
+            }
+        }
+        return result
+    }
+}

@@ -89,3 +89,50 @@ extension MindMapOutlineTests {
         XCTAssertNil(MindMapOutline.moveListSubtree(in: source, nodeID: 0, asChildOf: 3))
     }
 }
+
+
+extension MindMapOutlineTests {
+    func testKnowledgeLinksIgnoreFencedCodeAndDeduplicate() {
+        let source = """
+        # Root
+        [[Alpha]]
+        [Beta](Beta.md)
+        [[Alpha]]
+        ~~~
+        [[Hidden]]
+        ~~~
+        """
+        XCTAssertEqual(
+            MindMapOutline.knowledgeLinks(in: source),
+            [
+                .init(label: "Alpha", target: "Alpha"),
+                .init(label: "Beta", target: "Beta.md")
+            ]
+        )
+    }
+}
+
+extension MindMapOutlineTests {
+    func testSpatialLayoutInfersParentsAndSeparatesDepthColumns() {
+        let nodes = MindMapOutline.nodes(in: "# Root\n- A\n  - A1\n- B")
+        let layout = MindMapSpatialLayout.layout(nodes)
+        let byID = Dictionary(uniqueKeysWithValues: layout.placements.map { ($0.id, $0) })
+
+        XCTAssertEqual(byID[0]?.parentID, nil)
+        XCTAssertEqual(byID[1]?.parentID, 0)
+        XCTAssertEqual(byID[2]?.parentID, 1)
+        XCTAssertEqual(byID[3]?.parentID, 0)
+        XCTAssertGreaterThan(byID[1]!.center.x, byID[0]!.center.x)
+        XCTAssertGreaterThan(byID[2]!.center.x, byID[1]!.center.x)
+        XCTAssertLessThan(byID[1]!.center.y, byID[3]!.center.y)
+        XCTAssertGreaterThan(layout.size.width, 560)
+    }
+
+    func testSpatialLayoutSupportsMultipleRoots() {
+        let nodes = MindMapOutline.nodes(in: "# One\n- A\n# Two\n- B")
+        let layout = MindMapSpatialLayout.layout(nodes)
+        let roots = layout.placements.filter { $0.parentID == nil }
+        XCTAssertEqual(roots.map(\.node.title), ["One", "Two"])
+        XCTAssertLessThan(roots[0].center.y, roots[1].center.y)
+    }
+}
