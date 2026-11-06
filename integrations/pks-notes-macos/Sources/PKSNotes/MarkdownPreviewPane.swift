@@ -11,10 +11,15 @@ struct ParsedMarkdownSection: Identifiable {
 
 enum MarkdownPreviewParsing {
     static func prepare(_ text: String, match: SearchHit?) -> [ParsedMarkdownSection] {
-        // Preserve whole-document references/footnotes unless a search match needs section navigation.
-        let parts = match == nil
-            ? [MarkdownSection(id: 0, heading: nil, markdown: text)]
-            : MarkdownSection.sections(in: text)
+        // A single giant Markdown view lays out the entire document on the main thread.
+        // Large notes without shared reference definitions can be split at headings:
+        // LazyVStack then constructs only the nearby section views. Keep whole-document
+        // parsing for reference links and footnotes (e.g. [ref]: or [^note]:) because
+        // their definitions may be used in another section.
+        let lazySections = text.utf8.count >= 24_000 && !text.contains("]:")
+        let parts = match != nil || lazySections
+            ? MarkdownSection.sections(in: text)
+            : [MarkdownSection(id: 0, heading: nil, markdown: text)]
         return parts.map { ParsedMarkdownSection(source: $0, content: MarkdownContent($0.markdown)) }
     }
 }

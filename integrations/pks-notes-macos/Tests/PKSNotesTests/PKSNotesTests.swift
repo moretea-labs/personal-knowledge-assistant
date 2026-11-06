@@ -124,6 +124,25 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertFalse(cache.matches(identity: "/vault/one.md", source: markdown, matchID: "new-hit"))
     }
 
+    func testLargeMarkdownUsesLazySectionsWithoutBreakingDocumentReferences() {
+        let section = "## Section\n\n" + String(repeating: "A normal paragraph with **bold** text.\n\n", count: 65)
+        let source = "# Introduction\n\n" + String(repeating: section, count: 12)
+        XCTAssertGreaterThan(source.utf8.count, 24_000)
+
+        let parts = MarkdownPreviewParsing.prepare(source, match: nil)
+        XCTAssertGreaterThan(parts.count, 10, "Large documents should render in lazy section-sized views.")
+        XCTAssertEqual(parts.first?.source.heading, "Introduction")
+        XCTAssertTrue(parts[1].source.markdown.hasPrefix("## Section"))
+        XCTAssertTrue(parts.last?.source.markdown.contains("bold") == true)
+
+        // Cross-section link reference definitions and footnotes still require
+        // a single document parse so their destinations remain resolvable.
+        let withReference = source + "\n[reference]: https://example.com\n"
+        XCTAssertEqual(MarkdownPreviewParsing.prepare(withReference, match: nil).count, 1)
+        let footnote = source + "\n[^1]: A shared footnote.\n"
+        XCTAssertEqual(MarkdownPreviewParsing.prepare(footnote, match: nil).count, 1)
+    }
+
     func testChineseSearchDecoding() throws {
         let json = Data("""
         [{"documentId":"doc_test","chunkId":"chunk_test","title":"中文学习.md",
