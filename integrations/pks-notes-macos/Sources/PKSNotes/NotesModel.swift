@@ -706,7 +706,8 @@ final class NotesModel: ObservableObject {
     /// Explicit names and automatic Untitled names share this one safe writer.
     @discardableResult
     func newNote(named name: String? = nil, in parentFolder: URL? = nil,
-                 navigationDecision: UnsavedNoteDecision? = nil) -> URL? {
+                 navigationDecision: UnsavedNoteDecision? = nil,
+                 initialContent: String? = nil) -> URL? {
         guard let root else {
             message = "Choose a notes folder before creating a note."; return nil
         }
@@ -746,7 +747,7 @@ final class NotesModel: ObservableObject {
         }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
-            let content = name == nil ? "" : "# \(url.deletingPathExtension().lastPathComponent)\n\n"
+            let content = initialContent ?? (name == nil ? "" : "# \(url.deletingPathExtension().lastPathComponent)\n\n")
             try handle.write(contentsOf: Data(content.utf8))
             try handle.close()
             refresh()

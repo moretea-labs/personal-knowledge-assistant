@@ -39,6 +39,32 @@ enum MindMapOutline {
 }
 
 extension MindMapOutline {
+    /// Create a usable map from an empty Markdown file without a secondary map store.
+    static func createMap(title: String = "New Mind Map") -> String {
+        "# \(title)\n"
+    }
+
+    /// Return/Enter creates a list sibling after the whole selected subtree.
+    /// Headings are structural anchors, so Return on a heading creates its first child.
+    static func addSibling(in source: String, nodeID: Int, title: String = "New idea") -> String? {
+        let parsed = nodes(in: source)
+        guard let position = parsed.firstIndex(where: { $0.id == nodeID }) else { return nil }
+        let node = parsed[position]
+        var lines = source.components(separatedBy: "\n")
+        guard lines.indices.contains(nodeID) else { return nil }
+        let line = lines[nodeID]
+        let prefix = line.trimmingCharacters(in: .whitespaces)
+        guard ["- ", "* ", "+ "].contains(where: { prefix.hasPrefix($0) }) else {
+            return addChild(in: source, parentID: nodeID, title: title)
+        }
+        // The end of a list subtree is its next same-or-higher-depth node.
+        let insertion = parsed.dropFirst(position + 1).first(where: { $0.depth <= node.depth })?.id ?? lines.count
+        // Prose/code inside a subtree must not be moved or implicitly consumed.
+        let indent = line.prefix(while: { $0 == " " }).count
+        lines.insert(String(repeating: " ", count: indent) + "- " + title, at: insertion)
+        return lines.joined(separator: "\n")
+    }
+
     static func rename(in source: String, nodeID: Int, to name: String) -> String? {
         let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, !title.contains("\n"), !title.contains("\r") else { return nil }

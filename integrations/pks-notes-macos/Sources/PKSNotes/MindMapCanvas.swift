@@ -1,12 +1,16 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 /// An editable Markdown-backed mind-map canvas. Markdown remains the only document authority.
 struct MindMapCanvas: View {
     @Binding var source: String
     let openLink: (String) -> Void
+    let importOutline: (String, String) -> Void
     @State private var selectedID: Int?
     @State private var renameTitle = ""
     @State private var renaming = false
+    @State private var interchangeError: String?
     @State private var collapsed: Set<Int> = []
     @State private var zoom: CGFloat = 1.0
     @State private var dropTargetID: Int?
@@ -38,10 +42,24 @@ struct MindMapCanvas: View {
             GeometryReader { viewport in
                 ScrollView([.horizontal, .vertical]) {
                     if nodes.isEmpty {
-                        Text("Add Markdown headings or lists to begin.")
-                            .foregroundStyle(.secondary)
-                            .frame(minWidth: max(560, viewport.size.width),
-                                   minHeight: max(320, viewport.size.height))
+                        VStack(spacing: 14) {
+                            Image(systemName: "point.3.connected.trianglepath.dotted")
+                                .font(.system(size: 36, weight: .ultraLight))
+                                .foregroundStyle(.secondary)
+                            Text("Start with a central topic")
+                                .font(.headline)
+                            Text("The mind map is saved in the same Markdown note.")
+                                .foregroundStyle(.secondary)
+                            Button("Create Mind Map") {
+                                source = MindMapOutline.createMap()
+                                selectedID = 0
+                                canvasFocused = true
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("pks-mind-map-create")
+                        }
+                        .frame(minWidth: max(560, viewport.size.width),
+                               minHeight: max(320, viewport.size.height))
                     } else {
                         spatialCanvas(mapLayout)
                             .scaleEffect(zoom, anchor: .topLeading)
@@ -76,6 +94,14 @@ struct MindMapCanvas: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .alert("Mind Map Import/Export", isPresented: Binding(
+            get: { interchangeError != nil },
+            set: { if !$0 { interchangeError = nil } }
+        )) {
+            Button("OK", role: .cancel) { interchangeError = nil }
+        } message: {
+            Text(interchangeError ?? "")
+        }
         .focusable()
         .focused($canvasFocused)
         .onKeyPress(.downArrow) {
@@ -86,9 +112,16 @@ struct MindMapCanvas: View {
             moveSelection(by: -1)
             return .handled
         }
+        .onKeyPress(.tab) {
+            addChild()
+            return .handled
+        }
         .onKeyPress(.return) {
-            guard selectedID != nil else { return .ignored }
-            beginRename()
+            addSibling()
+            return .handled
+        }
+        .onKeyPress(.delete) {
+            deleteSelectedLeaf()
             return .handled
         }
         .accessibilityIdentifier("pks-mind-map-canvas")
@@ -98,14 +131,15 @@ struct MindMapCanvas: View {
         HStack {
             Text("Mind Map").font(.headline)
             Spacer()
-            Button("Add Child", systemImage: "plus") {
-                guard let id = selectedID,
-                      let updated = MindMapOutline.addChild(in: source, parentID: id) else { return }
-                source = updated
-                selectedID = id + 1
-                collapsed.removeAll()
-            }
-            .disabled(selectedID == nil)
+            Button("Add Child", systemImage: "plus") { addChild() }
+                .disabled(nodes.isEmpty)
+                .help("Add child (Tab)")
+                .accessibilityIdentifier("pks-mind-map-add-child")
+
+            Button("Add Sibling", systemImage: "plus.square.on.square") { addSibling() }
+                .disabled(nodes.isEmpty)
+                .help("Add sibling (Return)")
+                .accessibilityIdentifier("pks-mind-map-add-sibling")
 
             Button("Rename", systemImage: "pencil") { beginRename() }
                 .disabled(selectedID == nil)
@@ -126,12 +160,7 @@ struct MindMapCanvas: View {
             .help("Make child of previous sibling")
             .disabled(selectedID == nil || shiftedSource(deeper: true) == nil)
 
-            Button("Delete Leaf", systemImage: "trash") {
-                guard let id = selectedID,
-                      let updated = MindMapOutline.deleteLeaf(in: source, nodeID: id) else { return }
-                source = updated
-                selectedID = nil
-            }
+            Button("Delete Leaf", systemImage: "trash") { deleteSelectedLeaf() }
             .disabled(selectedID == nil || MindMapOutline.deleteLeaf(in: source, nodeID: selectedID ?? -1) == nil)
 
             Divider().frame(height: 18)
@@ -154,6 +183,21 @@ struct MindMapCanvas: View {
                 Image(systemName: "plus.magnifyingglass")
             }
             .help("Zoom in")
+
+            Menu {
+                Button("Import OPML from MindNode…") { importOPML() }
+                Button("Export OPML for MindNode…") { exportOPML() }
+                    .disabled(nodes.isEmpty)
+                Divider()
+                Button("Export PNG Image…") { exportPNG() }
+                    .disabled(nodes.isEmpty)
+                Button("Export PDF…") { exportPDF() }
+                    .disabled(nodes.isEmpty)
+            } label: {
+                Image(systemName: "square.and.arrow.up.on.square")
+            }
+            .help("MindNode-compatible OPML import/export")
+            .accessibilityIdentifier("pks-mind-map-interchange")
         }
         .padding(16)
     }
@@ -278,6 +322,119 @@ struct MindMapCanvas: View {
             canvasFocused = true
             beginRename()
         }
+    }
+
+    private func addChild() {
+        guard let id = selectedID ?? nodes.first?.id,
+              let updated = MindMapOutline.addChild(in: source, parentID: id) else { return }
+        source = updated
+        selectedID = id + 1
+        collapsed.removeAll()
+        canvasFocused = true
+    }
+
+    private func addSibling() {
+        guard let id = selectedID ?? nodes.first?.id,
+              let updated = MindMapOutline.addSibling(in: source, nodeID: id) else { return }
+        let original = nodes
+        let position = original.firstIndex(where: { $0.id == id })!
+        let siblingLine = original.dropFirst(position + 1)
+            .first(where: { $0.depth <= original[position].depth })?.id
+            ?? source.components(separatedBy: "\n").count
+        let trimmedLine = source.components(separatedBy: "\n")[id]
+            .trimmingCharacters(in: .whitespaces)
+        let isList = ["- ", "* ", "+ "].contains(where: { trimmedLine.hasPrefix($0) })
+        source = updated
+        selectedID = isList ? siblingLine : id + 1
+        collapsed.removeAll()
+        canvasFocused = true
+    }
+
+    private func deleteSelectedLeaf() {
+        guard let id = selectedID,
+              let updated = MindMapOutline.deleteLeaf(in: source, nodeID: id) else { return }
+        source = updated
+        selectedID = nil
+    }
+
+    private func importOPML() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Mind Map from OPML"
+        panel.allowedContentTypes = [UTType(filenameExtension: "opml") ?? .xml]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let text = try MindMapInterchange.importOPML(Data(contentsOf: url))
+            importOutline(text, url.deletingPathExtension().lastPathComponent)
+        } catch {
+            interchangeError = error.localizedDescription
+        }
+    }
+
+    private func exportOPML() {
+        do {
+            let data = try MindMapInterchange.exportOPML(source)
+            let panel = NSSavePanel()
+            panel.title = "Export for MindNode (OPML)"
+            panel.allowedContentTypes = [UTType(filenameExtension: "opml") ?? .xml]
+            panel.nameFieldStringValue = "Mind Map.opml"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            try data.write(to: url, options: .atomic)
+        } catch {
+            interchangeError = error.localizedDescription
+        }
+    }
+
+    /// Export a whole map, not a cropped screenshot of the current scroll viewport.
+    /// Rendering uses the existing spatial layout and never modifies the source.
+    private func exportPNG() {
+        guard !nodes.isEmpty else { return }
+        let size = mapLayout.size
+        guard size.width * size.height <= 20_000_000 else {
+            interchangeError = "This map is too large for a single PNG. Try PDF."
+            return
+        }
+        let content = spatialCanvas(mapLayout)
+            .background(Color.white)
+            .environment(\.colorScheme, .light)
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 2
+        guard let image = renderer.nsImage,
+              let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let data = bitmap.representation(using: .png, properties: [:]) else {
+            interchangeError = "Cannot render this mind map as an image."
+            return
+        }
+        saveExport(data, type: .png, extensionName: "png")
+    }
+
+    private func exportPDF() {
+        guard !nodes.isEmpty else { return }
+        let size = mapLayout.size
+        let content = spatialCanvas(mapLayout)
+            .background(Color.white)
+            .environment(\.colorScheme, .light)
+            .frame(width: size.width, height: size.height)
+        let view = NSHostingView(rootView: content)
+        view.frame = NSRect(origin: .zero, size: size)
+        view.layoutSubtreeIfNeeded()
+        let data = view.dataWithPDF(inside: view.bounds)
+        guard !data.isEmpty else {
+            interchangeError = "Cannot render this mind map as a PDF."
+            return
+        }
+        saveExport(data, type: .pdf, extensionName: "pdf")
+    }
+
+    private func saveExport(_ data: Data, type: UTType, extensionName: String) {
+        let panel = NSSavePanel()
+        panel.title = "Export Mind Map"
+        panel.allowedContentTypes = [type]
+        panel.nameFieldStringValue = "Mind Map.\(extensionName)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try data.write(to: url, options: .atomic) }
+        catch { interchangeError = error.localizedDescription }
     }
 
     private func hasChildren(_ node: MindMapNode) -> Bool {

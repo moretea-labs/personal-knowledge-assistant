@@ -607,6 +607,16 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(fm.fileExists(atPath: folder.appendingPathComponent("新笔记.md").path))
         XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("新笔记.md").path))
         XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "# Existing")
+        // Import uses the one canonical note writer; loadNote cannot race to
+        // overwrite a newly assigned draft with a stale blank template.
+        let imported = "# Imported map\n- Alpha\n- Beta\n"
+        let importedURL = model.newNote(named: "Imported OPML", initialContent: imported)
+        XCTAssertEqual(importedURL?.lastPathComponent, "Imported OPML.md")
+        if let importedURL {
+            await waitForNote(model, importedURL)
+            XCTAssertEqual(model.draft, imported)
+            XCTAssertEqual(try String(contentsOf: importedURL, encoding: .utf8), imported)
+        }
         model.draft = "# Draft not saved yet"
         model.newNote(named: "不能覆盖", navigationDecision: .cancel)
         XCTAssertFalse(fm.fileExists(atPath: folder.appendingPathComponent("不能覆盖.md").path))
