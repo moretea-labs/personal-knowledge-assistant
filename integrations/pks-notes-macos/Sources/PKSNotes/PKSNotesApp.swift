@@ -129,6 +129,7 @@ private struct PreviewWarmupKey: Hashable {
 struct NotesWindow: View {
     @EnvironmentObject private var model: NotesModel
     @State private var mode: ReadingMode = .read
+    @State private var showingMindMap = false
     @AppStorage("PKSNotesReadingTheme") private var themeID = NotesTheme.system.rawValue
     @AppStorage("PKSNotesFontAdjustment") private var fontAdjustment = 0.0
     @AppStorage("PKSNotesLineAdjustment") private var lineAdjustment = 0.0
@@ -194,6 +195,15 @@ struct NotesWindow: View {
                                 in: RoundedRectangle(cornerRadius: 9))
                 }
 
+                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
+                    Button {
+                        showingMindMap.toggle()
+                    } label: {
+                        toolbarSymbol(showingMindMap ? "doc.text" : "point.3.connected.trianglepath.dotted")
+                    }
+                    .help(showingMindMap ? "Return to Markdown" : "Mind Map")
+                    .accessibilityIdentifier("pks-mind-map-toggle")
+                }
                 if model.autoSavePending && model.selected != nil {
                     ProgressView()
                         .controlSize(.small)
@@ -274,6 +284,7 @@ struct NotesWindow: View {
             previewCache = nil
         }
         .onChange(of: model.selected) { _, note in
+            showingMindMap = false
             if let note, let root = model.root {
                 expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: note, in: root))
                 treeCursorPath = note.path
@@ -1061,6 +1072,8 @@ struct NotesWindow: View {
     private var reader: some View {
         if let url = model.previewPDF {
             NativePDFPreview(url: url)
+        } else if showingMindMap && model.selected != nil && model.externalBody == nil {
+            MindMapCanvas(source: $model.draft)
         } else if model.externalBody != nil || mode == .read {
             renderedNote
         } else if mode == .edit {

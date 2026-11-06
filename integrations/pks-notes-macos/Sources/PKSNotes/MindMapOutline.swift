@@ -37,3 +37,29 @@ enum MindMapOutline {
         return result
     }
 }
+
+extension MindMapOutline {
+    static func rename(in source: String, nodeID: Int, to name: String) -> String? {
+        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, !title.contains("\n"), !title.contains("\r") else { return nil }
+        var lines = source.components(separatedBy: "\n")
+        guard nodes(in: source).contains(where: { $0.id == nodeID }), lines.indices.contains(nodeID) else { return nil }
+        let line = lines[nodeID]
+        let leading = line.prefix(while: { $0 == " " }).count
+        let trimmed = String(line.dropFirst(leading))
+        let hashes = trimmed.prefix(while: { $0 == "#" }).count
+        let prefix = hashes > 0 ? String(repeating: "#", count: hashes) + " " : String(trimmed.prefix(2))
+        lines[nodeID] = String(repeating: " ", count: leading) + prefix + title
+        return lines.joined(separator: "\n")
+    }
+
+    static func addChild(in source: String, parentID: Int, title: String = "New idea") -> String? {
+        var lines = source.components(separatedBy: "\n")
+        guard nodes(in: source).contains(where: { $0.id == parentID }), lines.indices.contains(parentID) else { return nil }
+        let line = lines[parentID]
+        let indent = line.prefix(while: { $0 == " " }).count
+        let isList = ["- ", "* ", "+ "].contains(where: { line.trimmingCharacters(in: .whitespaces).hasPrefix($0) })
+        lines.insert(String(repeating: " ", count: indent + (isList ? 2 : 0)) + "- " + title, at: parentID + 1)
+        return lines.joined(separator: "\n")
+    }
+}

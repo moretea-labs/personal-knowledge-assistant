@@ -13,3 +13,16 @@ final class MindMapOutlineTests: XCTestCase {
         XCTAssertEqual(nodes.map(\.title), ["Root", "Real"])
     }
 }
+
+extension MindMapOutlineTests {
+    func testRenamePreservesMarkdownSyntax() {
+        XCTAssertEqual(MindMapOutline.rename(in: "# Root\n  - Child", nodeID: 1, to: "Updated"), "# Root\n  - Updated")
+        XCTAssertEqual(MindMapOutline.rename(in: "# Root", nodeID: 0, to: "Changed"), "# Changed")
+        XCTAssertNil(MindMapOutline.rename(in: "# Root", nodeID: 0, to: ""))
+    }
+
+    func testAddingChildPreservesHierarchy() {
+        XCTAssertEqual(MindMapOutline.addChild(in: "# Root\n- Existing", parentID: 0), "# Root\n- New idea\n- Existing")
+        XCTAssertEqual(MindMapOutline.addChild(in: "# Root\n- Existing", parentID: 1), "# Root\n- Existing\n  - New idea")
+    }
+}
