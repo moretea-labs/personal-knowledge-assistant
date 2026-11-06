@@ -12,6 +12,20 @@ final class PKSNotesTests: XCTestCase {
         XCTFail("Timed out waiting for Markdown to open: \(url.path) — \(model.message ?? "no error")")
     }
 
+
+    func testWorkspaceTitleHidesICloudInternalFolderName() {
+        XCTAssertEqual(
+            NotesGeometry.workspaceTitle(
+                URL(fileURLWithPath: "/Users/reader/Library/Mobile Documents/com~apple~CloudDocs")
+            ), "iCloud Drive"
+        )
+        XCTAssertEqual(
+            NotesGeometry.workspaceTitle(URL(fileURLWithPath: "/tmp/学习笔记管理")),
+            "学习笔记管理"
+        )
+        XCTAssertEqual(NotesGeometry.workspaceTitle(nil), "PKS Library")
+    }
+
     func testBackgroundMarkdownPreviewParsingAndSearchHeadingNavigation() async {
         let source = """
         # Overview

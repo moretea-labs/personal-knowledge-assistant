@@ -11,8 +11,8 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 
 ## Features
 
-- Native continuous macOS work surface with a single flat title bar, generous document-first reading, comfortable 13-point file navigation and restrained search; direct Edit/Split/Read controls with gentle transitions and no stacked cards or custom shadows
-- Mixed-file folder navigation (Markdown, PDF and other regular files) with Chinese filenames; folders and files share fixed disclosure (16pt), SF Symbol (18pt slot / 14pt glyph), text and 36pt row geometry with 16pt per-level indentation and a quiet 8pt-radius selection. Native toolbar buttons share a 28pt action area. Double-click/chevrons and keyboard navigation remain available; the visible tree is recalculated only on scan/disclosure updates. The last successfully opened Markdown note safely restores inside the selected workspace.
+- Content-first native macOS workspace: the sidebar and reading canvas share a quiet background, with a lightweight lazy folder tree instead of the old gray system List chrome. A human workspace title (iCloud Drive rather than com~apple~CloudDocs), native compact Files/Results selector, clearable PKS search, and New Note near the files establish a deliberate hierarchy; no floating cards or decorative shadows.
+- Mixed-file folder navigation (Markdown, PDF and other regular files) with Chinese filenames; folders and documents share the same 16pt disclosure and 18pt SF Symbol slots, compact 32pt rows and 16pt nested indentation. Native toolbar contains theme, search, file menu and transient auto-save progress; the reading-mode selector is a single compact control. Double-click, disclosure, keyboard movement and Return remain supported; only scan/expansion changes update visible rows. Last-opened Markdown safely restores inside the selected workspace.
 - Direct one-click Edit, Split and Read controls (⌘1/⌘2/⌘3) in the native title bar; one window-owned parsed Markdown snapshot survives view switching, idle editing prepares the preview off the main thread, and long notes without cross-section reference definitions render lazily by heading to reduce first-layout overhead
 - Four complete Markdown typography themes: System (native balanced), Paper (airy rounded editorial), Warm (serif long-form), Midnight (dense monospace technical). Each changes font family/size, heading proportions, line/paragraph spacing, list/quote/code/table styling and reading column width, not merely colors. Title bar 'Aa' opens a native inspector with live font-size, line-spacing and reading-width adjustments, persisted across launches and resettable. Theme and adjustments do not change Markdown source.
 - Native read-only PDFKit preview with zoom and text selection; other files use macOS default applications
@@ -28,6 +28,12 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 - Markdown loads and preview parsing run off main actor; only changed Split drafts are debounced (~260 ms), already-parsed content survives view/theme changes, and canceled stale tasks cannot replace newer drafts
 - Cmd+S is still available for immediate saves; no persistent Save button or success banner, and concurrent external edits are checked before every write
 - Create notes beside the selected note (or at the workspace root), or explicitly inside a folder via its context menu; note destinations are validated in-vault
+
+## Native design reference
+
+The light macOS workspace follows the **Bear/Panda editorial composition**: quiet slightly-tinted navigation sidebar, uncluttered paper-like reading canvas, understated file selection and small native toolbar controls. Reference: [Bear](https://bear.app/) and its macOS design screenshots. For Markdown and file-tree behavior, compare the open-source [MiaoYan](https://github.com/tw93/MiaoYan). This is an original SwiftUI implementation with the existing PKS source/renderer; no third-party brand assets, UI code or theme packages are imported.
+
+Other UI research indexes: [Dribbble macOS UI](https://dribbble.com/search/macos-app-ui), [Mobbin](https://mobbin.com/), and [Collect UI](https://collectui.com/designs/mac-app-ui-design-inspiration) (this category currently has no designs to copy). Prefer shipped native product screenshots over unrelated dashboard or task manager mockups.
 
 ## Development and installation
 
