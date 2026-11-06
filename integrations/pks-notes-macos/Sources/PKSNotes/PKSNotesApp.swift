@@ -17,11 +17,14 @@ final class PKSNotesAppDelegate: NSObject, NSApplicationDelegate {
 struct PKSNotesApp: App {
     @NSApplicationDelegateAdaptor(PKSNotesAppDelegate.self) private var appDelegate
     @StateObject private var model = NotesModel()
+    @StateObject private var purchases = ProPurchases()
 
     var body: some Scene {
         WindowGroup {
             NotesWindow()
                 .environmentObject(model)
+                .environmentObject(purchases)
+                .task { await purchases.start() }
                 .onAppear { appDelegate.notesModel = model }
                 .frame(minWidth: 920, minHeight: 620)
         }
@@ -29,7 +32,13 @@ struct PKSNotesApp: App {
         .defaultSize(width: 1220, height: 780)
 
         Settings {
-            NotesAppearanceSettings()
+            TabView {
+                NotesAppearanceSettings()
+                    .tabItem { Label("Appearance", systemImage: "textformat.size") }
+                ProSettingsView()
+                    .tabItem { Label("Pro", systemImage: "checkmark.seal") }
+            }
+            .environmentObject(purchases)
         }
         .commands {
             // This single-window editor uses Cmd+N for a note, not another app window.
@@ -166,6 +175,8 @@ private struct PreviewWarmupKey: Hashable {
 
 struct NotesWindow: View {
     @EnvironmentObject private var model: NotesModel
+    @EnvironmentObject private var purchases: ProPurchases
+    @State private var showingProUpsell = false
     @State private var mode: ReadingMode = .read
     @State private var showingMindMap = false
     @AppStorage("PKSNotesReadingTheme") private var themeID = NotesTheme.system.rawValue
@@ -238,7 +249,8 @@ struct NotesWindow: View {
 
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
                     Button {
-                        showingMindMap.toggle()
+                        if ProAccess.allows(.mindMap, unlocked: purchases.unlocked) { showingMindMap.toggle() }
+                        else { showingProUpsell = true }
                     } label: {
                         toolbarSymbol(showingMindMap ? "doc.text" : "point.3.connected.trianglepath.dotted")
                     }
@@ -247,8 +259,10 @@ struct NotesWindow: View {
                 }
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
                     Button {
-                        showingBacklinks.toggle()
-                        if showingBacklinks { model.loadRelationships() }
+                        if ProAccess.allows(.relationships, unlocked: purchases.unlocked) {
+                            showingBacklinks.toggle()
+                            if showingBacklinks { model.loadRelationships() }
+                        } else { showingProUpsell = true }
                     } label: {
                         HStack(spacing: 4) {
                             toolbarSymbol("link")
@@ -350,7 +364,8 @@ struct NotesWindow: View {
                         openQuickPicker()
                     }
                     Button("New Mind Map", systemImage: "point.3.connected.trianglepath.dotted") {
-                        beginNewMindMap()
+                        if ProAccess.allows(.mindMap, unlocked: purchases.unlocked) { beginNewMindMap() }
+                        else { showingProUpsell = true }
                     }
                     Divider()
                     if let file = model.selected ?? model.previewPDF ?? model.previewSource?.localFileURL {
@@ -360,6 +375,9 @@ struct NotesWindow: View {
                         Button("Open Source in Browser", systemImage: "globe") { model.openSourceLink(link) }
                         Button("Copy Source Link", systemImage: "link") { model.copySource(link.absoluteString) }
                         Divider()
+                    }
+                    if !purchases.unlocked {
+                        Button("Unlock Pro…", systemImage: "checkmark.seal") { showingProUpsell = true }
                     }
                     Button("Refresh Files", systemImage: "arrow.clockwise") { model.refresh() }
                     Button("Choose Folder…", systemImage: "folder") { model.chooseWorkspace() }
@@ -372,6 +390,12 @@ struct NotesWindow: View {
             }
         }
         .preferredColorScheme(theme.appearance)
+        .sheet(isPresented: $showingProUpsell) {
+            ProSettingsView().environmentObject(purchases)
+        }
+        .onChange(of: purchases.unlocked) { _, unlocked in
+            if !unlocked { showingMindMap = false; showingBacklinks = false }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.quickOpen)) { _ in
             openQuickPicker()
         }
@@ -429,7 +453,7 @@ struct NotesWindow: View {
         }
         .onChange(of: model.selected) { _, note in
             let openAsMap = note != nil && note == pendingMindMapOpen
-            showingMindMap = openAsMap
+            showingMindMap = openAsMap && ProAccess.allows(.mindMap, unlocked: purchases.unlocked)
             if openAsMap {
                 pendingMindMapOpen = nil
                 mode = .read
@@ -533,6 +557,7 @@ struct NotesWindow: View {
     }
 
     private func beginNewMindMap(in folder: URL? = nil) {
+        guard ProAccess.allows(.mindMap, unlocked: purchases.unlocked) else { showingProUpsell = true; return }
         if model.root == nil {
             model.chooseWorkspace()
             guard model.root != nil else { return }
@@ -1401,7 +1426,7 @@ struct NotesWindow: View {
     private var reader: some View {
         if let url = model.previewPDF {
             NativePDFPreview(url: url)
-        } else if showingMindMap && model.selected != nil && model.externalBody == nil {
+        } else if showingMindMap && ProAccess.allows(.mindMap, unlocked: purchases.unlocked) && model.selected != nil && model.externalBody == nil {
             MindMapCanvas(
                 source: $model.draft,
                 openLink: { target in _ = model.openKnowledgeLink(target) },
