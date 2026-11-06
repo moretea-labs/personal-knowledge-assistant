@@ -7,22 +7,8 @@ final class PKSNotesAppDelegate: NSObject, NSApplicationDelegate {
     weak var notesModel: NotesModel?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let model = notesModel, model.isDirty else { return .terminateNow }
-        let alert = NSAlert()
-        alert.messageText = "Unsaved Markdown changes"
-        alert.informativeText = "Save changes to \(model.title) before quitting?"
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Discard")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            model.save()
-            return model.isDirty ? .terminateCancel : .terminateNow
-        case .alertThirdButtonReturn:
-            return .terminateNow
-        default:
-            return .terminateCancel
-        }
+        guard let model = notesModel else { return .terminateNow }
+        return model.confirmLeavingNote() ? .terminateNow : .terminateCancel
     }
 }
 
@@ -41,6 +27,8 @@ struct PKSNotesApp: App {
         .windowStyle(.titleBar)
         .defaultSize(width: 1220, height: 780)
         .commands {
+            // This single-window editor uses Cmd+N for a note, not another app window.
+            CommandGroup(replacing: .newItem) {}
             CommandMenu("PKS") {
                 Button("Save Markdown") { model.save() }
                     .keyboardShortcut("s", modifiers: .command)
@@ -50,6 +38,7 @@ struct PKSNotesApp: App {
                 Button("Refresh Files") { model.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
                 Button("Choose Folder…") { model.chooseWorkspace() }
+                    .keyboardShortcut("o", modifiers: .command)
             }
         }
     }
@@ -72,7 +61,9 @@ struct NotesWindow: View {
     @State private var sidebarTab: SidebarTab = .notes
     @State private var newNoteName = ""
     @State private var creatingNote = false
+    @State private var newNoteParent: URL?
     @State private var expandedFolderPaths: Set<String> = []
+    @FocusState private var searchFieldFocused: Bool
 
     var body: some View {
         NavigationSplitView {
@@ -83,12 +74,25 @@ struct NotesWindow: View {
         }
         .toolbar {
             ToolbarItemGroup {
+                Button {
+                    sidebarTab = .search
+                    searchFieldFocused = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .help("Focus PKS search (⌘F)")
+                .keyboardShortcut("f", modifiers: .command)
                 Button(action: { model.refresh() }) {
                     Image(systemName: "arrow.clockwise")
                 }.help("Refresh Markdown folders")
-                Button(action: { creatingNote = true }) {
+                Button(action: {
+                    newNoteParent = nil
+                    creatingNote = true
+                }) {
                     Image(systemName: "square.and.pencil")
-                }.help("New Markdown note")
+                }
+                .help("New Markdown note (⌘N)")
+                .keyboardShortcut("n", modifiers: .command)
                 Button(action: { model.chooseWorkspace() }) {
                     Image(systemName: "folder")
                 }.help("Choose an existing folder")
@@ -105,12 +109,17 @@ struct NotesWindow: View {
         .alert("New Markdown note", isPresented: $creatingNote) {
             TextField("Note name", text: $newNoteName)
             Button("Create") {
-                model.newNote(named: newNoteName)
+                model.newNote(named: newNoteName, in: newNoteParent)
                 newNoteName = ""
+                newNoteParent = nil
             }
-            Button("Cancel", role: .cancel) { newNoteName = "" }
+            Button("Cancel", role: .cancel) {
+                newNoteName = ""
+                newNoteParent = nil
+            }
         } message: {
-            Text("Creates a plain Markdown file beside the selected note, or at the workspace root.")
+            Text(newNoteParent.map { "Creates a Markdown file inside \($0.lastPathComponent)." }
+                 ?? "Creates a Markdown file beside the selected note, or at the workspace root.")
         }
     }
 
@@ -135,6 +144,7 @@ struct NotesWindow: View {
                     .foregroundStyle(.secondary)
                 TextField("Search all PKS knowledge", text: $model.query)
                     .textFieldStyle(.plain)
+                    .focused($searchFieldFocused)
                     .accessibilityIdentifier("pks-search-input")
                     .onSubmit { model.search(); sidebarTab = .search }
                 if model.searching {
@@ -308,7 +318,20 @@ struct NotesWindow: View {
                             }
                         }
                         .padding(.leading, CGFloat(row.depth) * 17)
-                        .contextMenu { fileActions(row.item.url) }
+                        .padding(.vertical, 2)
+                        .background(model.selected == row.item.url
+                                    ? Color.accentColor.opacity(0.12) : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 5))
+                        .contextMenu {
+                            if row.item.isFolder {
+                                Button("New Note Here", systemImage: "square.and.pencil") {
+                                    newNoteParent = row.item.url
+                                    creatingNote = true
+                                }
+                                Divider()
+                            }
+                            fileActions(row.item.url)
+                        }
                         .help(row.item.url.path)
                         .accessibilityIdentifier(row.item.isFolder ? "pks-folder-\(row.item.name)" : row.item.id)
                     }
@@ -412,7 +435,14 @@ struct NotesWindow: View {
     private var header: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.title).font(.headline).lineLimit(1)
+                HStack(spacing: 7) {
+                    Text(model.title).font(.headline).lineLimit(1)
+                    if model.isDirty {
+                        Text("Unsaved")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                }
                     .onTapGesture(count: 2) { NSApp.keyWindow?.zoom(nil) }
                     .help("Double-click to zoom or restore the window")
                 Text(model.selected?.path ?? model.previewSource?.uri ?? "PKS search · external source")

@@ -109,8 +109,94 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("新笔记.md").path))
         XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "# Existing")
         model.draft = "# Draft not saved yet"
-        model.newNote(named: "不能覆盖")
+        model.newNote(named: "不能覆盖", navigationDecision: .cancel)
         XCTAssertFalse(fm.fileExists(atPath: folder.appendingPathComponent("不能覆盖.md").path))
+        XCTAssertEqual(model.draft, "# Draft not saved yet")
+        XCTAssertTrue(model.isDirty)
+    }
+
+    @MainActor
+    func testNavigationSaveDiscardCancelAndConflict() throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let another = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        try fm.createDirectory(at: another, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root); try? fm.removeItem(at: another) }
+        let first = root.appendingPathComponent("first.md")
+        let second = root.appendingPathComponent("second.md")
+        try "# First".write(to: first, atomically: true, encoding: .utf8)
+        try "# Second".write(to: second, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(first)
+        model.draft = "# Pending"
+        model.openNote(first) // No false dirty warning on the selected note.
+        XCTAssertEqual(model.draft, "# Pending")
+        model.openNote(second, navigationDecision: .cancel)
+        XCTAssertEqual(model.selected, first)
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "# First")
+        let savedWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        XCTAssertFalse(model.openWorkspace(another, navigationDecision: .cancel))
+        XCTAssertEqual(defaults.string(forKey: "PKSNotesWorkspace"), savedWorkspace)
+        XCTAssertEqual(model.root, root.standardizedFileURL.resolvingSymlinksInPath())
+        XCTAssertEqual(model.draft, "# Pending")
+
+        model.openNote(second, navigationDecision: .save)
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "# Pending")
+        XCTAssertEqual(model.selected, second)
+        model.draft = "# Edited but discarded"
+        model.openNote(first, navigationDecision: .discard)
+        XCTAssertEqual(model.selected, first)
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "# Second")
+
+        model.draft = "# Conflicting edit"
+        try "# External".write(to: first, atomically: true, encoding: .utf8)
+        model.openNote(second, navigationDecision: .save)
+        XCTAssertEqual(model.selected, first)
+        XCTAssertEqual(model.draft, "# Conflicting edit")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "# External")
+        XCTAssertTrue(model.isDirty)
+    }
+
+    @MainActor
+    func testCreateNoteInsideSelectedFolderWithSafeCancellation() throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let chosen = root.appendingPathComponent("Projects")
+        let elsewhere = root.appendingPathComponent("Other")
+        let outside = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: chosen, withIntermediateDirectories: true)
+        try fm.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root); try? fm.removeItem(at: outside) }
+        let existing = elsewhere.appendingPathComponent("old.md")
+        try "# Original".write(to: existing, atomically: true, encoding: .utf8)
+        let model = NotesModel()
+        model.openWorkspace(root)
+        model.openNote(existing)
+        model.draft = "# Unsaved"
+        model.newNote(named: "draft", in: chosen, navigationDecision: .cancel)
+        XCTAssertFalse(fm.fileExists(atPath: chosen.appendingPathComponent("draft.md").path))
+        model.newNote(named: "escape", in: outside, navigationDecision: .discard)
+        XCTAssertFalse(fm.fileExists(atPath: outside.appendingPathComponent("escape.md").path))
+        XCTAssertEqual(model.draft, "# Unsaved")
+        model.newNote(named: "draft", in: chosen, navigationDecision: .discard)
+        XCTAssertEqual(model.selected, chosen.appendingPathComponent("draft.md"))
+        XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "# Original")
     }
 
     @MainActor
