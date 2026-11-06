@@ -45,3 +45,22 @@ extension MindMapOutlineTests {
         XCTAssertEqual(MindMapOutline.rename(in: source, nodeID: 1, to: "[[Notes/Architecture]]"), "# Project\n- [[Notes/Architecture]]\n- [Spec](../spec.md)")
     }
 }
+
+
+extension MindMapOutlineTests {
+    func testShiftListSubtreeChangesHierarchyWithoutLosingChildren() {
+        let source = "# Root\n- A\n- B\n  - B1\n- C"
+        let deeper = MindMapOutline.shiftListSubtree(in: source, nodeID: 2, deeper: true)
+        XCTAssertEqual(deeper, "# Root\n- A\n  - B\n    - B1\n- C")
+        XCTAssertEqual(
+            MindMapOutline.shiftListSubtree(in: deeper!, nodeID: 2, deeper: false),
+            source
+        )
+    }
+
+    func testShiftListSubtreeRejectsUnsafeOrImpossibleChanges() {
+        XCTAssertNil(MindMapOutline.shiftListSubtree(in: "# Root\n- First", nodeID: 1, deeper: true))
+        XCTAssertNil(MindMapOutline.shiftListSubtree(in: "# Root\n- Parent\nparagraph\n- Next", nodeID: 1, deeper: true))
+        XCTAssertNil(MindMapOutline.shiftListSubtree(in: "# Root\n- Root item", nodeID: 1, deeper: false))
+    }
+}

@@ -129,6 +129,49 @@ enum WorkspaceFiles {
         return contains(normalized, in: root) ? normalized : nil
     }
 
+    /// Resolve a WikiLink/Markdown note target through one deterministic workspace path.
+    /// Exact relative/root paths win; basename fallback is accepted only when unique.
+    static func resolveKnowledgeTarget(_ rawTarget: String, from note: URL, in root: URL) -> URL? {
+        let trimmed = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let pathPart = String(trimmed.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+        let decoded = pathPart.removingPercentEncoding ?? pathPart
+        guard !decoded.isEmpty, URL(string: decoded)?.scheme == nil else { return nil }
+
+        func markdownCandidates(_ base: URL) -> [URL] {
+            if !base.pathExtension.isEmpty { return [base] }
+            return [base.appendingPathExtension("md"), base.appendingPathExtension("markdown")]
+        }
+
+        let relative = note.deletingLastPathComponent().appendingPathComponent(decoded)
+        let rooted = root.appendingPathComponent(decoded.hasPrefix("/") ? String(decoded.dropFirst()) : decoded)
+        var seen: Set<String> = []
+        for candidate in (markdownCandidates(relative) + markdownCandidates(rooted)) {
+            let normalized = candidate.standardizedFileURL
+            guard seen.insert(normalized.path).inserted,
+                  contains(normalized, in: root),
+                  FileManager.default.fileExists(atPath: normalized.path),
+                  ["md", "markdown"].contains(normalized.pathExtension.lowercased()) else { continue }
+            return normalized
+        }
+
+        guard !decoded.contains("/") else { return nil }
+        let wanted = URL(fileURLWithPath: decoded).deletingPathExtension().lastPathComponent
+        var matches: [URL] = []
+        func collect(_ items: [NoteItem]) {
+            for item in items {
+                if let children = item.children {
+                    collect(children)
+                } else if item.isMarkdown && item.url.deletingPathExtension().lastPathComponent == wanted {
+                    matches.append(item.url.standardizedFileURL)
+                }
+            }
+        }
+        collect(tree(in: root))
+        return matches.count == 1 ? matches[0] : nil
+    }
+
     /// Deterministic collision-safe suggestion; O_EXCL remains the final writer guard.
     static func nextUntitledName(in folder: URL) -> String? {
         for index in 0..<10_000 {
@@ -587,6 +630,24 @@ final class NotesModel: ObservableObject {
                 searching = false
             }
         }
+    }
+
+    @discardableResult
+    func openKnowledgeLink(_ target: String) -> Bool {
+        let value = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+        if let external = URL(string: value),
+           ["http", "https"].contains(external.scheme?.lowercased() ?? "") {
+            openSourceLink(external)
+            return true
+        }
+        guard let root, let selected,
+              let resolved = WorkspaceFiles.resolveKnowledgeTarget(value, from: selected, in: root) else {
+            message = "Link target not available or is ambiguous in this workspace."
+            return false
+        }
+        openFile(resolved)
+        return true
     }
 
     func openInternalLink(_ url: URL) -> Bool {

@@ -903,3 +903,40 @@ final class PKSNotesTests: XCTestCase {
     }
 
 }
+
+
+extension PKSNotesTests {
+    func testKnowledgeTargetResolutionPrefersExactAndRejectsAmbiguousBasename() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let a = root.appendingPathComponent("A", isDirectory: true)
+        let b = root.appendingPathComponent("B", isDirectory: true)
+        try fm.createDirectory(at: a, withIntermediateDirectories: true)
+        try fm.createDirectory(at: b, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let current = a.appendingPathComponent("Current.md")
+        let relative = a.appendingPathComponent("Design.md")
+        let duplicate = b.appendingPathComponent("Design.md")
+        let unique = b.appendingPathComponent("Spec.md")
+        for file in [current, relative, duplicate, unique] {
+            try "# test".write(to: file, atomically: true, encoding: .utf8)
+        }
+
+        XCTAssertEqual(WorkspaceFiles.resolveKnowledgeTarget("Design", from: current, in: root), relative)
+        XCTAssertEqual(WorkspaceFiles.resolveKnowledgeTarget("B/Spec", from: current, in: root), unique)
+        XCTAssertEqual(WorkspaceFiles.resolveKnowledgeTarget("Spec#Section", from: current, in: root), unique)
+        XCTAssertNil(WorkspaceFiles.resolveKnowledgeTarget("https://example.com", from: current, in: root))
+
+        try fm.removeItem(at: relative)
+        XCTAssertEqual(WorkspaceFiles.resolveKnowledgeTarget("Design", from: current, in: root), duplicate)
+        try "# duplicate".write(to: relative, atomically: true, encoding: .utf8)
+        let second = root.appendingPathComponent("C", isDirectory: true)
+        try fm.createDirectory(at: second, withIntermediateDirectories: true)
+        let another = second.appendingPathComponent("Loose.md")
+        let another2 = b.appendingPathComponent("Loose.md")
+        try "# x".write(to: another, atomically: true, encoding: .utf8)
+        try "# y".write(to: another2, atomically: true, encoding: .utf8)
+        XCTAssertNil(WorkspaceFiles.resolveKnowledgeTarget("Loose", from: current, in: root))
+    }
+}

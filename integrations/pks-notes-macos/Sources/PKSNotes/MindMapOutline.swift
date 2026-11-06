@@ -109,3 +109,58 @@ extension MindMapOutline {
         return links
     }
 }
+
+
+extension MindMapOutline {
+    /// Reparent a pure Markdown list subtree by one indentation level.
+    /// Conservatively rejects prose/code inside the subtree to avoid corrupting Markdown.
+    static func shiftListSubtree(in source: String, nodeID: Int, deeper: Bool) -> String? {
+        let parsed = nodes(in: source)
+        guard let position = parsed.firstIndex(where: { $0.id == nodeID }) else { return nil }
+        let node = parsed[position]
+        var lines = source.components(separatedBy: "\n")
+        guard lines.indices.contains(nodeID) else { return nil }
+
+        func isListLine(_ line: String) -> Bool {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) })
+        }
+        guard isListLine(lines[nodeID]) else { return nil }
+
+        let endLine: Int = {
+            guard position + 1 < parsed.count else { return lines.count }
+            for candidate in parsed[(position + 1)...] where candidate.depth <= node.depth {
+                return candidate.id
+            }
+            return lines.count
+        }()
+
+        for index in nodeID..<endLine {
+            let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty && !isListLine(lines[index]) { return nil }
+        }
+
+        if deeper {
+            var previousStructural: MindMapNode?
+            if position > 0 {
+                for candidate in parsed[..<position].reversed() where candidate.depth <= node.depth {
+                    previousStructural = candidate
+                    break
+                }
+            }
+            guard previousStructural?.depth == node.depth else { return nil }
+        } else {
+            let indent = lines[nodeID].prefix(while: { $0 == " " }).count
+            guard indent >= 2 else { return nil }
+        }
+
+        let delta = deeper ? 2 : -2
+        for index in nodeID..<endLine where !lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
+            let currentIndent = lines[index].prefix(while: { $0 == " " }).count
+            let nextIndent = currentIndent + delta
+            guard nextIndent >= 0 else { return nil }
+            lines[index] = String(repeating: " ", count: nextIndent) + lines[index].dropFirst(currentIndent)
+        }
+        return lines.joined(separator: "\n")
+    }
+}

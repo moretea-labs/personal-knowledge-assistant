@@ -1073,7 +1073,9 @@ struct NotesWindow: View {
         if let url = model.previewPDF {
             NativePDFPreview(url: url)
         } else if showingMindMap && model.selected != nil && model.externalBody == nil {
-            MindMapCanvas(source: $model.draft)
+            MindMapCanvas(source: $model.draft) { target in
+                _ = model.openKnowledgeLink(target)
+            }
         } else if model.externalBody != nil || mode == .read {
             renderedNote
         } else if mode == .edit {

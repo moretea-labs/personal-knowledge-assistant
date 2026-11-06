@@ -3,6 +3,7 @@ import SwiftUI
 /// An editable Markdown-backed mind-map outline. No separate document storage.
 struct MindMapCanvas: View {
     @Binding var source: String
+    let openLink: (String) -> Void
     @State private var selectedID: Int?
     @State private var renameTitle = ""
     @State private var renaming = false
@@ -35,6 +36,20 @@ struct MindMapCanvas: View {
                     collapsed.removeAll()
                 }.disabled(selectedID == nil)
                 Button("Rename", systemImage: "pencil") { beginRename() }.disabled(selectedID == nil)
+                Button {
+                    shiftSelected(deeper: false)
+                } label: {
+                    Image(systemName: "arrow.left")
+                }
+                .help("Promote node")
+                .disabled(selectedID == nil || shiftedSource(deeper: false) == nil)
+                Button {
+                    shiftSelected(deeper: true)
+                } label: {
+                    Image(systemName: "arrow.right")
+                }
+                .help("Make child of previous sibling")
+                .disabled(selectedID == nil || shiftedSource(deeper: true) == nil)
                 Button("Delete Leaf", systemImage: "trash") {
                     guard let id = selectedID, let updated = MindMapOutline.deleteLeaf(in: source, nodeID: id) else { return }
                     source = updated
@@ -66,11 +81,17 @@ struct MindMapCanvas: View {
                                 .font(.system(size: 5))
                                 .foregroundStyle(.tertiary)
                             Text(node.title).font(.system(size: node.depth == 0 ? 17 : 14, weight: .medium))
-                            if !MindMapOutline.links(in: node.title).isEmpty {
-                                Image(systemName: "link")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .help(MindMapOutline.links(in: node.title).map(\.target).joined(separator: ", "))
+                            if let link = MindMapOutline.links(in: node.title).first {
+                                Button {
+                                    openLink(link.target)
+                                } label: {
+                                    Image(systemName: "link")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Open \(link.label)")
+                                .accessibilityLabel("Open linked note \(link.label)")
                             }
                         }
                         .padding(.horizontal, 16).padding(.vertical, 12)
@@ -112,5 +133,16 @@ struct MindMapCanvas: View {
         guard let node = nodes.first(where: { $0.id == selectedID }) else { return }
         renameTitle = node.title
         renaming = true
+    }
+
+    private func shiftedSource(deeper: Bool) -> String? {
+        guard let selectedID else { return nil }
+        return MindMapOutline.shiftListSubtree(in: source, nodeID: selectedID, deeper: deeper)
+    }
+
+    private func shiftSelected(deeper: Bool) {
+        guard let updated = shiftedSource(deeper: deeper) else { return }
+        source = updated
+        collapsed.removeAll()
     }
 }
