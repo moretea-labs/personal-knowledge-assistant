@@ -49,7 +49,7 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertFalse(WorkspaceFiles.contains(notes.appendingPathComponent("private/secret.md"), in: notes))
     }
 
-    func testMarkdownTreeAndHiddenFiles() throws {
+    func testMixedFileTreeAndHiddenFiles() throws {
         let fm = FileManager.default
         let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let nested = base.appendingPathComponent("分组")
@@ -59,9 +59,15 @@ final class PKSNotesTests: XCTestCase {
         try "# Sub".write(to: nested.appendingPathComponent("中文.md"), atomically: true, encoding: .utf8)
         try "hidden".write(to: base.appendingPathComponent(".hidden.md"), atomically: true, encoding: .utf8)
         try "asset".write(to: nested.appendingPathComponent("image.png"), atomically: true, encoding: .utf8)
+        try "%PDF-1.4\n".write(to: base.appendingPathComponent("Guide.pdf"), atomically: true, encoding: .utf8)
+        try "hidden".write(to: base.appendingPathComponent(".private.pdf"), atomically: true, encoding: .utf8)
         let result = WorkspaceFiles.tree(in: base)
-        XCTAssertEqual(result.map { $0.name }, ["分组", "README"])
-        XCTAssertEqual(result.first?.children?.map { $0.name }, ["中文"])
+        XCTAssertEqual(result.map { $0.name }, ["分组", "Guide.pdf", "README"])
+        XCTAssertEqual(result.first?.children?.map { $0.name }, ["image.png", "中文"])
+        XCTAssertTrue(result[1].isPDF)
+        XCTAssertFalse(result[1].isMarkdown)
+        XCTAssertTrue(result[2].isMarkdown)
+        XCTAssertEqual(result.first?.children?.first?.iconName, "doc")
     }
 
     func testFolderExpansionShowsOnlyVisibleDescendants() {
@@ -121,6 +127,47 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(folder.isFolder)
         XCTAssertEqual(folder.name, "Empty")
         XCTAssertEqual(folder.children?.count, 0)
+    }
+
+    @MainActor
+    func testPDFPreviewHonorsUnsavedNoteAndMarkdownReopens() async throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let note = root.appendingPathComponent("draft.md")
+        let pdf = root.appendingPathComponent("manual.pdf")
+        let outside = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".pdf")
+        try "# Original".write(to: note, atomically: true, encoding: .utf8)
+        try "%PDF-1.4".write(to: pdf, atomically: true, encoding: .utf8)
+        try "%PDF-1.4".write(to: outside, atomically: true, encoding: .utf8)
+        defer { try? fm.removeItem(at: outside) }
+
+        let model = NotesModel()
+        model.openWorkspace(root)
+        model.openFile(note)
+        await waitForNote(model, note)
+        model.draft = "# Unsaved"
+        model.openFile(pdf, navigationDecision: .cancel)
+        XCTAssertEqual(model.selected, note)
+        XCTAssertNil(model.previewPDF)
+        model.openFile(outside, navigationDecision: .discard)
+        XCTAssertEqual(model.selected, note)
+        XCTAssertNil(model.previewPDF)
+        model.openFile(pdf, navigationDecision: .discard)
+        XCTAssertNil(model.selected)
+        XCTAssertEqual(model.previewPDF, pdf)
+        XCTAssertFalse(model.isDirty)
+        model.openFile(note)
+        await waitForNote(model, note)
+        XCTAssertNil(model.previewPDF)
+        XCTAssertEqual(model.draft, "# Original")
     }
 
     @MainActor

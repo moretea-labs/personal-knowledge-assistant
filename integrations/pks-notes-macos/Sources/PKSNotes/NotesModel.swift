@@ -56,7 +56,10 @@ struct NoteItem: Identifiable, Hashable {
 
     var id: String { url.path }
     var isFolder: Bool { children != nil }
-    var name: String { isFolder ? url.lastPathComponent : url.deletingPathExtension().lastPathComponent }
+    var isMarkdown: Bool { !isFolder && ["md", "markdown"].contains(url.pathExtension.lowercased()) }
+    var isPDF: Bool { !isFolder && url.pathExtension.lowercased() == "pdf" }
+    var name: String { isFolder ? url.lastPathComponent : isMarkdown ? url.deletingPathExtension().lastPathComponent : url.lastPathComponent }
+    var iconName: String { isFolder ? "folder" : isPDF ? "doc.richtext" : isMarkdown ? "doc.text" : "doc" }
 
     static func == (lhs: NoteItem, rhs: NoteItem) -> Bool { lhs.url == rhs.url }
     func hash(into hasher: inout Hasher) { hasher.combine(url) }
@@ -104,8 +107,7 @@ enum WorkspaceFiles {
                 let children = tree(in: url)
                 return NoteItem(url: url, children: children)
             }
-            let ext = url.pathExtension.lowercased()
-            return ["md", "markdown"].contains(ext) ? NoteItem(url: url, children: nil) : nil
+            return kind == mode_t(S_IFREG) ? NoteItem(url: url, children: nil) : nil
         }.sorted { a, b in
             if a.isFolder != b.isFolder { return a.isFolder }
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
@@ -144,6 +146,7 @@ final class NotesModel: ObservableObject {
     @Published private(set) var loadingFiles = false
     @Published private(set) var loadingNote = false
     @Published private(set) var selected: URL?
+    @Published private(set) var previewPDF: URL?
     @Published var draft: String = ""
     @Published private(set) var baseline: String = ""
     @Published private(set) var externalTitle: String?
@@ -166,7 +169,7 @@ final class NotesModel: ObservableObject {
     private var securityScopedFolder: URL?
 
     var isDirty: Bool { selected != nil && draft != baseline }
-    var title: String { externalTitle ?? selected?.lastPathComponent ?? "Select a note" }
+    var title: String { externalTitle ?? previewPDF?.lastPathComponent ?? selected?.lastPathComponent ?? "Select a note" }
     var body: String { externalBody ?? draft }
     var groupedHits: [SearchResultGroup] { SearchResultGroup.group(hits) }
 
@@ -243,6 +246,7 @@ final class NotesModel: ObservableObject {
         files = []
         refresh()
         selected = nil
+        previewPDF = nil
         externalTitle = nil
         externalBody = nil
         previewSource = nil
@@ -296,6 +300,39 @@ final class NotesModel: ObservableObject {
             return !isDirty // Never navigate after a save or external-conflict failure.
         case .discard: return true
         case .cancel: return false
+        }
+    }
+
+    /// The one local-file dispatch path shared by the tree, Markdown links and search.
+    func openFile(_ url: URL, navigationDecision: UnsavedNoteDecision? = nil) {
+        guard let root, WorkspaceFiles.contains(url, in: root) else {
+            message = "File is outside the selected workspace."; return
+        }
+        var info = Darwin.stat()
+        guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+            message = "The original file is no longer available."; return
+        }
+
+        if ["md", "markdown"].contains(url.pathExtension.lowercased()) {
+            openNote(url, navigationDecision: navigationDecision)
+        } else if url.pathExtension.lowercased() == "pdf" {
+            if previewPDF == url { return }
+            guard confirmLeavingNote(decision: navigationDecision) else { return }
+            cancelNoteLoad()
+            previewTask?.cancel()
+            selected = nil
+            previewPDF = url
+            baseline = ""
+            draft = ""
+            externalTitle = nil
+            externalBody = nil
+            previewSource = nil
+            activeMatch = nil
+            message = nil
+        } else {
+            // Do not replace the current note when handing a file to another app.
+            openInDefaultApp(url)
         }
     }
 
@@ -353,6 +390,7 @@ final class NotesModel: ObservableObject {
                                    modification: Date?) {
         guard requestedNote == url, loadIdentity == identity else { return }
         selected = url
+        previewPDF = nil
         baseline = content
         draft = content
         savedModification = modification
@@ -465,18 +503,16 @@ final class NotesModel: ObservableObject {
     func openInternalLink(_ url: URL) -> Bool {
         guard let root, let selected,
               let resolved = WorkspaceFiles.resolve(url, from: selected, in: root) else { return false }
-        if ["md", "markdown"].contains(resolved.pathExtension.lowercased()) {
-            openNote(resolved)
-            return true
-        }
         if resolved.pathExtension.isEmpty {
             let markdown = resolved.appendingPathExtension("md")
             if FileManager.default.fileExists(atPath: markdown.path) {
-                openNote(markdown)
+                openFile(markdown)
                 return true
             }
         }
-        return false
+        guard FileManager.default.fileExists(atPath: resolved.path) else { return false }
+        openFile(resolved)
+        return true
     }
 
     func revealInFinder(_ file: URL) {
@@ -492,7 +528,9 @@ final class NotesModel: ObservableObject {
             message = "The original file is not available locally."
             return
         }
-        NSWorkspace.shared.open(file)
+        if !NSWorkspace.shared.open(file) {
+            message = "No application could open \(file.lastPathComponent)."
+        }
     }
 
     func openSourceLink(_ url: URL) {
@@ -508,17 +546,23 @@ final class NotesModel: ObservableObject {
     }
 
     func openResult(_ hit: SearchHit) {
-        if hit.sourceType == "local", let url = hit.localFileURL, let root,
-           WorkspaceFiles.contains(url, in: root),
-           ["md", "markdown"].contains(url.pathExtension.lowercased()) {
-            if selected != url || requestedNote != nil {
-                openNote(url)
-                if requestedNote == url { pendingMatch = hit }
+        if let file = hit.localFileURL {
+            if let root, WorkspaceFiles.contains(file, in: root) {
+                if ["md", "markdown"].contains(file.pathExtension.lowercased()) {
+                    if selected != file || requestedNote != nil {
+                        openFile(file)
+                        if requestedNote == file { pendingMatch = hit }
+                    } else {
+                        activeMatch = hit
+                        matchedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                        matchJumpSequence &+= 1
+                    }
+                } else {
+                    openFile(file)
+                }
             } else {
-                // Repeated hits in the edited note never discard unsaved changes.
-                activeMatch = hit
-                matchedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-                matchJumpSequence &+= 1
+                // Keep outside-workspace local sources in their original default app.
+                openInDefaultApp(file)
             }
             return
         }
@@ -545,6 +589,7 @@ final class NotesModel: ObservableObject {
                 guard !Task.isCancelled, selected == sourceNote,
                       draft == sourceDraft, root == sourceRoot else { return }
                 selected = nil
+                previewPDF = nil
                 externalTitle = hit.title + " · read-only PKS result"
                 externalBody = result.content
                 previewSource = hit

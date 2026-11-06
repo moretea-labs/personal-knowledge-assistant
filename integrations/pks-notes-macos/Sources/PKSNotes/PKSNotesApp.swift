@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import MarkdownUI
+import PDFKit
 
 @MainActor
 final class PKSNotesAppDelegate: NSObject, NSApplicationDelegate {
@@ -314,17 +315,17 @@ struct NotesWindow: View {
                                     })
                                     .help("Double-click to expand or collapse")
                             } else {
-                                Image(systemName: "doc.text")
+                                Image(systemName: row.item.iconName)
                                     .foregroundStyle(.secondary)
                                     .frame(width: 14)
                                 Button {
                                     treeCursorPath = row.id
                                     treeFocused = true
-                                    model.openNote(row.item.url)
+                                    model.openFile(row.item.url)
                                 } label: {
                                     Text(row.item.name)
                                         .font(.system(size: 12))
-                                        .foregroundColor(model.selected == row.item.url ? .accentColor : .primary)
+                                        .foregroundColor(model.selected == row.item.url || model.previewPDF == row.item.url ? .accentColor : .primary)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .contentShape(Rectangle())
                                         .lineLimit(1)
@@ -337,7 +338,7 @@ struct NotesWindow: View {
                         .padding(.vertical, 2)
                         .background(treeFocused && treeCursorPath == row.id
                                     ? Color.accentColor.opacity(0.22)
-                                    : model.selected == row.item.url
+                                    : model.selected == row.item.url || model.previewPDF == row.item.url
                                         ? Color.accentColor.opacity(0.12) : Color.clear,
                                     in: RoundedRectangle(cornerRadius: 5))
                         .contextMenu {
@@ -355,7 +356,7 @@ struct NotesWindow: View {
                     }
                 } header: {
                     HStack {
-                        Text(model.root?.path.contains("Mobile Documents") == true ? "Markdown · iCloud" : "Markdown · local")
+                        Text(model.root?.path.contains("Mobile Documents") == true ? "Files · iCloud" : "Files · local")
                         Spacer()
                         Button(action: { model.chooseWorkspace() }) {
                             Image(systemName: "folder.badge.gearshape")
@@ -398,7 +399,7 @@ struct NotesWindow: View {
                     return .ignored
                 }
                 if item.isFolder { toggleFolder(item.url) }
-                else { model.openNote(item.url) }
+                else { model.openFile(item.url) }
                 return .handled
             }
         }
@@ -455,13 +456,13 @@ struct NotesWindow: View {
 
     private var detail: some View {
         VStack(spacing: 0) {
-            if model.loadingNote && model.selected == nil && model.externalBody == nil {
+            if model.loadingNote && model.selected == nil && model.previewPDF == nil && model.externalBody == nil {
                 ContentUnavailableView {
                     Label("Opening Markdown…", systemImage: "doc.text")
                 } description: {
                     ProgressView().controlSize(.small)
                 }
-            } else if model.selected == nil && model.externalBody == nil {
+            } else if model.selected == nil && model.previewPDF == nil && model.externalBody == nil {
                 ContentUnavailableView {
                     Label("Your Markdown, indexed by PKS", systemImage: "doc.text.magnifyingglass")
                 } description: {
@@ -487,7 +488,7 @@ struct NotesWindow: View {
                 .background(.thinMaterial)
             }
         }
-        .navigationTitle(model.selected?.deletingPathExtension().lastPathComponent ?? "PKS Notes")
+        .navigationTitle(model.selected?.deletingPathExtension().lastPathComponent ?? model.previewPDF?.lastPathComponent ?? "PKS Notes")
     }
 
     private var header: some View {
@@ -506,14 +507,14 @@ struct NotesWindow: View {
                 }
                     .onTapGesture(count: 2) { NSApp.keyWindow?.zoom(nil) }
                     .help("Double-click to zoom or restore the window")
-                Text(model.selected?.path ?? model.previewSource?.uri ?? "PKS search · external source")
+                Text(model.selected?.path ?? model.previewPDF?.path ?? model.previewSource?.uri ?? "PKS search · external source")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .textSelection(.enabled)
             }
             Spacer()
-            if let url = model.selected ?? model.previewSource?.localFileURL {
+            if let url = model.selected ?? model.previewPDF ?? model.previewSource?.localFileURL {
                 Menu {
                     fileActions(url)
                 } label: {
@@ -535,7 +536,7 @@ struct NotesWindow: View {
                 .menuStyle(.borderlessButton)
                 .help("Source actions")
             }
-            if model.externalBody == nil {
+            if model.externalBody == nil && model.previewPDF == nil {
                 Menu {
                     Button("Split: Edit and Preview", systemImage: "rectangle.split.2x1") { mode = .split }
                     Button("Edit Markdown", systemImage: "square.and.pencil") { mode = .edit }
@@ -563,7 +564,9 @@ struct NotesWindow: View {
 
     @ViewBuilder
     private var reader: some View {
-        if model.externalBody != nil || mode == .read {
+        if let url = model.previewPDF {
+            NativePDFPreview(url: url)
+        } else if model.externalBody != nil || mode == .read {
             renderedNote
         } else if mode == .edit {
             editor
@@ -644,4 +647,57 @@ struct NotesWindow: View {
         }
     }
 
+}
+
+
+/// PDFKit is part of macOS; no PDF renderer, server or extra dependency is bundled.
+private struct NativePDFPreview: View {
+    let url: URL
+    @State private var document: PDFDocument?
+    @State private var attemptedURL: URL?
+
+    var body: some View {
+        Group {
+            if let document, attemptedURL == url {
+                PDFCanvas(document: document)
+            } else if attemptedURL == url {
+                ContentUnavailableView {
+                    Label("Cannot preview this PDF", systemImage: "doc.richtext")
+                } description: {
+                    Text("The original file may be unavailable or damaged.")
+                } actions: {
+                    Button("Open with Default App") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            } else {
+                ProgressView("Opening PDF…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: url) {
+            document = PDFDocument(url: url)
+            attemptedURL = url
+        }
+        .accessibilityIdentifier("pks-pdf-preview")
+    }
+}
+
+private struct PDFCanvas: NSViewRepresentable {
+    let document: PDFDocument
+
+    func makeNSView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.displayMode = .singlePageContinuous
+        view.autoScales = true
+        view.backgroundColor = .textBackgroundColor
+        view.document = document
+        return view
+    }
+
+    func updateNSView(_ view: PDFView, context: Context) {
+        if view.document !== document {
+            view.document = document
+        }
+    }
 }
