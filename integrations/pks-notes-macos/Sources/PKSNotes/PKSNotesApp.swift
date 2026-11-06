@@ -289,7 +289,7 @@ struct NotesWindow: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                Slider(value: $fontAdjustment, in: -2...4, step: 0.5)
+                Slider(value: $fontAdjustment, in: -2...4)
                     .accessibilityIdentifier("pks-typography-size")
             }
             VStack(alignment: .leading, spacing: 5) {
@@ -300,7 +300,7 @@ struct NotesWindow: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                Slider(value: $lineAdjustment, in: -0.15...0.30, step: 0.01)
+                Slider(value: $lineAdjustment, in: -0.15...0.30)
                     .accessibilityIdentifier("pks-typography-leading")
             }
             VStack(alignment: .leading, spacing: 5) {
@@ -311,7 +311,7 @@ struct NotesWindow: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                Slider(value: $widthAdjustment, in: -160...160, step: 20)
+                Slider(value: $widthAdjustment, in: -160...160)
                     .accessibilityIdentifier("pks-typography-width")
             }
             Button("Reset Typography") {
@@ -327,7 +327,6 @@ struct NotesWindow: View {
         .controlSize(.small)
         .padding(18)
         .frame(width: 288)
-        .accessibilityIdentifier("pks-typography-inspector")
     }
 
     private var sidebar: some View {
@@ -654,19 +653,34 @@ struct NotesWindow: View {
     private var detail: some View {
         VStack(spacing: 0) {
             if model.loadingNote && model.selected == nil && model.previewPDF == nil && model.externalBody == nil {
-                ContentUnavailableView {
-                    Label("Opening Markdown…", systemImage: "doc.text")
-                } description: {
+                VStack(spacing: 12) {
                     ProgressView().controlSize(.small)
+                    Text("Opening note…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.selected == nil && model.previewPDF == nil && model.externalBody == nil {
-                ContentUnavailableView {
-                    Label("Your Markdown, indexed by PKS", systemImage: "doc.text.magnifyingglass")
-                } description: {
-                    Text("Choose a note on the left, or search your entire PKS knowledge collection. No account or second sync system.")
-                } actions: {
-                    Button("Choose Folder") { model.chooseWorkspace() }
+                VStack(spacing: 12) {
+                    Image(systemName: "text.book.closed")
+                        .font(.system(size: 27, weight: .ultraLight))
+                        .foregroundStyle(.tertiary)
+                    Text(model.root == nil ? "Open a notes folder" : "Choose a note")
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text(model.root == nil
+                         ? "Open your existing Markdown folder. Files stay where they are."
+                         : "Select a document in the sidebar, or search your PKS knowledge with ⌘F.")
+                        .font(.subheadline)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 370)
+                    if model.root == nil {
+                        Button("Choose Folder") { model.chooseWorkspace() }
+                            .padding(.top, 6)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 reader
             }
@@ -750,15 +764,21 @@ private struct NativePDFPreview: View {
             if let document, attemptedURL == url {
                 PDFCanvas(document: document)
             } else if attemptedURL == url {
-                ContentUnavailableView {
-                    Label("Cannot preview this PDF", systemImage: "doc.richtext")
-                } description: {
+                VStack(spacing: 12) {
+                    Image(systemName: "doc.richtext")
+                        .font(.system(size: 27, weight: .ultraLight))
+                        .foregroundStyle(.tertiary)
+                    Text("Cannot preview this PDF")
+                        .font(.title3.weight(.medium))
                     Text("The original file may be unavailable or damaged.")
-                } actions: {
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                     Button("Open with Default App") {
                         NSWorkspace.shared.open(url)
                     }
+                    .padding(.top, 6)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ProgressView("Opening PDF…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
