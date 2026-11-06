@@ -12,6 +12,38 @@ final class PKSNotesTests: XCTestCase {
         XCTFail("Timed out waiting for Markdown to open: \(url.path) — \(model.message ?? "no error")")
     }
 
+    func testBackgroundMarkdownPreviewParsingAndSearchHeadingNavigation() async {
+        let source = """
+        # Overview
+
+        A [local link](assets/example.md) with **formatted text**.
+
+        ## 第二节
+
+        Search target text and a footnote.[^ref]
+
+        [^ref]: Keep whole-document footnotes.
+        """
+        let full = await Task.detached {
+            MarkdownPreviewParsing.prepare(source, match: nil)
+        }.value
+        XCTAssertEqual(full.count, 1, "Regular previews preserve cross-section links and footnotes.")
+        XCTAssertEqual(full.first?.source.markdown, source)
+        XCTAssertTrue(full[0].content.renderMarkdown().contains("local link"))
+
+        let hit = SearchHit(documentId: "example", chunkId: "heading-2", title: "example.md",
+                            uri: "/tmp/example.md", sourceType: "local",
+                            snippet: "Search target text", score: nil, headingPath: "Overview > 第二节")
+        let pieces = await Task.detached {
+            MarkdownPreviewParsing.prepare(source, match: hit)
+        }.value
+        XCTAssertEqual(pieces.count, 2)
+        XCTAssertEqual(pieces.map(\.source.heading), ["Overview", "第二节"])
+        XCTAssertEqual(MarkdownSection.targetIndex(in: pieces.map(\.source),
+                                                  headingPath: hit.headingPath,
+                                                  snippet: hit.snippet, query: "Search"), 1)
+    }
+
     func testChineseSearchDecoding() throws {
         let json = Data("""
         [{"documentId":"doc_test","chunkId":"chunk_test","title":"中文学习.md",
