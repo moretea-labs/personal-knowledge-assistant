@@ -45,6 +45,19 @@ struct PKSNotesApp: App {
     }
 }
 
+/// Local geometry authority for the native toolbar and folder/file tree.
+enum NotesGeometry {
+    static let disclosureWidth: CGFloat = 16
+    static let treeIconWidth: CGFloat = 18
+    static let treeTextGap: CGFloat = 8
+    static let treeIndent: CGFloat = 16
+    static let treeRowHeight: CGFloat = 36
+    static let sidebarInset: CGFloat = 12
+    static let symbolSize: CGFloat = 14
+    static let toolbarTarget: CGFloat = 28
+    static let selectionCorner: CGFloat = 8
+}
+
 private enum SidebarTab: String, CaseIterable {
     case notes = "Notes"
     case search = "Search"
@@ -126,12 +139,21 @@ struct NotesWindow: View {
                                     mode = choice
                                 }
                             } label: {
-                                Label(choice.rawValue, systemImage: choice.symbol)
-                                    .font(.system(size: 12, weight: mode == choice ? .semibold : .regular))
-                                    .foregroundStyle(mode == choice ? Color.primary : Color.secondary)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
-                                    .contentShape(Rectangle())
+                                HStack(spacing: 6) {
+                                    Image(systemName: choice.symbol)
+                                        .font(.system(size: 13, weight: .medium))
+                                        .frame(width: NotesGeometry.symbolSize,
+                                               height: NotesGeometry.symbolSize)
+                                    Text(choice.rawValue)
+                                        .font(.system(size: 12,
+                                                      weight: mode == choice ? .semibold : .regular))
+                                }
+                                .foregroundStyle(mode == choice ? Color.primary : Color.secondary)
+                                .padding(.horizontal, 8)
+                                .frame(height: NotesGeometry.toolbarTarget)
+                                .background(mode == choice ? Color.primary.opacity(0.075) : .clear,
+                                            in: RoundedRectangle(cornerRadius: NotesGeometry.selectionCorner))
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .keyboardShortcut(choice.shortcut, modifiers: .command)
@@ -146,7 +168,7 @@ struct NotesWindow: View {
                 Button {
                     openQuickPicker()
                 } label: {
-                    Image(systemName: "doc.text.magnifyingglass")
+                    toolbarSymbol("doc.text.magnifyingglass")
                 }
                 .keyboardShortcut("p", modifiers: .command)
                 .help("Quick Open Note (⌘P)")
@@ -155,7 +177,7 @@ struct NotesWindow: View {
                 Button {
                     showingTypography = true
                 } label: {
-                    Image(systemName: "textformat.size")
+                    toolbarSymbol("textformat.size")
                 }
                 .popover(isPresented: $showingTypography, arrowEdge: .bottom) {
                     typographyInspector
@@ -174,7 +196,7 @@ struct NotesWindow: View {
                     newNoteParent = nil
                     creatingNote = true
                 } label: {
-                    Image(systemName: "square.and.pencil")
+                    toolbarSymbol("square.and.pencil")
                 }
                 .help("New Markdown note (⌘N)")
                 .keyboardShortcut("n", modifiers: .command)
@@ -183,7 +205,7 @@ struct NotesWindow: View {
                     sidebarTab = .search
                     searchFieldFocused = true
                 } label: {
-                    Image(systemName: "magnifyingglass")
+                    toolbarSymbol("magnifyingglass")
                 }
                 .help("Search PKS knowledge (⌘F)")
                 .keyboardShortcut("f", modifiers: .command)
@@ -204,7 +226,7 @@ struct NotesWindow: View {
                     Button("Refresh Files", systemImage: "arrow.clockwise") { model.refresh() }
                     Button("Choose Folder…", systemImage: "folder") { model.chooseWorkspace() }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    toolbarSymbol("ellipsis.circle")
                 }
                 .menuIndicator(.hidden)
                 .help("File actions and workspace options")
@@ -274,6 +296,13 @@ struct NotesWindow: View {
         }
     }
 
+    private func toolbarSymbol(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
+            .frame(width: NotesGeometry.toolbarTarget, height: NotesGeometry.toolbarTarget)
+            .contentShape(Rectangle())
+    }
+
     private func openQuickPicker() {
         quickOpenQuery = ""
         quickOpenIndex = 0
@@ -288,8 +317,10 @@ struct NotesWindow: View {
     private var quickOpenSheet: some View {
         let matches = quickOpenMatches
         return VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
+                    .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
+                    .frame(width: NotesGeometry.treeIconWidth)
                     .foregroundStyle(.secondary)
                 TextField("Search files…", text: $quickOpenQuery)
                     .textFieldStyle(.plain)
@@ -312,7 +343,8 @@ struct NotesWindow: View {
                     showingQuickOpen = false
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: NotesGeometry.toolbarTarget, height: NotesGeometry.toolbarTarget)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
@@ -323,6 +355,7 @@ struct NotesWindow: View {
             .padding(.vertical, 20)
             Divider()
                 .opacity(0.45)
+                .padding(.horizontal, 20)
             if matches.isEmpty {
                 Text(quickOpenQuery.isEmpty ? "Type a name to find a note in your library."
                      : "No files match your search.")
@@ -339,9 +372,9 @@ struct NotesWindow: View {
                             } label: {
                                 HStack(spacing: 12) {
                                     Image(systemName: item.iconName)
-                                        .font(.system(size: 13))
+                                        .font(.system(size: NotesGeometry.symbolSize))
                                         .foregroundStyle(.secondary)
-                                        .frame(width: 20)
+                                        .frame(width: NotesGeometry.treeIconWidth)
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(item.name)
                                             .font(.system(size: 14, weight: i == quickOpenIndex ? .semibold : .regular))
@@ -466,9 +499,10 @@ struct NotesWindow: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 9) {
+            HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
+                    .frame(width: NotesGeometry.treeIconWidth)
                     .foregroundStyle(.tertiary)
                 TextField("Search notes and knowledge", text: $model.query)
                     .font(.system(size: 13))
@@ -481,9 +515,9 @@ struct NotesWindow: View {
                 }
             }
             .padding(.horizontal, 11)
-            .padding(.vertical, 9)
-            .background(Color.primary.opacity(0.042), in: RoundedRectangle(cornerRadius: 9))
-            .padding(.horizontal, 12)
+            .frame(height: NotesGeometry.treeRowHeight)
+            .background(Color.primary.opacity(0.042), in: RoundedRectangle(cornerRadius: NotesGeometry.selectionCorner))
+            .padding(.horizontal, NotesGeometry.sidebarInset)
             .padding(.top, 12)
             .padding(.bottom, 12)
 
@@ -502,8 +536,10 @@ struct NotesWindow: View {
                             sidebarTab = tab
                         }
                     } label: {
-                        HStack(spacing: 5) {
+                        HStack(spacing: 6) {
                             Image(systemName: tab == .notes ? "folder" : "text.magnifyingglass")
+                                .font(.system(size: NotesGeometry.symbolSize, weight: .regular))
+                                .frame(width: NotesGeometry.treeIconWidth)
                             Text(tab == .notes ? "Files" : "Results")
                         }
                         .font(.system(size: 13, weight: sidebarTab == tab ? .semibold : .regular))
@@ -516,7 +552,7 @@ struct NotesWindow: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, NotesGeometry.sidebarInset)
             .padding(.bottom, 4)
 
             List {
@@ -534,6 +570,8 @@ struct NotesWindow: View {
                                         HStack(spacing: 6) {
                                             Image(systemName: hit.localFileURL != nil ? "doc.text" :
                                                   hit.webURL != nil ? "globe" : "doc.richtext")
+                                                .font(.system(size: NotesGeometry.symbolSize))
+                                                .frame(width: NotesGeometry.treeIconWidth)
                                                 .foregroundStyle(.secondary)
                                             highlighted(hit.title, query: model.query)
                                                 .font(.system(size: 12, weight: .medium))
@@ -566,11 +604,13 @@ struct NotesWindow: View {
                                     resultActions(hit)
                                 } label: {
                                     Image(systemName: "ellipsis")
+                                        .font(.system(size: NotesGeometry.symbolSize))
+                                        .frame(width: NotesGeometry.toolbarTarget)
                                         .foregroundStyle(.secondary)
                                 }
                                 .menuStyle(.borderlessButton)
                                 .menuIndicator(.hidden)
-                                .frame(width: 25)
+                                .frame(width: NotesGeometry.toolbarTarget)
                                 .help("Source actions")
                             }
                             if group.hits.count > 1 {
@@ -624,26 +664,47 @@ struct NotesWindow: View {
                         }
                     }
                     ForEach(visibleTreeRows) { row in
-                        HStack(spacing: 7) {
+                        let isSelected = model.selected == row.item.url || model.previewPDF == row.item.url
+                        HStack(spacing: 0) {
+                            // Both folders and documents reserve the same disclosure column.
                             if row.item.isFolder {
                                 Button {
                                     treeCursorPath = row.id
                                     treeFocused = true
                                     toggleFolder(row.item.url)
                                 } label: {
-                                    Image(systemName: expandedFolderPaths.contains(row.item.id) ? "chevron.down" : "chevron.right")
+                                    Image(systemName: expandedFolderPaths.contains(row.item.id)
+                                          ? "chevron.down" : "chevron.right")
                                         .font(.system(size: 10, weight: .semibold))
                                         .foregroundStyle(.secondary)
-                                        .frame(width: 14, height: 20)
+                                        .frame(width: NotesGeometry.disclosureWidth,
+                                               height: NotesGeometry.treeRowHeight)
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
-                                .help(expandedFolderPaths.contains(row.item.id) ? "Collapse folder" : "Expand folder")
+                                .help(expandedFolderPaths.contains(row.item.id)
+                                      ? "Collapse folder" : "Expand folder")
                                 .accessibilityLabel(expandedFolderPaths.contains(row.item.id)
                                                     ? "Collapse \(row.item.name)" : "Expand \(row.item.name)")
-                                Label(row.item.name, systemImage: "folder")
+                            } else {
+                                Color.clear.frame(width: NotesGeometry.disclosureWidth,
+                                                  height: NotesGeometry.treeRowHeight)
+                            }
+
+                            Image(systemName: row.item.isFolder ? "folder" : row.item.iconName)
+                                .font(.system(size: NotesGeometry.symbolSize, weight: .regular))
+                                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                                .frame(width: NotesGeometry.treeIconWidth,
+                                       height: NotesGeometry.treeRowHeight)
+
+                            if row.item.isFolder {
+                                Text(row.item.name)
                                     .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(.primary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                    .lineLimit(1)
+                                    .frame(height: NotesGeometry.treeRowHeight)
+                                    .padding(.leading, NotesGeometry.treeTextGap)
                                     .contentShape(Rectangle())
                                     .onTapGesture(count: 2) {
                                         treeCursorPath = row.id
@@ -656,30 +717,32 @@ struct NotesWindow: View {
                                     })
                                     .help("Double-click to expand or collapse")
                             } else {
-                                Image(systemName: row.item.iconName)
-                                    .foregroundStyle(model.selected == row.item.url || model.previewPDF == row.item.url
-                                                     ? Color.accentColor : Color.secondary)
-                                    .font(.system(size: 12))
-                                    .frame(width: 14)
                                 Button {
                                     treeCursorPath = row.id
                                     treeFocused = true
                                     model.openFile(row.item.url)
                                 } label: {
                                     Text(row.item.name)
-                                        .font(.system(size: 13, weight: model.selected == row.item.url
-                                                      || model.previewPDF == row.item.url ? .semibold : .regular))
-                                        .foregroundColor(model.selected == row.item.url || model.previewPDF == row.item.url ? .accentColor : .primary)
+                                        .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                                        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                        .contentShape(Rectangle())
                                         .lineLimit(1)
+                                        .frame(height: NotesGeometry.treeRowHeight)
+                                        .padding(.leading, NotesGeometry.treeTextGap)
+                                        .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityIdentifier("pks-note-\(row.item.name)")
                             }
                         }
-                        .padding(.leading, CGFloat(row.depth) * 17)
-                        .padding(.vertical, 5)
+                        .padding(.leading, CGFloat(row.depth) * NotesGeometry.treeIndent)
+                        .background(isSelected ? Color.accentColor.opacity(0.075)
+                                    : treeFocused && treeCursorPath == row.id
+                                        ? Color.primary.opacity(0.045) : .clear,
+                                    in: RoundedRectangle(cornerRadius: NotesGeometry.selectionCorner))
+                        .listRowInsets(EdgeInsets(top: 1, leading: NotesGeometry.sidebarInset,
+                                                 bottom: 1, trailing: NotesGeometry.sidebarInset))
+                        .listRowSeparator(.hidden)
                         .contextMenu {
                             if row.item.isFolder {
                                 Button("New Note Here", systemImage: "square.and.pencil") {
@@ -702,7 +765,8 @@ struct NotesWindow: View {
                         Spacer()
                         Button(action: { model.chooseWorkspace() }) {
                             Image(systemName: "folder")
-                                .font(.system(size: 12))
+                                .font(.system(size: NotesGeometry.symbolSize))
+                                .frame(width: NotesGeometry.toolbarTarget, height: NotesGeometry.toolbarTarget)
                         }
                         .buttonStyle(.borderless)
                         .foregroundStyle(.secondary)
