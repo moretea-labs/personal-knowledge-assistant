@@ -18,6 +18,49 @@ enum NoteTreePresentation {
         items.forEach { visit($0, depth: 0) }
         return rows
     }
+
+    /// A derived list for Quick Open. Built once per vault scan, never persisted.
+    static func openableFiles(_ items: [NoteItem]) -> [NoteItem] {
+        var result: [NoteItem] = []
+        func visit(_ item: NoteItem) {
+            if let children = item.children {
+                children.forEach(visit)
+            } else {
+                result.append(item)
+            }
+        }
+        items.forEach(visit)
+        return result
+    }
+
+    /// Case/diacritic-insensitive native file matching, without another search index.
+    /// Name prefix matches precede name substring, then parent-folder path matches.
+    static func quickOpen(_ files: [NoteItem], query: String, limit: Int = 24) -> [NoteItem] {
+        let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        guard !search.isEmpty, limit > 0 else { return [] }
+        func score(_ item: NoteItem) -> Int? {
+            let name = item.name.folding(options: [.caseInsensitive, .diacriticInsensitive],
+                                         locale: .current)
+            if name == search { return 0 }
+            if name.hasPrefix(search) { return 1 }
+            if name.contains(search) { return 2 }
+            let folder = item.url.deletingLastPathComponent().path
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            return folder.contains(search) ? 3 : nil
+        }
+        return files.compactMap { item -> (item: NoteItem, rank: Int)? in
+            guard let rank = score(item) else { return nil }
+            return (item, rank)
+        }
+        .sorted {
+            if $0.rank != $1.rank { return $0.rank < $1.rank }
+            return $0.item.name.localizedStandardCompare($1.item.name) == .orderedAscending
+        }
+        .prefix(limit)
+        .map(\.item)
+    }
+
     enum Direction {
         case up, down, left, right
     }

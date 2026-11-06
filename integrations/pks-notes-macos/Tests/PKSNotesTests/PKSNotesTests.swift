@@ -218,6 +218,74 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(result.first?.children?.first?.iconName, "doc")
     }
 
+    @MainActor
+    func testRestoringLastNoteRequiresExistingFileInSameWorkspace() async throws {
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        let previousNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let previousWorkspace { defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousNote { defaults.set(previousNote, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let folderA = temp.appendingPathComponent("A", isDirectory: true)
+        let folderB = temp.appendingPathComponent("B", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: folderB, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let note = folderA.appendingPathComponent("笔记.md")
+        try "# Original".write(to: note, atomically: true, encoding: .utf8)
+
+        defaults.set(note.path, forKey: "PKSNotesLastOpenedMarkdown")
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(folderA))
+        await waitForNote(model, note)
+        XCTAssertEqual(model.draft, "# Original")
+        XCTAssertEqual(defaults.string(forKey: "PKSNotesLastOpenedMarkdown"), note.path)
+
+        // Do not open the same basename from another vault; stay empty instead.
+        XCTAssertTrue(model.openWorkspace(folderB))
+        XCTAssertNil(model.selected)
+        XCTAssertFalse(model.loadingNote)
+
+        // A missing file cannot become the active note on restore.
+        let missing = folderA.appendingPathComponent("deleted.md")
+        defaults.set(missing.path, forKey: "PKSNotesLastOpenedMarkdown")
+        XCTAssertTrue(model.openWorkspace(folderA))
+        XCTAssertNil(model.selected)
+        XCTAssertFalse(model.loadingNote)
+    }
+
+    func testQuickOpenSearchIsDerivedRankedAndIncludesNestedFiles() {
+        let root = URL(fileURLWithPath: "/tmp/pks-quickopen")
+        let docs = root.appendingPathComponent("Documents")
+        let chinese = docs.appendingPathComponent("中文笔记.md")
+        let nested = docs.appendingPathComponent("README.md")
+        let top = root.appendingPathComponent("Readme Guide.md")
+        let pdf = root.appendingPathComponent("Report.pdf")
+        let tree = [
+            NoteItem(url: docs, children: [
+                NoteItem(url: chinese, children: nil),
+                NoteItem(url: nested, children: nil)
+            ]),
+            NoteItem(url: top, children: nil),
+            NoteItem(url: pdf, children: nil)
+        ]
+        let flat = NoteTreePresentation.openableFiles(tree)
+        XCTAssertEqual(flat.count, 4)
+        XCTAssertFalse(flat.contains { $0.isFolder })
+        XCTAssertEqual(NoteTreePresentation.quickOpen(flat, query: "README").map(\.url),
+                       [nested, top])
+        XCTAssertEqual(NoteTreePresentation.quickOpen(flat, query: "中文").first?.url, chinese)
+        XCTAssertEqual(NoteTreePresentation.quickOpen(flat, query: "report").first?.url, pdf)
+        XCTAssertEqual(NoteTreePresentation.quickOpen(flat, query: "documents").count, 2)
+        XCTAssertEqual(NoteTreePresentation.quickOpen(flat, query: "documents", limit: 1).count, 1)
+        XCTAssertTrue(NoteTreePresentation.quickOpen(flat, query: "   ").isEmpty)
+        XCTAssertTrue(NoteTreePresentation.quickOpen(flat, query: "impossible").isEmpty)
+    }
+
     func testFolderExpansionShowsOnlyVisibleDescendants() {
         let root = URL(fileURLWithPath: "/tmp/pks-ui-test")
         let parent = root.appendingPathComponent("Projects", isDirectory: true)
