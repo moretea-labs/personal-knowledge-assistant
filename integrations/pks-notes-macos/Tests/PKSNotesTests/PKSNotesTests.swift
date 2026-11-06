@@ -464,6 +464,123 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
+    func testRenameAndTrashPreserveOriginalDataAndCurrentNoteSafety() async throws {
+        let defaults = UserDefaults.standard
+        let oldVault = defaults.string(forKey: "PKSNotesWorkspace")
+        let oldNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let oldVault { defaults.set(oldVault, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let oldNote { defaults.set(oldNote, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+        let fm = FileManager.default
+        let vault = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: vault, withIntermediateDirectories: true)
+        let original = vault.appendingPathComponent("First.md")
+        let renamed = vault.appendingPathComponent("Renamed.md")
+        let other = vault.appendingPathComponent("Taken.md")
+        try "# Initial".write(to: original, atomically: true, encoding: .utf8)
+        try "# Other".write(to: other, atomically: true, encoding: .utf8)
+        var trashed: URL?
+        defer {
+            if let trashed, fm.fileExists(atPath: trashed.path) {
+                try? fm.moveItem(at: trashed, to: renamed)
+            }
+            try? fm.removeItem(at: vault)
+        }
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(vault))
+        model.openNote(original)
+        await waitForNote(model, original)
+
+        model.draft = "# Changes saved before rename"
+        XCTAssertNil(model.renameItem(original, to: "Taken"))
+        XCTAssertTrue(fm.fileExists(atPath: original.path))
+        XCTAssertEqual(model.draft, "# Changes saved before rename")
+        XCTAssertEqual(try String(contentsOf: other, encoding: .utf8), "# Other")
+
+        XCTAssertEqual(model.renameItem(original, to: "Renamed"), renamed)
+        await waitForNote(model, renamed)
+        XCTAssertEqual(model.selected, renamed)
+        XCTAssertEqual(model.draft, "# Changes saved before rename")
+        XCTAssertFalse(fm.fileExists(atPath: original.path))
+        XCTAssertEqual(try String(contentsOf: renamed, encoding: .utf8),
+                       "# Changes saved before rename")
+
+        model.draft = "# Still editing"
+        XCTAssertNil(model.moveToTrash(renamed, navigationDecision: .cancel))
+        XCTAssertTrue(fm.fileExists(atPath: renamed.path))
+        XCTAssertEqual(model.draft, "# Still editing")
+
+        trashed = model.moveToTrash(renamed, navigationDecision: .save)
+        XCTAssertNotNil(trashed)
+        XCTAssertNil(model.selected)
+        XCTAssertFalse(fm.fileExists(atPath: renamed.path))
+        XCTAssertEqual(try String(contentsOf: trashed!, encoding: .utf8), "# Still editing")
+        XCTAssertNil(UserDefaults.standard.string(forKey: "PKSNotesLastOpenedMarkdown"))
+    }
+
+    @MainActor
+    func testFolderTrashAndRenameRespectVaultBoundaryAndSymlinks() async throws {
+        let defaults = UserDefaults.standard
+        let oldVault = defaults.string(forKey: "PKSNotesWorkspace")
+        let oldNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let oldVault { defaults.set(oldVault, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let oldNote { defaults.set(oldNote, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+        let fm = FileManager.default
+        let vault = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let outside = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = vault.appendingPathComponent("Docs", isDirectory: true)
+        let renamed = vault.appendingPathComponent("Archive", isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        let markdown = folder.appendingPathComponent("Note.md")
+        try "# Folder note".write(to: markdown, atomically: true, encoding: .utf8)
+        let outsideNote = outside.appendingPathComponent("External.md")
+        try "# Not ours".write(to: outsideNote, atomically: true, encoding: .utf8)
+        let link = vault.appendingPathComponent("shortcut")
+        try fm.createSymbolicLink(at: link, withDestinationURL: outside)
+        var trashed: URL?
+        defer {
+            if let trashed, fm.fileExists(atPath: trashed.path) {
+                try? fm.moveItem(at: trashed, to: renamed)
+            }
+            try? fm.removeItem(at: vault)
+            try? fm.removeItem(at: outside)
+        }
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(vault))
+        XCTAssertFalse(model.canManage(outsideNote))
+        XCTAssertFalse(model.canManage(link))
+        XCTAssertFalse(model.canManage(vault))
+        XCTAssertNil(model.moveToTrash(outsideNote))
+        XCTAssertNil(model.moveToTrash(link))
+        XCTAssertNil(model.moveToTrash(vault))
+        XCTAssertNil(model.renameItem(folder, to: "../Escape"))
+        XCTAssertTrue(fm.fileExists(atPath: markdown.path))
+        XCTAssertTrue(fm.fileExists(atPath: outsideNote.path))
+
+        model.openNote(markdown)
+        await waitForNote(model, markdown)
+        XCTAssertEqual(model.renameItem(folder, to: "Archive")?.path, renamed.path)
+        let movedNote = renamed.appendingPathComponent("Note.md")
+        await waitForNote(model, movedNote)
+        XCTAssertEqual(model.selected, movedNote)
+        XCTAssertEqual(try String(contentsOf: movedNote, encoding: .utf8), "# Folder note")
+        trashed = model.moveToTrash(renamed)
+        XCTAssertNotNil(trashed)
+        XCTAssertNil(model.selected)
+        XCTAssertFalse(fm.fileExists(atPath: renamed.path))
+        XCTAssertTrue(fm.fileExists(atPath: outsideNote.path))
+    }
+
+    @MainActor
     func testNewNoteUsesCurrentFolderWithoutOverwritingExisting() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")

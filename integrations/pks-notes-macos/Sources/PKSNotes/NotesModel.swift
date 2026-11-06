@@ -604,6 +604,127 @@ final class NotesModel: ObservableObject {
         return true
     }
 
+    /// Only owned regular files and real directories inside the active vault
+    /// may be renamed or moved to Finder Trash.
+    func canManage(_ item: URL) -> Bool {
+        guard let root, WorkspaceFiles.contains(item, in: root) else { return false }
+        var info = Darwin.stat()
+        guard item.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { return false }
+        return [mode_t(S_IFREG), mode_t(S_IFDIR)].contains(info.st_mode & mode_t(S_IFMT))
+    }
+
+    private func isInside(_ url: URL?, item: URL) -> Bool {
+        guard let url else { return false }
+        return url == item || url.path.hasPrefix(item.path + "/")
+    }
+
+    /// Returns the actual macOS Trash destination, which can be restored by
+    /// Finder. Never call removeItem for user-owned documents.
+    @discardableResult
+    func moveToTrash(_ item: URL, navigationDecision: UnsavedNoteDecision? = nil) -> URL? {
+        let target = item.standardizedFileURL
+        guard canManage(target) else {
+            message = "Only existing files inside the notes folder can be moved to Trash."
+            return nil
+        }
+        let affectsCurrent = isInside(selected, item: target) || isInside(previewPDF, item: target)
+        if affectsCurrent && !confirmLeavingNote(decision: navigationDecision) { return nil }
+
+        do {
+            var destination: NSURL?
+            try FileManager.default.trashItem(at: target, resultingItemURL: &destination)
+            if affectsCurrent || isInside(requestedNote, item: target) {
+                cancelNoteLoad()
+                previewTask?.cancel()
+                autoSaveTask?.cancel()
+                autoSavePending = false
+                selected = nil
+                previewPDF = nil
+                draft = ""
+                baseline = ""
+                savedModification = nil
+                externalTitle = nil
+                externalBody = nil
+                previewSource = nil
+                activeMatch = nil
+            }
+            if let previous = UserDefaults.standard.string(forKey: "PKSNotesLastOpenedMarkdown"),
+               isInside(URL(fileURLWithPath: previous), item: target) {
+                UserDefaults.standard.removeObject(forKey: "PKSNotesLastOpenedMarkdown")
+            }
+            refresh()
+            message = nil
+            return destination as URL?
+        } catch {
+            message = "Could not move to Trash: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// Rename in-place without changing the original file type or moving it
+    /// outside the selected workspace. For folders, rebase an open descendant.
+    @discardableResult
+    func renameItem(_ item: URL, to enteredName: String,
+                    navigationDecision: UnsavedNoteDecision? = nil) -> URL? {
+        let target = item.standardizedFileURL
+        guard canManage(target) else {
+            message = "Only existing files inside the notes folder can be renamed."
+            return nil
+        }
+        let stem = enteredName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stem.isEmpty, stem != ".", stem != "..", !stem.hasPrefix("."),
+              !stem.contains("/"), !stem.contains("\\"), !stem.contains(":"),
+              !stem.contains("\0") else {
+            message = "Enter a filename without slashes or special path characters."
+            return nil
+        }
+        let isFolder = (try? target.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+        let suffix = isFolder || target.pathExtension.isEmpty ? "" : "." + target.pathExtension
+        let bareName = !suffix.isEmpty && stem.lowercased().hasSuffix(suffix.lowercased())
+            ? String(stem.dropLast(suffix.count)) : stem
+        guard !bareName.isEmpty else { message = "Enter a valid filename."; return nil }
+        let destination = target.deletingLastPathComponent()
+            .appendingPathComponent(bareName + suffix).standardizedFileURL
+        guard let root, WorkspaceFiles.contains(destination, in: root) else {
+            message = "The new name is outside the notes folder."; return nil
+        }
+        if destination == target { return target }
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            message = "A file or folder with this name already exists."; return nil
+        }
+        let oldSelected = selected
+        let oldPDF = previewPDF
+        let oldRequested = requestedNote
+        let affected = isInside(oldSelected, item: target)
+            || isInside(oldPDF, item: target) || isInside(oldRequested, item: target)
+        if affected && !confirmLeavingNote(decision: navigationDecision) { return nil }
+
+        func rebased(_ url: URL?) -> URL? {
+            guard let url, isInside(url, item: target) else { return nil }
+            if url == target { return destination }
+            return destination.appendingPathComponent(String(url.path.dropFirst(target.path.count + 1)))
+        }
+
+        do {
+            try FileManager.default.moveItem(at: target, to: destination)
+            if let newSelected = rebased(oldSelected) ?? rebased(oldRequested) {
+                loadNote(newSelected)
+            } else if let newPDF = rebased(oldPDF) {
+                previewPDF = newPDF
+            }
+            if let previous = UserDefaults.standard.string(forKey: "PKSNotesLastOpenedMarkdown"),
+               let renamed = rebased(URL(fileURLWithPath: previous)) {
+                UserDefaults.standard.set(renamed.path, forKey: "PKSNotesLastOpenedMarkdown")
+            }
+            refresh()
+            message = nil
+            return destination
+        } catch {
+            message = "Could not rename file: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     func revealInFinder(_ file: URL) {
         guard file.isFileURL, FileManager.default.fileExists(atPath: file.path) else {
             message = "The original file is not available locally."

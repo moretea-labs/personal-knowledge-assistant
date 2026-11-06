@@ -44,6 +44,11 @@ struct PKSNotesApp: App {
                 }
                 .keyboardShortcut("p", modifiers: .command)
                 Divider()
+                Button("Toggle Edit / Preview") {
+                    NotificationCenter.default.post(name: NotesMenuEvent.toggleEdit, object: nil)
+                }
+                .keyboardShortcut(.return, modifiers: .command)
+                Divider()
                 Button("Save Markdown") { model.save() }
                     .keyboardShortcut("s", modifiers: .command)
                 Button("Find in PKS") {
@@ -85,6 +90,7 @@ private enum NotesMenuEvent {
     static let quickOpen = Notification.Name("PKSNotesMenuQuickOpen")
     static let newNote = Notification.Name("PKSNotesMenuNewNote")
     static let search = Notification.Name("PKSNotesMenuSearch")
+    static let toggleEdit = Notification.Name("PKSNotesToggleEditPreview")
 }
 
 private enum SidebarTab: String, CaseIterable {
@@ -142,6 +148,11 @@ struct NotesWindow: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarTab: SidebarTab = .notes
     @State private var pendingEditorFocus: URL?
+    @State private var renameCandidate: URL?
+    @State private var renameValue = ""
+    @State private var showingRename = false
+    @State private var folderTrashCandidate: URL?
+    @State private var confirmingFolderTrash = false
     @State private var expandedFolderPaths: Set<String> = []
     @State private var treeCursorPath: String?
     @FocusState private var searchFieldFocused: Bool
@@ -162,7 +173,7 @@ struct NotesWindow: View {
                     HStack(spacing: 2) {
                         ForEach(ReadingMode.allCases, id: \.self) { choice in
                             Button {
-                                withAnimation(.easeOut(duration: 0.14)) { mode = choice }
+                                switchReadingMode(to: choice)
                             } label: {
                                 Image(systemName: choice.symbol)
                                     .font(.system(size: 13, weight: .medium))
@@ -209,6 +220,7 @@ struct NotesWindow: View {
                     toolbarSymbol("ellipsis.circle")
                 }
                 .menuIndicator(.hidden)
+                .accessibilityIdentifier("pks-file-actions-menu")
                 .help("File actions and workspace options")
             }
         }
@@ -221,6 +233,9 @@ struct NotesWindow: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.search)) { _ in
             focusKnowledgeSearch()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.toggleEdit)) { _ in
+            toggleEditPreview()
         }
         .task(id: PreviewWarmupKey(
             identity: model.selected?.path ?? "",
@@ -272,6 +287,26 @@ struct NotesWindow: View {
         .sheet(isPresented: $showingQuickOpen) {
             quickOpenSheet
         }
+        .alert("Rename", isPresented: $showingRename) {
+            TextField("Name", text: $renameValue)
+                .accessibilityIdentifier("pks-rename-field")
+            Button("Rename") {
+                if let item = renameCandidate { _ = model.renameItem(item, to: renameValue) }
+                renameCandidate = nil
+            }
+            Button("Cancel", role: .cancel) { renameCandidate = nil }
+        } message: {
+            Text("Change the name without moving the item. File extensions are preserved.")
+        }
+        .alert("Move Folder to Trash?", isPresented: $confirmingFolderTrash) {
+            Button("Move to Trash", role: .destructive) {
+                if let folder = folderTrashCandidate { _ = model.moveToTrash(folder) }
+                folderTrashCandidate = nil
+            }
+            Button("Cancel", role: .cancel) { folderTrashCandidate = nil }
+        } message: {
+            Text("The folder and all of its contents will move to the macOS Trash, where they can be restored.")
+        }
     }
 
     private func toolbarSymbol(_ name: String) -> some View {
@@ -279,6 +314,41 @@ struct NotesWindow: View {
             .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
             .frame(width: NotesGeometry.toolbarTarget, height: NotesGeometry.toolbarTarget)
             .contentShape(Rectangle())
+    }
+
+    private func switchReadingMode(to choice: ReadingMode) {
+        guard model.selected != nil, model.previewPDF == nil, model.externalBody == nil else { return }
+        withAnimation(.easeOut(duration: 0.14)) { mode = choice }
+        if choice == .edit {
+            Task { @MainActor in
+                await Task.yield()
+                editorFocused = true
+            }
+        }
+    }
+
+    private func toggleEditPreview() {
+        guard model.selected != nil, model.previewPDF == nil, model.externalBody == nil else { return }
+        switchReadingMode(to: mode == .edit ? .read : .edit)
+    }
+
+    private func beginRename(_ item: URL) {
+        guard model.canManage(item) else { return }
+        renameCandidate = item
+        renameValue = item.hasDirectoryPath || (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            ? item.lastPathComponent : item.deletingPathExtension().lastPathComponent
+        showingRename = true
+    }
+
+    private func requestMoveToTrash(_ item: URL) {
+        guard model.canManage(item) else { return }
+        let isFolder = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+        if isFolder {
+            folderTrashCandidate = item
+            confirmingFolderTrash = true
+        } else {
+            _ = model.moveToTrash(item)
+        }
     }
 
     private func focusKnowledgeSearch() {
@@ -434,7 +504,7 @@ struct NotesWindow: View {
                 Image(systemName: symbol)
                     .font(.system(size: 14, weight: .medium))
                     .frame(width: 18, height: 22)
-                    .foregroundStyle(selected ? theme.linkColor : Color.secondary)
+                    .foregroundStyle(selected ? Color.primary : Color.secondary)
                 Text(title)
                     .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
                     .foregroundStyle(.primary)
@@ -447,12 +517,205 @@ struct NotesWindow: View {
             }
             .padding(.horizontal, 11)
             .frame(height: 32)
-            .background(selected ? theme.linkColor.opacity(theme == .graphite ? 0.13 : 0.09) : .clear,
+            .background(selected ? Color.primary.opacity(theme == .graphite ? 0.13 : 0.065) : .clear,
                         in: RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(tab == .notes ? "pks-sidebar-notes" : "pks-sidebar-search")
+    }
+
+    private func fileTreeRow(_ row: NoteTreePresentation.Row) -> some View {
+                        let isSelected = model.selected == row.item.url || model.previewPDF == row.item.url
+                        return HStack(spacing: 0) {
+                            // Both folders and documents reserve the same disclosure column.
+                            if row.item.isFolder {
+                                Button {
+                                    treeCursorPath = row.id
+                                    treeFocused = true
+                                    toggleFolder(row.item.url)
+                                } label: {
+                                    Image(systemName: expandedFolderPaths.contains(row.item.id)
+                                          ? "chevron.down" : "chevron.right")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: NotesGeometry.disclosureWidth,
+                                               height: NotesGeometry.treeRowHeight)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .help(expandedFolderPaths.contains(row.item.id)
+                                      ? "Collapse folder" : "Expand folder")
+                                .accessibilityLabel(expandedFolderPaths.contains(row.item.id)
+                                                    ? "Collapse \(row.item.name)" : "Expand \(row.item.name)")
+                            } else {
+                                Color.clear.frame(width: NotesGeometry.disclosureWidth,
+                                                  height: NotesGeometry.treeRowHeight)
+                            }
+
+                            Image(systemName: row.item.isFolder ? "folder.fill" : row.item.iconName)
+                                .font(.system(size: NotesGeometry.symbolSize, weight: .regular))
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                                .frame(width: NotesGeometry.treeIconWidth,
+                                       height: NotesGeometry.treeRowHeight)
+
+                            if row.item.isFolder {
+                                Text(row.item.name)
+                                    .font(.system(size: 12.5, weight: .medium))
+                                    .foregroundStyle(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .lineLimit(1)
+                                    .frame(height: NotesGeometry.treeRowHeight)
+                                    .padding(.leading, NotesGeometry.treeTextGap)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture(count: 2) {
+                                        treeCursorPath = row.id
+                                        treeFocused = true
+                                        toggleFolder(row.item.url)
+                                    }
+                                    .simultaneousGesture(TapGesture(count: 1).onEnded {
+                                        treeCursorPath = row.id
+                                        treeFocused = true
+                                    })
+                                    .help("Double-click to expand or collapse")
+                            } else {
+                                Button {
+                                    treeCursorPath = row.id
+                                    treeFocused = true
+                                    model.openFile(row.item.url)
+                                } label: {
+                                    Text(row.item.name)
+                                        .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
+                                        .foregroundStyle(.primary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .lineLimit(1)
+                                        .frame(height: NotesGeometry.treeRowHeight)
+                                        .padding(.leading, NotesGeometry.treeTextGap)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("pks-note-\(row.item.name)")
+                            }
+                        }
+                        .padding(.leading, CGFloat(row.depth) * NotesGeometry.treeIndent)
+                        .background(isSelected ? Color.primary.opacity(theme == .graphite ? 0.15 : 0.075)
+                                    : treeFocused && treeCursorPath == row.id
+                                        ? Color.primary.opacity(0.04) : .clear,
+                                    in: RoundedRectangle(cornerRadius: NotesGeometry.selectionCorner))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .contextMenu {
+                            if row.item.isFolder {
+                                Button("New Note Here", systemImage: "square.and.pencil") {
+                                    beginNewNote(in: row.item.url)
+                                }
+                                Divider()
+                            }
+                            fileActions(row.item.url)
+                        }
+                        .help(row.item.url.path)
+                        .accessibilityIdentifier(row.item.isFolder ? "pks-folder-\(row.item.name)" : row.item.id)
+    }
+
+    @ViewBuilder
+    private var searchResultRows: some View {
+                if !model.hits.isEmpty {
+                    Section("PKS results · across all sources") {
+                        ForEach(model.groupedHits) { group in
+                            let hit = group.primary
+                            VStack(alignment: .leading, spacing: 6) {
+                            HStack(alignment: .top, spacing: 6) {
+                                Button {
+                                    model.openResult(hit)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: hit.localFileURL != nil ? "doc.text" :
+                                                  hit.webURL != nil ? "globe" : "doc.richtext")
+                                                .font(.system(size: NotesGeometry.symbolSize))
+                                                .frame(width: NotesGeometry.treeIconWidth)
+                                                .foregroundStyle(.secondary)
+                                            highlighted(hit.title, query: model.query)
+                                                .font(.system(size: 12, weight: .medium))
+                                                .lineLimit(2)
+                                        }
+                                        Text(hit.sourceLabel + " · " + hit.sourceLocation)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                        if let heading = hit.headingPath, !heading.isEmpty {
+                                            Text(heading)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                        if let snippet = hit.snippet, !snippet.isEmpty {
+                                            highlighted(snippet.replacingOccurrences(of: "\n", with: " "), query: model.query)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(2)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 4)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("pks-result-\(hit.documentId)")
+
+                                Menu {
+                                    resultActions(hit)
+                                } label: {
+                                    Image(systemName: "ellipsis")
+                                        .font(.system(size: NotesGeometry.symbolSize))
+                                        .frame(width: NotesGeometry.toolbarTarget)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .menuStyle(.borderlessButton)
+                                .menuIndicator(.hidden)
+                                .frame(width: NotesGeometry.toolbarTarget)
+                                .help("Source actions")
+                            }
+                            if group.hits.count > 1 {
+                                DisclosureGroup("\(group.hits.count) matching sections") {
+                                    ForEach(Array(group.hits.enumerated()), id: \.offset) { index, match in
+                                        Button {
+                                            model.openResult(match)
+                                        } label: {
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                Text(match.headingPath?.isEmpty == false
+                                                     ? match.headingPath! : "Match \(index + 1)")
+                                                    .font(.caption)
+                                                    .fontWeight(.medium)
+                                                    .lineLimit(1)
+                                                if let snippet = match.snippet, !snippet.isEmpty {
+                                                    highlighted(snippet.replacingOccurrences(of: "\n", with: " "),
+                                                                query: model.query)
+                                                        .font(.caption2)
+                                                        .lineLimit(2)
+                                                }
+                                            }
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .padding(.vertical, 4)
+                                        .accessibilityIdentifier("pks-match-\(match.id)")
+                                    }
+                                }
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 22)
+                            }
+                            }
+                            .contextMenu { resultActions(hit) }
+                            .help(hit.uri)
+                        }
+                    }
+                } else {
+                    Text(model.searching ? "Searching PKS…" : "Search the existing PKS index.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
     }
 
     private var sidebar: some View {
@@ -618,102 +881,7 @@ struct NotesWindow: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                 if sidebarTab == .search {
-                if !model.hits.isEmpty {
-                    Section("PKS results · across all sources") {
-                        ForEach(model.groupedHits) { group in
-                            let hit = group.primary
-                            VStack(alignment: .leading, spacing: 6) {
-                            HStack(alignment: .top, spacing: 6) {
-                                Button {
-                                    model.openResult(hit)
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: hit.localFileURL != nil ? "doc.text" :
-                                                  hit.webURL != nil ? "globe" : "doc.richtext")
-                                                .font(.system(size: NotesGeometry.symbolSize))
-                                                .frame(width: NotesGeometry.treeIconWidth)
-                                                .foregroundStyle(.secondary)
-                                            highlighted(hit.title, query: model.query)
-                                                .font(.system(size: 12, weight: .medium))
-                                                .lineLimit(2)
-                                        }
-                                        Text(hit.sourceLabel + " · " + hit.sourceLocation)
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                        if let heading = hit.headingPath, !heading.isEmpty {
-                                            Text(heading)
-                                                .font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(1)
-                                        }
-                                        if let snippet = hit.snippet, !snippet.isEmpty {
-                                            highlighted(snippet.replacingOccurrences(of: "\n", with: " "), query: model.query)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(2)
-                                        }
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.vertical, 4)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityIdentifier("pks-result-\(hit.documentId)")
-
-                                Menu {
-                                    resultActions(hit)
-                                } label: {
-                                    Image(systemName: "ellipsis")
-                                        .font(.system(size: NotesGeometry.symbolSize))
-                                        .frame(width: NotesGeometry.toolbarTarget)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .menuStyle(.borderlessButton)
-                                .menuIndicator(.hidden)
-                                .frame(width: NotesGeometry.toolbarTarget)
-                                .help("Source actions")
-                            }
-                            if group.hits.count > 1 {
-                                DisclosureGroup("\(group.hits.count) matching sections") {
-                                    ForEach(Array(group.hits.enumerated()), id: \.offset) { index, match in
-                                        Button {
-                                            model.openResult(match)
-                                        } label: {
-                                            VStack(alignment: .leading, spacing: 3) {
-                                                Text(match.headingPath?.isEmpty == false
-                                                     ? match.headingPath! : "Match \(index + 1)")
-                                                    .font(.caption)
-                                                    .fontWeight(.medium)
-                                                    .lineLimit(1)
-                                                if let snippet = match.snippet, !snippet.isEmpty {
-                                                    highlighted(snippet.replacingOccurrences(of: "\n", with: " "),
-                                                                query: model.query)
-                                                        .font(.caption2)
-                                                        .lineLimit(2)
-                                                }
-                                            }
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .padding(.vertical, 4)
-                                        .accessibilityIdentifier("pks-match-\(match.id)")
-                                    }
-                                }
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .padding(.leading, 22)
-                            }
-                            }
-                            .contextMenu { resultActions(hit) }
-                            .help(hit.uri)
-                        }
-                    }
-                } else {
-                    Text(model.searching ? "Searching PKS…" : "Search the existing PKS index.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                    searchResultRows
                 } else {
                 Group {
                     if model.loadingFiles {
@@ -725,96 +893,7 @@ struct NotesWindow: View {
                         }
                     }
                     ForEach(visibleTreeRows) { row in
-                        let isSelected = model.selected == row.item.url || model.previewPDF == row.item.url
-                        HStack(spacing: 0) {
-                            // Both folders and documents reserve the same disclosure column.
-                            if row.item.isFolder {
-                                Button {
-                                    treeCursorPath = row.id
-                                    treeFocused = true
-                                    toggleFolder(row.item.url)
-                                } label: {
-                                    Image(systemName: expandedFolderPaths.contains(row.item.id)
-                                          ? "chevron.down" : "chevron.right")
-                                        .font(.system(size: 10, weight: .semibold))
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: NotesGeometry.disclosureWidth,
-                                               height: NotesGeometry.treeRowHeight)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .help(expandedFolderPaths.contains(row.item.id)
-                                      ? "Collapse folder" : "Expand folder")
-                                .accessibilityLabel(expandedFolderPaths.contains(row.item.id)
-                                                    ? "Collapse \(row.item.name)" : "Expand \(row.item.name)")
-                            } else {
-                                Color.clear.frame(width: NotesGeometry.disclosureWidth,
-                                                  height: NotesGeometry.treeRowHeight)
-                            }
-
-                            Image(systemName: row.item.isFolder ? "folder.fill" : row.item.iconName)
-                                .font(.system(size: NotesGeometry.symbolSize, weight: .regular))
-                                .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(isSelected ? theme.linkColor : Color.secondary)
-                                .frame(width: NotesGeometry.treeIconWidth,
-                                       height: NotesGeometry.treeRowHeight)
-
-                            if row.item.isFolder {
-                                Text(row.item.name)
-                                    .font(.system(size: 12.5, weight: .medium))
-                                    .foregroundStyle(.primary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .lineLimit(1)
-                                    .frame(height: NotesGeometry.treeRowHeight)
-                                    .padding(.leading, NotesGeometry.treeTextGap)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture(count: 2) {
-                                        treeCursorPath = row.id
-                                        treeFocused = true
-                                        toggleFolder(row.item.url)
-                                    }
-                                    .simultaneousGesture(TapGesture(count: 1).onEnded {
-                                        treeCursorPath = row.id
-                                        treeFocused = true
-                                    })
-                                    .help("Double-click to expand or collapse")
-                            } else {
-                                Button {
-                                    treeCursorPath = row.id
-                                    treeFocused = true
-                                    model.openFile(row.item.url)
-                                } label: {
-                                    Text(row.item.name)
-                                        .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
-                                        .foregroundStyle(.primary)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .lineLimit(1)
-                                        .frame(height: NotesGeometry.treeRowHeight)
-                                        .padding(.leading, NotesGeometry.treeTextGap)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityIdentifier("pks-note-\(row.item.name)")
-                            }
-                        }
-                        .padding(.leading, CGFloat(row.depth) * NotesGeometry.treeIndent)
-                        .background(isSelected ? theme.linkColor.opacity(theme == .graphite ? 0.15 : 0.11)
-                                    : treeFocused && treeCursorPath == row.id
-                                        ? Color.primary.opacity(0.04) : .clear,
-                                    in: RoundedRectangle(cornerRadius: NotesGeometry.selectionCorner))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .contextMenu {
-                            if row.item.isFolder {
-                                Button("New Note Here", systemImage: "square.and.pencil") {
-                                    beginNewNote(in: row.item.url)
-                                }
-                                Divider()
-                            }
-                            fileActions(row.item.url)
-                        }
-                        .help(row.item.url.path)
-                        .accessibilityIdentifier(row.item.isFolder ? "pks-folder-\(row.item.name)" : row.item.id)
+                        fileTreeRow(row)
                     }
                 }
                 }
@@ -841,6 +920,13 @@ struct NotesWindow: View {
                     treeCursorPath = next.path
                     expandedFolderPaths = next.expanded
                 }
+            }
+            .onKeyPress(keys: [.delete]) { key in
+                guard sidebarTab == .notes, treeFocused, key.modifiers.contains(.command),
+                      let item = visibleTreeRows.first(where: { $0.id == treeCursorPath })?.item
+                else { return .ignored }
+                requestMoveToTrash(item.url)
+                return .handled
             }
             .onKeyPress(.return) {
                 guard sidebarTab == .notes, treeFocused else { return .ignored }
@@ -884,6 +970,17 @@ struct NotesWindow: View {
         }
         Button("Copy File Path", systemImage: "doc.on.doc") {
             model.copySource(url.path)
+        }
+        if model.canManage(url) {
+            Divider()
+            Button("Rename…", systemImage: "pencil") {
+                beginRename(url)
+            }
+            Button(role: .destructive) {
+                requestMoveToTrash(url)
+            } label: {
+                Label("Move to Trash", systemImage: "trash")
+            }
         }
     }
 
@@ -992,6 +1089,15 @@ struct NotesWindow: View {
             .padding(.vertical, 24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(theme.canvas)
+            // Only the blank 20pt page gutter toggles back to Preview.
+            // Double-clicking actual NSTextView text must still select a word.
+            .overlay(alignment: .leading) {
+                Color.clear
+                    .frame(width: 20)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { switchReadingMode(to: .read) }
+                    .help("Double-click the margin to preview (⌘Return)")
+            }
             // The old draft remains intact until an off-main file load succeeds.
             .disabled(model.loadingNote)
             .accessibilityIdentifier("pks-markdown-editor")
@@ -1007,6 +1113,11 @@ struct NotesWindow: View {
                             cache: $previewCache)
             // A different note must never briefly display another file's parsed document.
             .id(model.selected?.path ?? model.previewSource?.documentId ?? "empty")
+            .simultaneousGesture(TapGesture(count: 2).onEnded {
+                if mode == .read, model.selected != nil, model.externalBody == nil {
+                    switchReadingMode(to: .edit)
+                }
+            })
     }
 
 }
