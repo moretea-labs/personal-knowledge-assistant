@@ -12,8 +12,8 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 ## Features
 
 - Native Mac window; double-click the app or note title to zoom/restore, in addition to standard macOS title-bar controls; separate Notes and Search sidebar tabs
-- Folder navigation, nested Markdown notes and Chinese filenames; double-click a folder name or click its chevron to expand/collapse (including empty folders); active note auto-reveals its parent folders
-- Markdown edit, read, and split preview modes (powered by MarkdownUI 2.4.1)
+- Folder navigation, nested Markdown notes and Chinese filenames; double-click a folder name or click its chevron to expand/collapse (including empty folders); click the file tree to use ↑/↓ to move, ←/→ to collapse/expand and Return to open a note; active note auto-reveals its parent folders
+- Markdown edit, read, and split preview modes (powered by MarkdownUI 2.4.1), using compact view/file menus and a comfortable centered reading width
 - In-workspace Markdown links and images, with path containment checks
 - PKS ranked cross-source search; view snippets and read out-of-workspace results without editing them
 - Search result source labels with per-result ellipsis/right-click actions; Finder reveal, default app open, and path copy for local/managed files
@@ -21,8 +21,9 @@ A native SwiftUI Markdown editor integrated with the existing PKS knowledge-sear
 - Search title/summary keywords are highlighted; click a match section to scroll the Markdown preview to its heading (or first matching heading section) without changing the source file
 - Web-source browser/open-link actions; opaque URI fallback copies the source identifier without guessing a file path
 - The note tree and current note header also offer file actions; missing files report a non-destructive error
-- Native Save / Discard / Cancel when leaving a dirty note (including search, new note, workspace and quit); save conflicts never discard changes
+- Native Save / Discard / Cancel when leaving a dirty note (including search, new note, workspace and quit); external PKS previews respect Discard, while stale results and save conflicts never overwrite current edits
 - Cmd+N creates a Markdown note; Cmd+F focuses PKS search; Cmd+O selects the existing workspace; folder right-click offers New Note Here
+- Markdown files are read on a background task to avoid blocking the Mac UI during iCloud hydration or large-file loading; newer requests cancel and supersede older ones, and file-open errors preserve the existing editor draft
 - Save via Cmd+S; protect unsaved edits and detect concurrent content changes before writing
 - Create notes beside the selected note (or at the workspace root), or explicitly inside a folder via its context menu; note destinations are validated in-vault
 
