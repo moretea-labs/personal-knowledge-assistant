@@ -298,6 +298,7 @@ struct NotesWindow: View {
     @State private var quickOpenQuery = ""
     @State private var quickOpenIndex = 0
     @State private var pdfCaptureRequest: PDFCaptureRequest?
+    @State private var pdfCaptureCommentary = ""
 
     private var quickOpenMatches: [NoteItem] {
         let matches = NoteTreePresentation.quickOpen(allOpenableFiles, query: quickOpenQuery)
@@ -344,6 +345,7 @@ struct NotesWindow: View {
     @FocusState private var searchFieldFocused: Bool
     @FocusState private var treeFocused: Bool
     @FocusState private var quickOpenFocused: Bool
+    @FocusState private var pdfCaptureCommentaryFocused: Bool
     @FocusState private var editorFocused: Bool
 
     var body: some View {
@@ -771,6 +773,7 @@ struct NotesWindow: View {
 
     private func openQuickPicker() {
         pdfCaptureRequest = nil
+        pdfCaptureCommentary = ""
         quickOpenQuery = ""
         quickOpenIndex = 0
         showingQuickOpen = true
@@ -778,9 +781,16 @@ struct NotesWindow: View {
 
     private func beginPDFCapture(pdf: URL, page: Int, selectedText: String?) {
         pdfCaptureRequest = PDFCaptureRequest(pdf: pdf, page: page, selectedText: selectedText)
+        pdfCaptureCommentary = ""
         quickOpenQuery = ""
         quickOpenIndex = 0
         showingQuickOpen = true
+    }
+
+    private func closeQuickPicker() {
+        showingQuickOpen = false
+        pdfCaptureRequest = nil
+        pdfCaptureCommentary = ""
     }
 
     private func openQuickMatch(_ item: NoteItem) {
@@ -788,15 +798,15 @@ struct NotesWindow: View {
             if model.appendPDFReference(
                 pdf: capture.pdf,
                 page: capture.page,
+                commentary: pdfCaptureCommentary,
                 selectedText: capture.selectedText,
                 to: item.url
             ) {
-                pdfCaptureRequest = nil
-                showingQuickOpen = false
+                closeQuickPicker()
             }
             return
         }
-        showingQuickOpen = false
+        closeQuickPicker()
         model.openFile(item.url)
     }
 
@@ -807,6 +817,7 @@ struct NotesWindow: View {
                 for: capture.pdf,
                 page: capture.page,
                 root: root,
+                commentary: pdfCaptureCommentary,
                 selectedText: capture.selectedText
               )
         else { return }
@@ -817,9 +828,8 @@ struct NotesWindow: View {
             in: root
         ) else { return }
 
-        pdfCaptureRequest = nil
-        showingQuickOpen = false
         guard let created = model.newNote(named: filename, initialContent: "\(snippet)\n") else { return }
+        closeQuickPicker()
         pendingEditorFocus = created
         mode = .edit
     }
@@ -863,6 +873,20 @@ struct NotesWindow: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 10)
                 }
+
+                TextField(
+                    language.text("Your note…"),
+                    text: $pdfCaptureCommentary,
+                    axis: .vertical
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 14))
+                .lineLimit(2...4)
+                .focused($pdfCaptureCommentaryFocused)
+                .accessibilityLabel(language.text("Your note"))
+                .accessibilityIdentifier("pks-pdf-capture-commentary")
+                .padding(.horizontal, 20)
+                .padding(.bottom, 10)
             }
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
@@ -890,7 +914,7 @@ struct NotesWindow: View {
                     }
                     .accessibilityIdentifier("pks-quick-open-input")
                 Button {
-                    showingQuickOpen = false
+                    closeQuickPicker()
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 12, weight: .medium))
@@ -900,6 +924,7 @@ struct NotesWindow: View {
                 .foregroundStyle(.secondary)
                 .keyboardShortcut(.cancelAction)
                 .help(language.text("Cancel (Esc)"))
+                .accessibilityIdentifier("pks-quick-open-cancel")
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 20)
@@ -969,13 +994,22 @@ struct NotesWindow: View {
         }
         .frame(
             width: 560,
-            height: (matches.isEmpty ? 176 : min(470, max(238, CGFloat(matches.count) * 54 + 83)))
-                + (pdfCaptureRequest == nil ? 0 : (selectedPreview == nil ? 44 : 88))
+            height: min(
+                620,
+                (matches.isEmpty ? 176 : min(470, max(238, CGFloat(matches.count) * 54 + 83)))
+                    + (pdfCaptureRequest == nil ? 0 : (selectedPreview == nil ? 104 : 148))
+            )
         )
         .background(Color(nsColor: .windowBackgroundColor))
         .animation(.easeOut(duration: 0.16), value: matches.isEmpty)
         .onChange(of: quickOpenQuery) { _, _ in quickOpenIndex = 0 }
-        .onAppear { quickOpenFocused = true }
+        .onAppear {
+            if pdfCaptureRequest != nil {
+                pdfCaptureCommentaryFocused = true
+            } else {
+                quickOpenFocused = true
+            }
+        }
     }
 
     /// Bear/Panda-inspired quiet navigation tint. Editorial content retains its own

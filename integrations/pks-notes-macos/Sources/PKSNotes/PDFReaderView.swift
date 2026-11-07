@@ -37,18 +37,30 @@ enum PDFPageReference {
         for url: URL,
         page: Int,
         root: URL,
+        commentary: String? = nil,
         selectedText: String? = nil
     ) -> String? {
         guard let reference = markdown(for: url, page: page, root: root) else { return nil }
-        guard let selectedText else { return reference }
 
-        let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return reference }
-        let quote = trimmed
-            .components(separatedBy: .newlines)
-            .map { "> \($0)" }
-            .joined(separator: "\n")
-        return "\(reference)\n\n\(quote)"
+        var sections: [String] = []
+        if let commentary {
+            let trimmed = commentary.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { sections.append(trimmed) }
+        }
+        sections.append(reference)
+
+        if let selectedText {
+            let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                let quote = trimmed
+                    .components(separatedBy: .newlines)
+                    .map { "> \($0)" }
+                    .joined(separator: "\n")
+                sections.append(quote)
+            }
+        }
+
+        return sections.joined(separator: "\n\n")
     }
 }
 

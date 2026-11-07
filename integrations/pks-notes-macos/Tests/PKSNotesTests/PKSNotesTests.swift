@@ -1320,6 +1320,31 @@ extension PKSNotesTests {
         XCTAssertNil(model.selected)
     }
 
+    func testPDFPageCommentaryIsOptionalAndPortable() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let pdf = root.appendingPathComponent("Book.pdf")
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+
+        XCTAssertEqual(
+            PDFPageReference.noteSnippet(for: pdf, page: 2, root: root, commentary: "  \n "),
+            "[Book.pdf · p. 2](/Book.pdf#page=2)"
+        )
+        XCTAssertEqual(
+            PDFPageReference.noteSnippet(
+                for: pdf,
+                page: 2,
+                root: root,
+                commentary: "My interpretation\n- remember this",
+                selectedText: "Quoted fact"
+            ),
+            "My interpretation\n- remember this\n\n[Book.pdf · p. 2](/Book.pdf#page=2)\n\n> Quoted fact"
+        )
+    }
+
     @MainActor
     func testPDFPageCanAppendToMarkdownNoteWithoutLeavingPDF() throws {
         let defaults = UserDefaults.standard
@@ -1346,6 +1371,7 @@ extension PKSNotesTests {
         XCTAssertTrue(model.appendPDFReference(
             pdf: pdf,
             page: 4,
+            commentary: "My interpretation",
             selectedText: "Important fact\nSecond line",
             to: note
         ))
@@ -1354,7 +1380,7 @@ extension PKSNotesTests {
         XCTAssertNil(model.selected)
 
         let content = try String(contentsOf: note, encoding: .utf8)
-        XCTAssertTrue(content.contains("[Book.pdf · p. 4](/Book.pdf#page=4)"))
+        XCTAssertTrue(content.contains("My interpretation\n\n[Book.pdf · p. 4](/Book.pdf#page=4)"))
         XCTAssertTrue(content.contains("> Important fact\n> Second line"))
     }
 }

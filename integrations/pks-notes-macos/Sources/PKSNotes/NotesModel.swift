@@ -790,6 +790,7 @@ final class NotesModel: ObservableObject {
     func appendPDFReference(
         pdf: URL,
         page: Int,
+        commentary: String? = nil,
         selectedText: String? = nil,
         to note: URL
     ) -> Bool {
@@ -801,6 +802,7 @@ final class NotesModel: ObservableObject {
                 for: pdf,
                 page: page,
                 root: root,
+                commentary: commentary,
                 selectedText: selectedText
               )
         else {
