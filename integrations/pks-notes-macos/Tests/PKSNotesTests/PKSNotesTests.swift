@@ -1308,4 +1308,36 @@ extension PKSNotesTests {
         XCTAssertEqual(model.previewPDFPage, 7)
         XCTAssertNil(model.selected)
     }
+
+    @MainActor
+    func testPDFPageCanAppendToMarkdownNoteWithoutLeavingPDF() throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = root.appendingPathComponent("Study.md")
+        let pdf = root.appendingPathComponent("Book.pdf")
+        try "# Study\n".write(to: note, atomically: true, encoding: .utf8)
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+
+        let model = NotesModel()
+        model.openWorkspace(root)
+        model.openFile(pdf, pdfPage: 4)
+
+        XCTAssertTrue(model.appendPDFReference(pdf: pdf, page: 4, to: note))
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        XCTAssertEqual(model.previewPDFPage, 4)
+        XCTAssertNil(model.selected)
+
+        let content = try String(contentsOf: note, encoding: .utf8)
+        XCTAssertTrue(content.contains("[Book.pdf · p. 4](/Book.pdf#page=4)"))
+    }
 }

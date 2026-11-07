@@ -272,6 +272,11 @@ private struct PreviewWarmupKey: Hashable {
     let enabled: Bool
 }
 
+private struct PDFCaptureRequest: Equatable {
+    let pdf: URL
+    let page: Int
+}
+
 struct NotesWindow: View {
     @EnvironmentObject private var model: NotesModel
     @Environment(\.notesLanguage) private var language
@@ -291,9 +296,14 @@ struct NotesWindow: View {
     @State private var showingBacklinks = false
     @State private var quickOpenQuery = ""
     @State private var quickOpenIndex = 0
+    @State private var pdfCaptureRequest: PDFCaptureRequest?
 
     private var quickOpenMatches: [NoteItem] {
-        NoteTreePresentation.quickOpen(allOpenableFiles, query: quickOpenQuery)
+        let matches = NoteTreePresentation.quickOpen(allOpenableFiles, query: quickOpenQuery)
+        guard pdfCaptureRequest != nil else { return matches }
+        return matches.filter {
+            !$0.isFolder && ["md", "markdown"].contains($0.url.pathExtension.lowercased())
+        }
     }
 
     private var outlineHeadings: [MarkdownOutlineHeading] {
@@ -748,25 +758,74 @@ struct NotesWindow: View {
     }
 
     private func openQuickPicker() {
+        pdfCaptureRequest = nil
+        quickOpenQuery = ""
+        quickOpenIndex = 0
+        showingQuickOpen = true
+    }
+
+    private func beginPDFCapture(pdf: URL, page: Int) {
+        pdfCaptureRequest = PDFCaptureRequest(pdf: pdf, page: page)
         quickOpenQuery = ""
         quickOpenIndex = 0
         showingQuickOpen = true
     }
 
     private func openQuickMatch(_ item: NoteItem) {
+        if let capture = pdfCaptureRequest {
+            if model.appendPDFReference(pdf: capture.pdf, page: capture.page, to: item.url) {
+                pdfCaptureRequest = nil
+                showingQuickOpen = false
+            }
+            return
+        }
         showingQuickOpen = false
         model.openFile(item.url)
+    }
+
+    private func createNoteFromPDFCapture() {
+        guard let capture = pdfCaptureRequest,
+              let root = model.root,
+              let reference = PDFPageReference.markdown(for: capture.pdf, page: capture.page, root: root)
+        else { return }
+
+        pdfCaptureRequest = nil
+        showingQuickOpen = false
+        guard let created = model.newNote(initialContent: "\(reference)\n") else { return }
+        pendingEditorFocus = created
+        mode = .edit
     }
 
     private var quickOpenSheet: some View {
         let matches = quickOpenMatches
         return VStack(alignment: .leading, spacing: 0) {
+            if let capture = pdfCaptureRequest {
+                HStack(spacing: 10) {
+                    Label(
+                        "\(language.text("Add PDF page to note")) · \(capture.page)",
+                        systemImage: "note.text.badge.plus"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Button(language.text("New note from this page")) {
+                        createNoteFromPDFCapture()
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("pks-pdf-capture-new-note")
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 8)
+            }
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
                     .frame(width: NotesGeometry.treeIconWidth)
                     .foregroundStyle(.secondary)
-                TextField(language.text("Search files…"), text: $quickOpenQuery)
+                TextField(
+                    language.text(pdfCaptureRequest == nil ? "Search files…" : "Search Markdown notes…"),
+                    text: $quickOpenQuery
+                )
                     .textFieldStyle(.plain)
                     .font(.system(size: 17))
                     .focused($quickOpenFocused)
@@ -801,8 +860,15 @@ struct NotesWindow: View {
                 .opacity(0.45)
                 .padding(.horizontal, 20)
             if matches.isEmpty {
-                Text(language.text(quickOpenQuery.isEmpty ? "Type a name to find a note in your library."
-                     : "No files match your search."))
+                Text(language.text(
+                    pdfCaptureRequest != nil
+                        ? (quickOpenQuery.isEmpty
+                           ? "Choose a Markdown note for this PDF page."
+                           : "No Markdown notes match your search.")
+                        : (quickOpenQuery.isEmpty
+                           ? "Type a name to find a note in your library."
+                           : "No files match your search.")
+                ))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -854,7 +920,11 @@ struct NotesWindow: View {
                 }
             }
         }
-        .frame(width: 560, height: matches.isEmpty ? 176 : min(470, max(238, CGFloat(matches.count) * 54 + 83)))
+        .frame(
+            width: 560,
+            height: (matches.isEmpty ? 176 : min(470, max(238, CGFloat(matches.count) * 54 + 83)))
+                + (pdfCaptureRequest == nil ? 0 : 44)
+        )
         .background(Color(nsColor: .windowBackgroundColor))
         .animation(.easeOut(duration: 0.16), value: matches.isEmpty)
         .onChange(of: quickOpenQuery) { _, _ in quickOpenIndex = 0 }
@@ -1697,7 +1767,8 @@ struct NotesWindow: View {
             NativePDFPreview(
                 url: url,
                 root: model.root,
-                requestedPage: model.previewPDFPage
+                requestedPage: model.previewPDFPage,
+                onAddPageToNote: { page in beginPDFCapture(pdf: url, page: page) }
             )
         } else if showingMindMap && model.selected != nil && model.externalBody == nil {
             MindMapCanvas(

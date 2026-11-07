@@ -364,6 +364,7 @@ struct NativePDFPreview: View {
     let url: URL
     let root: URL?
     let requestedPage: Int?
+    let onAddPageToNote: (Int) -> Void
 
     @State private var document: PDFDocument?
     @State private var attemptedURL: URL?
@@ -474,6 +475,17 @@ struct NativePDFPreview: View {
             .disabled(controller.pageCount == 0 || controller.currentPageIndex >= controller.pageCount - 1)
             .help(language.text("Next Page"))
             .accessibilityIdentifier("pks-pdf-next-page")
+
+            Button {
+                onAddPageToNote(controller.currentPageIndex + 1)
+            } label: {
+                Image(systemName: "note.text.badge.plus")
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("n", modifiers: [.command, .option])
+            .disabled(root == nil || controller.pageCount == 0)
+            .help(language.text("Add current PDF page to note") + " (⌥⌘N)")
+            .accessibilityIdentifier("pks-pdf-add-page-to-note")
 
             Button {
                 copyCurrentPageReference()

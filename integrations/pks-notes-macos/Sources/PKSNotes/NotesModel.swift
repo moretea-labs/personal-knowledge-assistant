@@ -778,6 +778,49 @@ final class NotesModel: ObservableObject {
         }
     }
 
+    /// Appends a portable PDF page reference without replacing the target note.
+    /// O_APPEND keeps this capture path additive even if another process writes the file.
+    @discardableResult
+    func appendPDFReference(pdf: URL, page: Int, to note: URL) -> Bool {
+        guard let root,
+              ["md", "markdown"].contains(note.pathExtension.lowercased()),
+              WorkspaceFiles.contains(note, in: root),
+              WorkspaceFiles.contains(pdf, in: root),
+              let reference = PDFPageReference.markdown(for: pdf, page: page, root: root)
+        else {
+            message = AppLanguage.current.text("Could not add PDF page to note.")
+            return false
+        }
+
+        var info = Darwin.stat()
+        guard note.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+            message = AppLanguage.current.text("The original file is no longer available.")
+            return false
+        }
+
+        let descriptor = note.path.withCString {
+            Darwin.open($0, O_WRONLY | O_APPEND)
+        }
+        guard descriptor >= 0 else {
+            message = AppLanguage.current.text("Could not add PDF page to note.")
+            return false
+        }
+
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        do {
+            try handle.write(contentsOf: Data("\n\n\(reference)\n".utf8))
+            try handle.close()
+            refresh()
+            message = "\(AppLanguage.current.text("Added PDF page to note")): \(note.deletingPathExtension().lastPathComponent)"
+            return true
+        } catch {
+            try? handle.close()
+            message = "\(AppLanguage.current.text("Could not add PDF page to note.")) \(error.localizedDescription)"
+            return false
+        }
+    }
+
     /// A new note is immediately usable; the UI never asks for a filename.
     /// Explicit names and automatic Untitled names share this one safe writer.
     @discardableResult
