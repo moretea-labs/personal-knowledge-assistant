@@ -21,7 +21,7 @@
 - `AppStore.sync()` only behind a user-selected **Restore Purchases** action.
 - No writable UserDefaults Boolean, plain-text license files, or server verification. Previously owned files remain editable if Pro expires/refunds.
 - Test configuration: `Tests/PKSNotesTests/Resources/PKSNotes.storekit` (local fixture; never uploads to App Store).
-- Real StoreKit flow acceptance lives in the minimal Xcode macOS app-host under `StoreKitTestHost/`; it compiles the canonical `ProPurchases.swift` and reuses the same fixture, so there is no second entitlement implementation. Run `scripts/test-storekit-host.sh`. The local hosted suite covers purchase/unlock, refund/revocation, explicit restore, and Ask-to-Buy pending→approval. This is deterministic local StoreKitTest evidence; Apple signing and App Store Sandbox remain separate release gates.
+- Real StoreKit flow acceptance lives in the minimal Xcode macOS app-host under `StoreKitTestHost/`; it compiles the canonical `ProPurchases.swift` and reuses the same fixture, so there is no second entitlement implementation. Run `PKS_NOTES_DEVELOPMENT_TEAM=<team> scripts/test-storekit-host.sh` (optionally set `PKS_NOTES_DEVELOPMENT_SIGN_IDENTITY`). The script requires a matching **Apple Development** certificate because unsigned or wrong-team hosts fail StoreKit transaction device verification. The hosted suite covers purchase/unlock, refund/revocation, explicit restore, and Ask-to-Buy pending→approval. Mac App Distribution / Installer signing and App Store Sandbox remain separate release gates.
 
 ## Mac App Store packaging
 
@@ -44,7 +44,7 @@ To create an actual signed upload package after the account identities are ready
 ## Known blockers / evidence
 
 - Existing local machine certificates were checked on 2026-11-07: Apple Development and Developer ID Application identities exist, but **Mac App Distribution / Mac Installer Distribution** identities were not detected in the checked keychain outputs. This blocks creating a genuine App Store submission package.
-- The normal local preview remains a Swift Package executable installed using an ad-hoc signature. A separate Xcode-hosted local test app validates the canonical StoreKit code with StoreKitTest: purchase/unlock, refund/revocation, explicit restore, and Ask-to-Buy pending→approval all pass. This local test host is not an App Store distribution artifact; Apple Development/App Store Sandbox verification remains required separately.
+- The normal local preview remains a Swift Package executable installed using an ad-hoc signature. A separate **Apple Development-signed** Xcode test host validates the canonical StoreKit code with StoreKitTest: purchase/unlock, refund/revocation, explicit restore, and Ask-to-Buy pending→approval all pass. This development-signed host is test evidence only and is not an App Store distribution artifact.
 - PKS related-knowledge search uses `127.0.0.1:3217` only when the optional local PKS provider is present. If it is absent, the related section clears remote results and shows an explicit unavailable state while Markdown, file access and local backlinks remain usable; no login or custom server is required for the standalone reviewer path.
 - Product configuration exists only as an Xcode StoreKit testing fixture until App Store Connect is updated. **Local StoreKit tests are not a substitute for Apple sandbox / App Review.**
 
