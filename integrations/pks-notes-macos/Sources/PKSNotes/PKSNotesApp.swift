@@ -928,6 +928,21 @@ struct NotesWindow: View {
                                     .frame(height: NotesGeometry.treeRowHeight)
                                     .padding(.leading, NotesGeometry.treeTextGap)
                                     .contentShape(Rectangle())
+                                    .draggable(row.item.url)
+                                    .dropDestination(for: URL.self) { urls, _ in
+                                        guard let source = urls.first?.standardizedFileURL,
+                                              model.canManage(source),
+                                              source != row.item.url else { return false }
+                                        let moved = model.moveItem(source, to: row.item.url)
+                                        if moved != nil {
+                                            expandedFolderPaths.insert(row.item.url.path)
+                                            fileDropTargetPath = nil
+                                            return true
+                                        }
+                                        return false
+                                    } isTargeted: { targeted in
+                                        fileDropTargetPath = targeted ? row.id : nil
+                                    }
                                     .onTapGesture(count: 2) {
                                         treeCursorPath = row.id
                                         treeFocused = true
@@ -939,22 +954,22 @@ struct NotesWindow: View {
                                     })
                                     .help(language.text("Double-click to expand or collapse"))
                             } else {
-                                Button {
-                                    treeCursorPath = row.id
-                                    treeFocused = true
-                                    model.openFile(row.item.url)
-                                } label: {
-                                    Text(row.item.name)
-                                        .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
-                                        .foregroundStyle(.primary)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .lineLimit(1)
-                                        .frame(height: NotesGeometry.treeRowHeight)
-                                        .padding(.leading, NotesGeometry.treeTextGap)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityIdentifier("pks-note-\(row.item.name)")
+                                Text(row.item.name)
+                                    .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
+                                    .foregroundStyle(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .lineLimit(1)
+                                    .frame(height: NotesGeometry.treeRowHeight)
+                                    .padding(.leading, NotesGeometry.treeTextGap)
+                                    .contentShape(Rectangle())
+                                    .draggable(row.item.url)
+                                    .simultaneousGesture(TapGesture(count: 1).onEnded {
+                                        treeCursorPath = row.id
+                                        treeFocused = true
+                                        model.openFile(row.item.url)
+                                    })
+                                    .accessibilityAddTraits(.isButton)
+                                    .accessibilityIdentifier("pks-note-\(row.item.name)")
                             }
                         }
                         .padding(.leading, CGFloat(row.depth) * NotesGeometry.treeIndent)
@@ -970,23 +985,6 @@ struct NotesWindow: View {
                                     .stroke(theme.linkColor.opacity(0.75), lineWidth: 1.5)
                                     .allowsHitTesting(false)
                             }
-                        }
-                        .draggable(row.item.url)
-                        .dropDestination(for: URL.self) { urls, _ in
-                            guard row.item.isFolder,
-                                  let source = urls.first?.standardizedFileURL,
-                                  model.canManage(source),
-                                  source != row.item.url else { return false }
-                            let moved = model.moveItem(source, to: row.item.url)
-                            if moved != nil {
-                                expandedFolderPaths.insert(row.item.url.path)
-                                fileDropTargetPath = nil
-                                return true
-                            }
-                            return false
-                        } isTargeted: { targeted in
-                            guard row.item.isFolder else { return }
-                            fileDropTargetPath = targeted ? row.id : nil
                         }
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
