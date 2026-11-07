@@ -106,6 +106,13 @@ Current implementation intent:
 
 The public privacy policy must accurately describe the final release behavior.
 
+### Current source/dependency audit (2026-11-07)
+
+- Direct package graph: MarkdownUI → NetworkImage and swift-cmark only.
+- Source scan finds no analytics, advertising, telemetry, crash-reporting or tracking SDK integration. The only fixed application network endpoint is the optional local PKS service at `127.0.0.1:3217`; user-authored Markdown may also reference external images/links selected by the user's own content.
+- No `PrivacyInfo.xcprivacy` is added solely for Required Reason APIs in this macOS-only V1: Apple's current Required Reason API platform list does not include macOS. Re-check Apple submission requirements and the final dependency graph immediately before upload.
+- App Store Connect App Privacy answers are still mandatory. Select “No, we do not collect data from this app” only if the final release audit remains consistent with the implementation above.
+
 ## Non-Consumable IAP
 
 - Type: Non-Consumable
