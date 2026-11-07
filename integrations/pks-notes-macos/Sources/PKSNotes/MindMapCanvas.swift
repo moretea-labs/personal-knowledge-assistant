@@ -6,9 +6,10 @@ import UniformTypeIdentifiers
 struct MindMapCanvas: View {
     @Environment(\.notesLanguage) private var language
     @Binding var source: String
+    @Binding var selectedID: Int?
     let openLink: (String) -> Void
+    let revealSource: (Int) -> Void
     let importOutline: (String, String) -> Bool
-    @State private var selectedID: Int?
     @State private var renameTitle = ""
     @State private var editingNodeID: Int?
     @State private var editingCreatedNodeID: Int?
@@ -170,6 +171,13 @@ struct MindMapCanvas: View {
 
             Button(language.text("Rename"), systemImage: "pencil") { beginRename() }
                 .disabled(selectedID == nil)
+
+            Button(language.text("Show in Markdown"), systemImage: "text.cursor") {
+                if let selectedID { revealSource(selectedID) }
+            }
+            .disabled(selectedID == nil)
+            .help(language.text("Reveal selected node in Markdown"))
+            .accessibilityIdentifier("pks-mind-map-reveal-markdown")
 
             Button {
                 shiftSelected(deeper: false)
@@ -399,11 +407,17 @@ struct MindMapCanvas: View {
                 selectedID = node.id
                 beginRename()
             }
+            Button(language.text("Show in Markdown"), systemImage: "text.cursor") {
+                selectedID = node.id
+                revealSource(node.id)
+            }
             Button(language.text("Delete Branch"), systemImage: "trash", role: .destructive) {
                 branchDeleteCandidateID = node.id
             }
             .disabled(MindMapOutline.deleteListSubtree(in: source, nodeID: node.id) == nil)
         }
+        .accessibilityIdentifier("pks-mind-map-node-\(node.id)")
+        .accessibilityValue(selectedID == node.id ? language.text("Selected") : "")
         .onTapGesture {
             guard editingNodeID != node.id else { return }
             if editingNodeID != nil { finishRename(save: true) }

@@ -279,6 +279,8 @@ struct NotesWindow: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var mode: ReadingMode = .read
     @State private var showingMindMap = false
+    @State private var mindMapSelectionLine: Int?
+    @State private var modeBeforeMindMap: ReadingMode = .read
     @AppStorage("PKSNotesReadingTheme") private var themeID = NotesTheme.system.rawValue
     @AppStorage("PKSNotesFontAdjustment") private var fontAdjustment = 0.0
     @AppStorage("PKSNotesLineAdjustment") private var lineAdjustment = 0.0
@@ -362,7 +364,10 @@ struct NotesWindow: View {
                 }
 
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
-                    Toggle(isOn: $showingMindMap) {
+                    Toggle(isOn: Binding(
+                        get: { showingMindMap },
+                        set: { setMindMapVisible($0) }
+                    )) {
                         toolbarSymbol(showingMindMap ? "doc.text" : "point.3.connected.trianglepath.dotted")
                     }
                     .toggleStyle(.button)
@@ -589,6 +594,7 @@ struct NotesWindow: View {
             }
         }
         .onChange(of: model.selected) { _, note in
+            mindMapSelectionLine = nil
             let openAsMap = note != nil && note == pendingMindMapOpen
             showingMindMap = openAsMap
             if openAsMap {
@@ -1681,7 +1687,9 @@ struct NotesWindow: View {
         } else if showingMindMap && model.selected != nil && model.externalBody == nil {
             MindMapCanvas(
                 source: $model.draft,
+                selectedID: $mindMapSelectionLine,
                 openLink: { target in _ = model.openKnowledgeLink(target) },
+                revealSource: { line in revealMarkdownLine(line) },
                 importOutline: { markdown, name in
                     // Import into a new note rather than overwriting the active note.
                     guard model.newNote(named: name, initialContent: markdown) != nil else {
@@ -1732,6 +1740,45 @@ struct NotesWindow: View {
             .disabled(model.loadingNote)
             .accessibilityIdentifier("pks-markdown-editor")
             .onAppear { resetNativeEditorUndoBaseline() }
+    }
+
+    private func setMindMapVisible(_ visible: Bool) {
+        guard visible != showingMindMap else { return }
+        if visible {
+            modeBeforeMindMap = mode
+            if let textView = MarkdownNativeCommand.activeTextView()
+                ?? markdownTextView(in: NSApp.keyWindow?.contentView) {
+                mindMapSelectionLine = MindMapOutline.nodeID(
+                    atUTF16Offset: textView.selectedRange().location,
+                    in: model.draft
+                )
+            } else if mindMapSelectionLine == nil {
+                mindMapSelectionLine = MindMapOutline.nodes(in: model.draft).first?.id
+            }
+            showingMindMap = true
+        } else if let line = mindMapSelectionLine {
+            revealMarkdownLine(line)
+        } else {
+            showingMindMap = false
+            mode = modeBeforeMindMap
+        }
+    }
+
+    private func revealMarkdownLine(_ line: Int) {
+        guard model.selected != nil,
+              let range = MindMapOutline.sourceLineRange(in: model.draft, nodeID: line) else { return }
+        mindMapSelectionLine = line
+        showingMindMap = false
+        mode = .edit
+        Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(60))
+            guard let textView = MarkdownNativeCommand.activeTextView()
+                    ?? markdownTextView(in: NSApp.keyWindow?.contentView) else { return }
+            NSApp.keyWindow?.makeFirstResponder(textView)
+            textView.setSelectedRange(range)
+            textView.scrollRangeToVisible(range)
+        }
     }
 
     private var renderedNote: some View {

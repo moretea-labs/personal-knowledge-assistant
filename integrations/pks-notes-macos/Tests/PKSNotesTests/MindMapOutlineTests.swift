@@ -204,3 +204,37 @@ extension MindMapOutlineTests {
         XCTAssertLessThan(roots[0].center.y, roots[1].center.y)
     }
 }
+
+
+extension MindMapOutlineTests {
+    func testSourceLineRangeUsesUTF16AndExactMarkdownLine() {
+        let source = "# 根节点\n- Alpha 😀\n  - Child\nParagraph"
+        XCTAssertEqual(
+            MindMapOutline.sourceLineRange(in: source, nodeID: 1),
+            NSRange(location: 6, length: 10)
+        )
+        XCTAssertEqual(
+            MindMapOutline.sourceLineRange(in: source, nodeID: 2),
+            NSRange(location: 17, length: 9)
+        )
+        XCTAssertNil(MindMapOutline.sourceLineRange(in: source, nodeID: 3))
+    }
+
+    func testCaretResolvesToNearestPrecedingMindMapNode() {
+        let source = "# Root\nIntro paragraph\n- Topic\n  supporting prose\n  - Child"
+        let ns = source as NSString
+        XCTAssertEqual(MindMapOutline.nodeID(atUTF16Offset: 0, in: source), 0)
+        XCTAssertEqual(
+            MindMapOutline.nodeID(atUTF16Offset: ns.range(of: "Intro").location, in: source),
+            0
+        )
+        XCTAssertEqual(
+            MindMapOutline.nodeID(atUTF16Offset: ns.range(of: "supporting").location, in: source),
+            2
+        )
+        XCTAssertEqual(
+            MindMapOutline.nodeID(atUTF16Offset: ns.range(of: "Child").location, in: source),
+            4
+        )
+    }
+}

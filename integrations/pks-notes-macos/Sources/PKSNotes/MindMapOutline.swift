@@ -36,6 +36,33 @@ enum MindMapOutline {
         }
         return result
     }
+
+    /// Node IDs are canonical Markdown line indexes. Convert them to native UTF-16
+    /// ranges only at the editor boundary so Mind Map never owns a second position model.
+    static func sourceLineRange(in markdown: String, nodeID: Int) -> NSRange? {
+        guard nodeID >= 0 else { return nil }
+        let lines = markdown.components(separatedBy: "\n")
+        guard lines.indices.contains(nodeID),
+              nodes(in: markdown).contains(where: { $0.id == nodeID }) else { return nil }
+
+        var location = 0
+        for index in 0..<nodeID {
+            location += (lines[index] as NSString).length + 1
+        }
+        return NSRange(location: location, length: (lines[nodeID] as NSString).length)
+    }
+
+    /// Resolve an editor caret/selection position to the nearest preceding outline node.
+    /// Prose below a heading/list item therefore stays associated with its structural parent.
+    static func nodeID(atUTF16Offset offset: Int, in markdown: String) -> Int? {
+        let length = (markdown as NSString).length
+        let clamped = min(max(0, offset), length)
+        let prefix = (markdown as NSString).substring(to: clamped)
+        let lineIndex = prefix.reduce(into: 0) { count, character in
+            if character == "\n" { count += 1 }
+        }
+        return nodes(in: markdown).last(where: { $0.id <= lineIndex })?.id
+    }
 }
 
 extension MindMapOutline {
