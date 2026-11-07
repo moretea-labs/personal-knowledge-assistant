@@ -1320,6 +1320,10 @@ extension PKSNotesTests {
             ],
             fingerprint: fingerprint
         ))
+        XCTAssertTrue(anchor.matches(text: "Quoted   fact"))
+        XCTAssertFalse(anchor.matches(text: "Quoted changed fact"),
+                       "A stale PDF selection must fail fingerprint validation.")
+
         let markdown = try XCTUnwrap(PDFPageReference.markdown(
             for: pdf,
             page: 7,

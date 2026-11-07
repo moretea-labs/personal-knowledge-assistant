@@ -47,6 +47,10 @@ struct PDFSourceAnchor: Equatable {
         return String(format: "%016llx", hash)
     }
 
+    func matches(text: String) -> Bool {
+        Self.fingerprint(for: text) == fingerprint
+    }
+
     var fragment: String {
         let locale = Locale(identifier: "en_US_POSIX")
         let rects = normalizedRects.map { rect in
@@ -334,7 +338,7 @@ final class PDFReaderController: ObservableObject {
             combined.add(selection)
         }
         guard let text = combined.string,
-              PDFSourceAnchor.fingerprint(for: text) == anchor.fingerprint
+              anchor.matches(text: text)
         else {
             invalidRequestedSelection = true
             view.currentSelection = nil
