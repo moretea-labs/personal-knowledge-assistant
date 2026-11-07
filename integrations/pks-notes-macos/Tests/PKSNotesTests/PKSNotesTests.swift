@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import SwiftUI
 import XCTest
 @testable import PKSNotes
 
@@ -129,6 +131,38 @@ final class PKSNotesTests: XCTestCase {
                           NotesTheme.midnight.typography.pageWidth)
         XCTAssertTrue(profiles.allSatisfy { $0.heading1 > $0.heading2 && $0.heading2 > $0.heading3 })
         XCTAssertTrue(profiles.allSatisfy { $0.bodySize >= 14 && $0.pageWidth >= 600 })
+    }
+
+    func testReadingThemesRespectApplicationLightAndDarkAppearance() {
+        func luminance(_ color: Color, appearanceName: NSAppearance.Name) -> CGFloat {
+            guard let appearance = NSAppearance(named: appearanceName) else {
+                XCTFail("Missing appearance \(appearanceName)")
+                return 0
+            }
+            var value: CGFloat = 0
+            appearance.performAsCurrentDrawingAppearance {
+                guard let resolved = NSColor(color).usingColorSpace(.sRGB) else {
+                    XCTFail("Could not resolve theme color")
+                    return
+                }
+                value = 0.2126 * resolved.redComponent
+                    + 0.7152 * resolved.greenComponent
+                    + 0.0722 * resolved.blueComponent
+            }
+            return value
+        }
+
+        for theme in NotesTheme.allCases {
+            let lightCanvas = luminance(theme.canvas, appearanceName: .aqua)
+            let darkCanvas = luminance(theme.canvas, appearanceName: .darkAqua)
+            let lightInk = luminance(theme.ink, appearanceName: .aqua)
+            let darkInk = luminance(theme.ink, appearanceName: .darkAqua)
+
+            XCTAssertGreaterThan(lightCanvas, 0.72, "\(theme) must stay light in Light appearance")
+            XCTAssertLessThan(darkCanvas, 0.32, "\(theme) must stay dark in Dark appearance")
+            XCTAssertLessThan(lightInk, 0.48, "\(theme) must use readable dark ink in Light appearance")
+            XCTAssertGreaterThan(darkInk, 0.62, "\(theme) must use readable light ink in Dark appearance")
+        }
     }
 
     func testApplicationAppearanceAndLanguagePreferencesAreIndependent() {

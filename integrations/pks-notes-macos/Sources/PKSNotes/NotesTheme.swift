@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// One persisted presentation preference; notes remain plain Markdown on disk.
 enum NotesTheme: String, CaseIterable, Identifiable {
@@ -30,33 +31,96 @@ enum NotesTheme: String, CaseIterable, Identifiable {
         }
     }
 
+    /// App appearance owns light/dark. Reading themes can tint the page, but must
+    /// never force a dark document inside Light mode or a light document inside Dark mode.
+    private static func adaptive(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
+
+    private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> NSColor {
+        NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
+    }
+
     var canvas: Color {
         switch self {
-        case .system: Color(nsColor: .textBackgroundColor)
-        case .paper: Color(red: 0.998, green: 0.998, blue: 0.997)
-        case .warm: Color(red: 0.974, green: 0.951, blue: 0.903)
-        case .midnight: Color(red: 0.111, green: 0.125, blue: 0.143)
-        case .graphite: Color(red: 0.125, green: 0.129, blue: 0.137)
+        case .system:
+            Color(nsColor: .textBackgroundColor)
+        case .paper:
+            Self.adaptive(
+                light: Self.rgb(0.998, 0.998, 0.997),
+                dark: Self.rgb(0.105, 0.114, 0.126)
+            )
+        case .warm:
+            Self.adaptive(
+                light: Self.rgb(0.974, 0.951, 0.903),
+                dark: Self.rgb(0.135, 0.116, 0.092)
+            )
+        case .midnight:
+            Self.adaptive(
+                light: Self.rgb(0.965, 0.973, 0.980),
+                dark: Self.rgb(0.111, 0.125, 0.143)
+            )
+        case .graphite:
+            Self.adaptive(
+                light: Self.rgb(0.962, 0.964, 0.958),
+                dark: Self.rgb(0.125, 0.129, 0.137)
+            )
         }
     }
 
     var ink: Color {
         switch self {
-        case .system: .primary
-        case .paper: Color(red: 0.16, green: 0.19, blue: 0.23)
-        case .warm: Color(red: 0.28, green: 0.25, blue: 0.21)
-        case .midnight: Color(red: 0.88, green: 0.90, blue: 0.91)
-        case .graphite: Color(red: 0.915, green: 0.916, blue: 0.902)
+        case .system:
+            .primary
+        case .paper:
+            Self.adaptive(
+                light: Self.rgb(0.16, 0.19, 0.23),
+                dark: Self.rgb(0.91, 0.92, 0.94)
+            )
+        case .warm:
+            Self.adaptive(
+                light: Self.rgb(0.28, 0.25, 0.21),
+                dark: Self.rgb(0.93, 0.88, 0.79)
+            )
+        case .midnight:
+            Self.adaptive(
+                light: Self.rgb(0.13, 0.18, 0.22),
+                dark: Self.rgb(0.88, 0.90, 0.91)
+            )
+        case .graphite:
+            Self.adaptive(
+                light: Self.rgb(0.15, 0.16, 0.15),
+                dark: Self.rgb(0.915, 0.916, 0.902)
+            )
         }
     }
 
     var codeBackground: Color {
         switch self {
-        case .system: Color(nsColor: .controlBackgroundColor)
-        case .paper: Color(red: 0.954, green: 0.961, blue: 0.969)
-        case .warm: Color(red: 0.922, green: 0.887, blue: 0.829)
-        case .midnight: Color(red: 0.17, green: 0.19, blue: 0.22)
-        case .graphite: Color(red: 0.173, green: 0.18, blue: 0.192)
+        case .system:
+            Color(nsColor: .controlBackgroundColor)
+        case .paper:
+            Self.adaptive(
+                light: Self.rgb(0.954, 0.961, 0.969),
+                dark: Self.rgb(0.155, 0.168, 0.187)
+            )
+        case .warm:
+            Self.adaptive(
+                light: Self.rgb(0.922, 0.887, 0.829),
+                dark: Self.rgb(0.205, 0.171, 0.132)
+            )
+        case .midnight:
+            Self.adaptive(
+                light: Self.rgb(0.900, 0.922, 0.940),
+                dark: Self.rgb(0.17, 0.19, 0.22)
+            )
+        case .graphite:
+            Self.adaptive(
+                light: Self.rgb(0.900, 0.910, 0.890),
+                dark: Self.rgb(0.173, 0.18, 0.192)
+            )
         }
     }
 
@@ -144,11 +208,28 @@ extension NotesTheme {
 
     var linkColor: Color {
         switch self {
-        case .system: .accentColor
-        case .paper: Color(red: 0.18, green: 0.36, blue: 0.58)
-        case .warm: Color(red: 0.48, green: 0.29, blue: 0.14)
-        case .midnight: Color(red: 0.47, green: 0.73, blue: 0.82)
-        case .graphite: Color(red: 0.92, green: 0.72, blue: 0.39)
+        case .system:
+            .accentColor
+        case .paper:
+            Self.adaptive(
+                light: Self.rgb(0.18, 0.36, 0.58),
+                dark: Self.rgb(0.47, 0.70, 0.96)
+            )
+        case .warm:
+            Self.adaptive(
+                light: Self.rgb(0.48, 0.29, 0.14),
+                dark: Self.rgb(0.85, 0.60, 0.32)
+            )
+        case .midnight:
+            Self.adaptive(
+                light: Self.rgb(0.10, 0.42, 0.56),
+                dark: Self.rgb(0.47, 0.73, 0.82)
+            )
+        case .graphite:
+            Self.adaptive(
+                light: Self.rgb(0.49, 0.33, 0.09),
+                dark: Self.rgb(0.92, 0.72, 0.39)
+            )
         }
     }
 }
