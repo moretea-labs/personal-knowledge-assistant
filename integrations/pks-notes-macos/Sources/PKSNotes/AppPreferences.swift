@@ -220,6 +220,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Selected PDF text": "选中的 PDF 文本",
         "Your note": "你的笔记",
         "Your note…": "写下你的理解…",
+        "Study Note": "学习笔记",
+        "Open note only": "仅打开笔记",
         "New note from this page": "用此页新建笔记",
         "Search Markdown notes…": "搜索 Markdown 笔记…",
         "Choose a Markdown note for this PDF page.": "选择一个 Markdown 笔记来添加此 PDF 页。",

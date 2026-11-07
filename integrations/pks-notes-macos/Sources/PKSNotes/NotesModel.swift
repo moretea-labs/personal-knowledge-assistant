@@ -577,14 +577,19 @@ final class NotesModel: ObservableObject {
                 if let pdfPage { previewPDFPage = pdfPage }
                 return
             }
-            guard confirmLeavingNote(decision: navigationDecision) else { return }
+            let preservesActiveNote = navigationDecision == nil && selected != nil && externalBody == nil
+            if !preservesActiveNote {
+                guard confirmLeavingNote(decision: navigationDecision) else { return }
+            }
             cancelNoteLoad()
             previewTask?.cancel()
-            selected = nil
+            if !preservesActiveNote {
+                selected = nil
+                baseline = ""
+                draft = ""
+            }
             previewPDF = url
             previewPDFPage = pdfPage
-            baseline = ""
-            draft = ""
             externalTitle = nil
             externalBody = nil
             previewSource = nil
@@ -607,6 +612,7 @@ final class NotesModel: ObservableObject {
         if requestedNote == url { return }
         if selected == url {
             cancelNoteLoad() // A re-selection wins over another pending file load.
+            if previewPDF != nil { closePDFPreview() }
             return
         }
         guard let root, WorkspaceFiles.contains(url, in: root),
@@ -615,6 +621,27 @@ final class NotesModel: ObservableObject {
         }
         guard confirmLeavingNote(decision: navigationDecision) else { return }
         loadNote(url)
+    }
+
+    /// Loads one Markdown note beside the active PDF while keeping the canonical
+    /// selected/draft/baseline/save session as the only editable document authority.
+    func openStudyNote(_ url: URL, navigationDecision: UnsavedNoteDecision? = nil) {
+        guard previewPDF != nil else {
+            openNote(url, navigationDecision: navigationDecision)
+            return
+        }
+        if requestedNote == url { return }
+        if selected == url {
+            cancelNoteLoad()
+            return
+        }
+        guard let root, WorkspaceFiles.contains(url, in: root),
+              ["md", "markdown"].contains(url.pathExtension.lowercased()) else {
+            message = AppLanguage.current.text("Only Markdown files inside the selected workspace can be edited.")
+            return
+        }
+        guard confirmLeavingNote(decision: navigationDecision) else { return }
+        loadNote(url, preservePDFPreview: true)
     }
 
     private func cancelNoteLoad() {
@@ -626,7 +653,7 @@ final class NotesModel: ObservableObject {
         loadingNote = false
     }
 
-    private func loadNote(_ url: URL) {
+    private func loadNote(_ url: URL, preservePDFPreview: Bool = false) {
         cancelNoteLoad()
         previewTask?.cancel()
         requestedNote = url
@@ -651,8 +678,13 @@ final class NotesModel: ObservableObject {
                     content = try String(contentsOf: url, encoding: .utf8)
                 }
                 guard !Task.isCancelled else { return }
-                await self?.finishOpeningNote(url, identity: identity,
-                                              content: content, modification: modification)
+                await self?.finishOpeningNote(
+                    url,
+                    identity: identity,
+                    content: content,
+                    modification: modification,
+                    preservePDFPreview: preservePDFPreview
+                )
             } catch {
                 guard !Task.isCancelled else { return }
                 await self?.failOpeningNote(url, identity: identity,
@@ -662,11 +694,13 @@ final class NotesModel: ObservableObject {
     }
 
     private func finishOpeningNote(_ url: URL, identity: UUID, content: String,
-                                   modification: Date?) {
+                                   modification: Date?, preservePDFPreview: Bool = false) {
         guard requestedNote == url, loadIdentity == identity else { return }
         selected = url
-        previewPDF = nil
-        previewPDFPage = nil
+        if !preservePDFPreview {
+            previewPDF = nil
+            previewPDFPage = nil
+        }
         baseline = content
         draft = content
         savedModification = modification
@@ -705,17 +739,25 @@ final class NotesModel: ObservableObject {
         }
     }
 
+    func closePDFPreview() {
+        previewPDF = nil
+        previewPDFPage = nil
+        backlinkTask?.cancel()
+        backlinks = []
+        loadingBacklinks = false
+    }
+
     func loadRelationships() {
-        if let selected {
+        if let previewPDF {
+            refreshBacklinks(for: previewPDF)
+        } else if let selected {
             refreshBacklinks(for: selected)
             loadRelatedNotes(for: selected)
-        } else if let previewPDF {
-            refreshBacklinks(for: previewPDF)
         }
     }
 
     func loadBacklinks() {
-        guard let target = selected ?? previewPDF else { return }
+        guard let target = previewPDF ?? selected else { return }
         refreshBacklinks(for: target)
     }
 
@@ -845,6 +887,15 @@ final class NotesModel: ObservableObject {
             return false
         }
 
+        if selected?.standardizedFileURL == note.standardizedFileURL {
+            draft += "\n\n\(snippet)\n"
+            save()
+            guard !isDirty else { return false }
+            refresh()
+            message = "\(AppLanguage.current.text("Added PDF page to note")): \(note.deletingPathExtension().lastPathComponent)"
+            return true
+        }
+
         let descriptor = note.path.withCString {
             Darwin.open($0, O_WRONLY | O_APPEND)
         }
@@ -872,7 +923,8 @@ final class NotesModel: ObservableObject {
     @discardableResult
     func newNote(named name: String? = nil, in parentFolder: URL? = nil,
                  navigationDecision: UnsavedNoteDecision? = nil,
-                 initialContent: String? = nil) -> URL? {
+                 initialContent: String? = nil,
+                 preservePDFPreview: Bool = false) -> URL? {
         guard let root else {
             message = AppLanguage.current.text("Choose a notes folder before creating a note."); return nil
         }
@@ -916,7 +968,7 @@ final class NotesModel: ObservableObject {
             try handle.write(contentsOf: Data(content.utf8))
             try handle.close()
             refresh()
-            loadNote(url)
+            loadNote(url, preservePDFPreview: preservePDFPreview)
             return url
         } catch {
             try? handle.close()

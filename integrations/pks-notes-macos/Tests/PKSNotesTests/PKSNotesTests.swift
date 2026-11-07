@@ -1317,7 +1317,93 @@ extension PKSNotesTests {
         XCTAssertTrue(model.openInternalLink(link))
         XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
         XCTAssertEqual(model.previewPDFPage, 7)
-        XCTAssertNil(model.selected)
+        XCTAssertEqual(model.selected, note.standardizedFileURL)
+        XCTAssertEqual(model.draft, "# Note")
+    }
+
+    @MainActor
+    func testPDFAndMarkdownShareOneCanonicalStudySession() async throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = root.appendingPathComponent("Study.md")
+        let pdf = root.appendingPathComponent("Book.pdf")
+        try "# Study\nOriginal".write(to: note, atomically: true, encoding: .utf8)
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+
+        let model = NotesModel()
+        model.openWorkspace(root)
+        model.openNote(note)
+        await waitForNote(model, note)
+
+        model.openFile(pdf, pdfPage: 3)
+        XCTAssertEqual(model.selected, note.standardizedFileURL)
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        XCTAssertEqual(model.previewPDFPage, 3)
+        XCTAssertEqual(model.draft, "# Study\nOriginal")
+
+        model.draft += "\nWorking note"
+        model.save()
+        XCTAssertFalse(model.isDirty)
+        XCTAssertTrue(try String(contentsOf: note, encoding: .utf8).contains("Working note"))
+
+        model.closePDFPreview()
+        XCTAssertNil(model.previewPDF)
+        XCTAssertEqual(model.selected, note.standardizedFileURL)
+        XCTAssertTrue(model.draft.contains("Working note"))
+    }
+
+    @MainActor
+    func testStudyNoteLoadAndNewNotePreservePDFSource() async throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = root.appendingPathComponent("Existing.md")
+        let pdf = root.appendingPathComponent("Book.pdf")
+        try "# Existing".write(to: note, atomically: true, encoding: .utf8)
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+
+        let model = NotesModel()
+        model.openWorkspace(root)
+        model.openFile(pdf, pdfPage: 5)
+        model.openStudyNote(note)
+        await waitForNote(model, note)
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        XCTAssertEqual(model.previewPDFPage, 5)
+        XCTAssertEqual(model.selected, note.standardizedFileURL)
+
+        XCTAssertTrue(model.appendPDFReference(pdf: pdf, page: 5, commentary: "Remember this", to: note))
+        XCTAssertFalse(model.isDirty)
+        XCTAssertTrue(model.draft.contains("Remember this"))
+        XCTAssertTrue(model.draft.contains("[Book.pdf · p. 5](/Book.pdf#page=5)"))
+
+        let created = try XCTUnwrap(model.newNote(
+            named: "Second.md",
+            initialContent: "# Second\n",
+            preservePDFPreview: true
+        ))
+        await waitForNote(model, created)
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        XCTAssertEqual(model.previewPDFPage, 5)
+        XCTAssertEqual(model.selected, created.standardizedFileURL)
     }
 
     func testPDFPageCommentaryIsOptionalAndPortable() throws {

@@ -802,7 +802,15 @@ struct NotesWindow: View {
                 selectedText: capture.selectedText,
                 to: item.url
             ) {
+                let studyNote = item.url
                 closeQuickPicker()
+                pendingEditorFocus = studyNote
+                model.openStudyNote(studyNote)
+                if model.selected == studyNote {
+                    pendingEditorFocus = nil
+                    mode = .edit
+                    Task { @MainActor in editorFocused = true }
+                }
             }
             return
         }
@@ -828,7 +836,11 @@ struct NotesWindow: View {
             in: root
         ) else { return }
 
-        guard let created = model.newNote(named: filename, initialContent: "\(snippet)\n") else { return }
+        guard let created = model.newNote(
+            named: filename,
+            initialContent: "\(snippet)\n",
+            preservePDFPreview: true
+        ) else { return }
         closeQuickPicker()
         pendingEditorFocus = created
         mode = .edit
@@ -1826,8 +1838,8 @@ struct NotesWindow: View {
             }
         }
         .background(theme.canvas)
-        .navigationTitle(model.selected?.deletingPathExtension().lastPathComponent
-                         ?? model.previewPDF?.lastPathComponent
+        .navigationTitle(model.previewPDF?.lastPathComponent
+                         ?? model.selected?.deletingPathExtension().lastPathComponent
                          ?? model.previewSource?.title
                          ?? language.text("PKS Notes"))
     }
@@ -1835,14 +1847,17 @@ struct NotesWindow: View {
     @ViewBuilder
     private var reader: some View {
         if let url = model.previewPDF {
-            NativePDFPreview(
-                url: url,
-                root: model.root,
-                requestedPage: model.previewPDFPage,
-                onAddPageToNote: { page, selectedText in
-                    beginPDFCapture(pdf: url, page: page, selectedText: selectedText)
+            if let note = model.selected, model.externalBody == nil {
+                HSplitView {
+                    pdfReader(url)
+                        .frame(minWidth: 420)
+                    studyNotePane(note)
+                        .frame(minWidth: 320, idealWidth: 420)
                 }
-            )
+                .accessibilityIdentifier("pks-study-workspace")
+            } else {
+                pdfReader(url)
+            }
         } else if showingMindMap && model.selected != nil && model.externalBody == nil {
             MindMapCanvas(
                 source: $model.draft,
@@ -1870,6 +1885,61 @@ struct NotesWindow: View {
                     .frame(minWidth: 270)
             }
         }
+    }
+
+    private func pdfReader(_ url: URL) -> some View {
+        NativePDFPreview(
+            url: url,
+            root: model.root,
+            requestedPage: model.previewPDFPage,
+            onAddPageToNote: { page, selectedText in
+                beginPDFCapture(pdf: url, page: page, selectedText: selectedText)
+            }
+        )
+    }
+
+    private func studyNotePane(_ note: URL) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "note.text")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(note.deletingPathExtension().lastPathComponent)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Text(language.text("Study Note"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                if model.autoSavePending {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .accessibilityLabel(language.text("Save"))
+                }
+                Button {
+                    model.closePDFPreview()
+                    mode = .edit
+                    Task { @MainActor in editorFocused = true }
+                } label: {
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .help(language.text("Open note only"))
+                .accessibilityLabel(language.text("Open note only"))
+                .accessibilityIdentifier("pks-study-note-only")
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 38)
+            .background(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
+
+            Divider()
+            editor
+        }
+        .background(theme.canvas)
+        .accessibilityIdentifier("pks-study-note-pane")
     }
 
     private var editor: some View {
