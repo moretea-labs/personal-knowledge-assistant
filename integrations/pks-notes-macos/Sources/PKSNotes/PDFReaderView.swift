@@ -482,9 +482,9 @@ struct NativePDFPreview: View {
                 Image(systemName: "note.text.badge.plus")
             }
             .buttonStyle(.plain)
-            .keyboardShortcut("n", modifiers: [.command, .option])
+            .keyboardShortcut("l", modifiers: [.command, .option])
             .disabled(root == nil || controller.pageCount == 0)
-            .help(language.text("Add current PDF page to note") + " (⌥⌘N)")
+            .help(language.text("Add current PDF page to note") + " (⌥⌘L)")
             .accessibilityIdentifier("pks-pdf-add-page-to-note")
 
             Button {
