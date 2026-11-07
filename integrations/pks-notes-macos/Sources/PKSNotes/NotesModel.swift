@@ -119,24 +119,70 @@ enum WorkspaceFiles {
         withUnsafeCurrentTask { $0?.isCancelled ?? false }
     }
 
-    static func tree(in root: URL, recursive: Bool = true) -> [NoteItem] {
-        let fm = FileManager.default
-        // File Provider can block on contentsOfDirectory(at:includingPropertiesForKeys:).
-        // Plain names plus lstat are enough to classify entries without hydrating iCloud files.
-        guard !scanCancelled,
-              let names = try? fm.contentsOfDirectory(atPath: root.path) else { return [] }
-        return names.compactMap { name -> NoteItem? in
-            guard !scanCancelled, !name.hasPrefix(".") else { return nil }
-            let url = root.appendingPathComponent(name)
-            var info = Darwin.stat()
-            guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { return nil }
-            let kind = info.st_mode & mode_t(S_IFMT)
-            if kind == mode_t(S_IFLNK) { return nil }
-            if kind == mode_t(S_IFDIR) {
-                let children = recursive ? tree(in: url, recursive: true) : []
-                return NoteItem(url: url, children: children)
+    private enum DirectoryEntryKind {
+        case directory
+        case regular
+    }
+
+    private struct DirectoryEntry {
+        let url: URL
+        let kind: DirectoryEntryKind
+    }
+
+    /// POSIX directory enumeration avoids one lstat syscall per normal APFS/
+    /// File Provider entry. d_type is authoritative when available; unusual
+    /// filesystems fall back to lstat only for DT_UNKNOWN.
+    private static func directoryEntries(in folder: URL) -> [DirectoryEntry] {
+        guard !scanCancelled, let directory = Darwin.opendir(folder.path) else { return [] }
+        defer { Darwin.closedir(directory) }
+
+        var result: [DirectoryEntry] = []
+        while !scanCancelled, let entry = Darwin.readdir(directory) {
+            let length = Int(entry.pointee.d_namlen)
+            guard length > 0 else { continue }
+            let name = withUnsafePointer(to: &entry.pointee.d_name) { pointer in
+                pointer.withMemoryRebound(to: CChar.self, capacity: length + 1) {
+                    String(cString: $0)
+                }
             }
-            return kind == mode_t(S_IFREG) ? NoteItem(url: url, children: nil) : nil
+            guard name != ".", name != "..", !name.hasPrefix(".") else { continue }
+
+            let url = folder.appendingPathComponent(name)
+            switch Int32(entry.pointee.d_type) {
+            case DT_DIR:
+                result.append(.init(url: url, kind: .directory))
+            case DT_REG:
+                result.append(.init(url: url, kind: .regular))
+            case DT_LNK:
+                continue
+            case DT_UNKNOWN:
+                var info = Darwin.stat()
+                guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { continue }
+                switch info.st_mode & mode_t(S_IFMT) {
+                case mode_t(S_IFDIR):
+                    result.append(.init(url: url, kind: .directory))
+                case mode_t(S_IFREG):
+                    result.append(.init(url: url, kind: .regular))
+                default:
+                    continue
+                }
+            default:
+                continue
+            }
+        }
+        return result
+    }
+
+    static func tree(in root: URL, recursive: Bool = true) -> [NoteItem] {
+        directoryEntries(in: root).compactMap { entry -> NoteItem? in
+            guard !scanCancelled else { return nil }
+            switch entry.kind {
+            case .directory:
+                let children = recursive ? tree(in: entry.url, recursive: true) : []
+                return NoteItem(url: entry.url, children: children)
+            case .regular:
+                return NoteItem(url: entry.url, children: nil)
+            }
         }.sorted { a, b in
             if a.isFolder != b.isFolder { return a.isFolder }
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
@@ -146,26 +192,18 @@ enum WorkspaceFiles {
     /// Flat, transient full-vault files for on-demand Quick Open/backlinks.
     /// This avoids building and sorting a complete nested tree.
     static func flatFiles(in root: URL) -> [NoteItem] {
-        let fm = FileManager.default
         var pending = [root]
         var result: [NoteItem] = []
 
         while let folder = pending.popLast() {
             guard !scanCancelled else { break }
-            guard let names = try? fm.contentsOfDirectory(atPath: folder.path) else { continue }
-            for name in names {
+            for entry in directoryEntries(in: folder) {
                 guard !scanCancelled else { return result }
-                guard !name.hasPrefix(".") else { continue }
-
-                let url = folder.appendingPathComponent(name)
-                var info = Darwin.stat()
-                guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { continue }
-                let kind = info.st_mode & mode_t(S_IFMT)
-                if kind == mode_t(S_IFLNK) { continue }
-                if kind == mode_t(S_IFDIR) {
-                    pending.append(url)
-                } else if kind == mode_t(S_IFREG) {
-                    result.append(NoteItem(url: url, children: nil))
+                switch entry.kind {
+                case .directory:
+                    pending.append(entry.url)
+                case .regular:
+                    result.append(NoteItem(url: entry.url, children: nil))
                 }
             }
         }
