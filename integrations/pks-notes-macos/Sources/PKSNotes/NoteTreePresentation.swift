@@ -37,29 +37,47 @@ enum NoteTreePresentation {
         let item: NoteItem
         let foldedName: String
         let foldedFolder: String
+        let insertionOrder: Int
         var id: String { item.id }
+
+        fileprivate init(item: NoteItem, foldedName: String, foldedFolder: String, insertionOrder: Int) {
+            self.item = item
+            self.foldedName = foldedName
+            self.foldedFolder = foldedFolder
+            self.insertionOrder = insertionOrder
+        }
     }
 
     /// Normalize and alphabetize once when the filesystem tree changes instead of
     /// folding and sorting the full match set on every Quick Open keystroke.
+    /// Build one buffer directly so a large flat vault does not allocate an
+    /// openable-files copy, a tuple map, and a second mapped result array.
     static func quickOpenEntries(_ items: [NoteItem]) -> [QuickOpenEntry] {
-        openableFiles(items).enumerated()
-            .map { order, item in
-                (
-                    order,
-                    QuickOpenEntry(
-                        item: item,
-                        foldedName: fold(item.name),
-                        foldedFolder: fold(item.url.deletingLastPathComponent().path)
-                    )
+        var entries: [QuickOpenEntry] = []
+        entries.reserveCapacity(items.count)
+
+        func visit(_ item: NoteItem) {
+            if let children = item.children {
+                children.forEach(visit)
+                return
+            }
+            entries.append(
+                QuickOpenEntry(
+                    item: item,
+                    foldedName: fold(item.name),
+                    foldedFolder: fold(item.url.deletingLastPathComponent().path),
+                    insertionOrder: entries.count
                 )
-            }
-            .sorted { lhs, rhs in
-                let comparison = lhs.1.item.name.localizedStandardCompare(rhs.1.item.name)
-                if comparison != .orderedSame { return comparison == .orderedAscending }
-                return lhs.0 < rhs.0
-            }
-            .map(\.1)
+            )
+        }
+
+        items.forEach(visit)
+        entries.sort { lhs, rhs in
+            let comparison = lhs.item.name.localizedStandardCompare(rhs.item.name)
+            if comparison != .orderedSame { return comparison == .orderedAscending }
+            return lhs.insertionOrder < rhs.insertionOrder
+        }
+        return entries
     }
 
     /// Show a note's folder path relative to its selected workspace.

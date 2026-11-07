@@ -409,7 +409,7 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(item(parent, in: model.files)?.children?.count, 0)
         XCTAssertNil(item(deepNote, in: model.files))
 
-        model.loadExpandedFolders([parent.path])
+        model.loadExpandedFolder(parent)
         for _ in 0..<200 {
             if item(parentNote, in: model.files) != nil { break }
             try await Task.sleep(for: .milliseconds(5))
@@ -461,6 +461,10 @@ final class PKSNotesTests: XCTestCase {
         }
         XCTAssertTrue(model.globalFileIndexReady)
         XCTAssertTrue(model.globalFiles.contains { $0.url.standardizedFileURL == deep.standardizedFileURL })
+        XCTAssertEqual(
+            NoteTreePresentation.quickOpen(model.globalQuickOpenEntries, query: "source").first?.url.standardizedFileURL,
+            deep.standardizedFileURL
+        )
 
         // A new model proves backlinks themselves can trigger the complete scan
         // even when the sidebar still contains only shallow root entries.

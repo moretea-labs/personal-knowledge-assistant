@@ -657,9 +657,9 @@ struct NotesWindow: View {
             }
             model.loadExpandedFolders(expandedFolderPaths)
         }
-        .onReceive(model.$globalFiles) { files in
+        .onReceive(model.$globalQuickOpenEntries) { entries in
             guard model.globalFileIndexReady else { return }
-            quickOpenEntries = NoteTreePresentation.quickOpenEntries(files)
+            quickOpenEntries = entries
         }
         .onChange(of: expandedFolderPaths) { _, expanded in
             visibleTreeRows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expanded)
@@ -1610,7 +1610,9 @@ struct NotesWindow: View {
     }
 
     private func toggleFolder(_ url: URL) {
-        if !expandedFolderPaths.insert(url.path).inserted {
+        if expandedFolderPaths.insert(url.path).inserted {
+            model.loadExpandedFolder(url)
+        } else {
             expandedFolderPaths.remove(url.path)
             // Keep keyboard focus visible when collapsing a parent folder.
             if let focused = treeCursorPath, focused.hasPrefix(url.path + "/") {
