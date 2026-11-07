@@ -7,6 +7,7 @@ struct MindMapCanvas: View {
     @Environment(\.notesLanguage) private var language
     @Binding var source: String
     @Binding var selectedID: Int?
+    let revision: UInt64
     let openLink: (String) -> Void
     let revealSource: (Int) -> Void
     let importOutline: (String, String) -> Bool
@@ -19,25 +20,19 @@ struct MindMapCanvas: View {
     @State private var zoom: CGFloat = 1.0
     @State private var dropTargetID: Int?
     @State private var gestureBaseZoom: CGFloat?
+    @State private var nodes: [MindMapNode] = []
+    @State private var visible: [MindMapNode] = []
+    @State private var mapLayout = MindMapSpatialLayout.layout([])
+    @State private var projectionReady = false
+    @State private var canPromote = false
+    @State private var canDemote = false
+    @State private var canDeleteLeaf = false
     @FocusState private var canvasFocused: Bool
     @FocusState private var titleEditorFocused: Bool
 
-    private var nodes: [MindMapNode] { MindMapOutline.nodes(in: source) }
-
-    private var visible: [MindMapNode] {
-        var hiddenBelow: Int?
-        return nodes.filter { node in
-            if let depth = hiddenBelow {
-                if node.depth > depth { return false }
-                hiddenBelow = nil
-            }
-            if collapsed.contains(node.id) { hiddenBelow = node.depth }
-            return true
-        }
-    }
-
-    private var mapLayout: MindMapLayoutSnapshot {
-        MindMapSpatialLayout.layout(visible)
+    private struct ActionAvailabilityKey: Hashable {
+        let revision: UInt64
+        let selectedID: Int?
     }
 
     var body: some View {
@@ -46,7 +41,16 @@ struct MindMapCanvas: View {
             Divider()
             GeometryReader { viewport in
                 ScrollView([.horizontal, .vertical]) {
-                    if nodes.isEmpty {
+                    if !projectionReady {
+                        VStack(spacing: 10) {
+                            ProgressView().controlSize(.small)
+                            Text(language.text("Preparing mind map…"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(minWidth: max(560, viewport.size.width),
+                               minHeight: max(320, viewport.size.height))
+                    } else if nodes.isEmpty {
                         VStack(spacing: 14) {
                             Image(systemName: "point.3.connected.trianglepath.dotted")
                                 .font(.system(size: 36, weight: .ultraLight))
@@ -119,6 +123,49 @@ struct MindMapCanvas: View {
         }
         .focusable()
         .focused($canvasFocused)
+        .task(id: revision) {
+            let input = source
+            let sourceRevision = revision
+            if nodes.isEmpty { projectionReady = false }
+
+            let parser = Task.detached(priority: .userInitiated) {
+                MindMapOutline.nodes(in: input)
+            }
+            defer { parser.cancel() }
+            let parsed = await parser.value
+            guard !Task.isCancelled, revision == sourceRevision else { return }
+
+            nodes = parsed
+            projectionReady = true
+            rebuildVisibleLayout()
+            if let selectedID, !parsed.contains(where: { $0.id == selectedID }) {
+                self.selectedID = nil
+            }
+        }
+        .onChange(of: collapsed) { _, _ in
+            rebuildVisibleLayout()
+        }
+        .task(id: ActionAvailabilityKey(revision: revision, selectedID: selectedID)) {
+            guard let selectedID else {
+                canPromote = false
+                canDemote = false
+                canDeleteLeaf = false
+                return
+            }
+            let input = source
+            let sourceRevision = revision
+            let availability = await Task.detached(priority: .utility) {
+                (
+                    MindMapOutline.shiftListSubtree(in: input, nodeID: selectedID, deeper: false) != nil,
+                    MindMapOutline.shiftListSubtree(in: input, nodeID: selectedID, deeper: true) != nil,
+                    MindMapOutline.deleteLeaf(in: input, nodeID: selectedID) != nil
+                )
+            }.value
+            guard !Task.isCancelled, revision == sourceRevision, self.selectedID == selectedID else { return }
+            canPromote = availability.0
+            canDemote = availability.1
+            canDeleteLeaf = availability.2
+        }
         .onAppear {
             Task { @MainActor in
                 await Task.yield()
@@ -185,7 +232,7 @@ struct MindMapCanvas: View {
                 Image(systemName: "arrow.left")
             }
             .help(language.text("Promote node"))
-            .disabled(selectedID == nil || shiftedSource(deeper: false) == nil)
+            .disabled(selectedID == nil || !canPromote)
 
             Button {
                 shiftSelected(deeper: true)
@@ -193,10 +240,10 @@ struct MindMapCanvas: View {
                 Image(systemName: "arrow.right")
             }
             .help(language.text("Make child of previous sibling"))
-            .disabled(selectedID == nil || shiftedSource(deeper: true) == nil)
+            .disabled(selectedID == nil || !canDemote)
 
             Button(language.text("Delete Leaf"), systemImage: "trash") { deleteSelectedLeaf() }
-            .disabled(selectedID == nil || MindMapOutline.deleteLeaf(in: source, nodeID: selectedID ?? -1) == nil)
+            .disabled(selectedID == nil || !canDeleteLeaf)
 
             Divider().frame(height: 18)
 
@@ -589,6 +636,20 @@ struct MindMapCanvas: View {
 
     private func clampedZoom(_ value: CGFloat) -> CGFloat {
         min(1.80, max(0.45, value))
+    }
+
+    private func rebuildVisibleLayout() {
+        var hiddenBelow: Int?
+        let filtered = nodes.filter { node in
+            if let depth = hiddenBelow {
+                if node.depth > depth { return false }
+                hiddenBelow = nil
+            }
+            if collapsed.contains(node.id) { hiddenBelow = node.depth }
+            return true
+        }
+        visible = filtered
+        mapLayout = MindMapSpatialLayout.layout(filtered)
     }
 
     private func fitToContent(viewport: CGSize) {

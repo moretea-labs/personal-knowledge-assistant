@@ -1907,6 +1907,7 @@ struct NotesWindow: View {
             MindMapCanvas(
                 source: $model.draft,
                 selectedID: $mindMapSelectionLine,
+                revision: model.draftRevision,
                 openLink: { target in _ = model.openKnowledgeLink(target) },
                 revealSource: { line in revealMarkdownLine(line) },
                 importOutline: { markdown, name in
