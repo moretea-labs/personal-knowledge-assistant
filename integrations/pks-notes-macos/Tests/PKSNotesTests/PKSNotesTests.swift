@@ -1300,6 +1300,46 @@ extension PKSNotesTests {
         )
     }
 
+    func testPDFSelectionAnchorRoundTripsWithoutChangingPageOnlyLinks() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let pdf = root.appendingPathComponent("Book.pdf")
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+
+        let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Quoted\n  fact"))
+        XCTAssertEqual(fingerprint, PDFSourceAnchor.fingerprint(for: "Quoted fact"))
+
+        let anchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 7,
+            normalizedRects: [
+                CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.04),
+                CGRect(x: 0.1, y: 0.25, width: 0.2, height: 0.04)
+            ],
+            fingerprint: fingerprint
+        ))
+        let markdown = try XCTUnwrap(PDFPageReference.markdown(
+            for: pdf,
+            page: 7,
+            root: root,
+            anchor: anchor
+        ))
+        XCTAssertTrue(markdown.contains("#page=7&rects=0.10000,0.20000,0.30000,0.04000~0.10000,0.25000,0.20000,0.04000&fp=\(fingerprint)"))
+
+        let link = try XCTUnwrap(URL(string: "/Book.pdf#\(anchor.fragment)"))
+        XCTAssertEqual(PDFPageReference.page(from: link), 7)
+        XCTAssertEqual(PDFPageReference.anchor(from: link), anchor)
+        XCTAssertNil(PDFPageReference.anchor(from: try XCTUnwrap(URL(string: "/Book.pdf#page=7"))))
+        XCTAssertNil(PDFSourceAnchor.parse(fragment: "page=7&rects=2,0,1,1&fp=\(fingerprint)"))
+
+        XCTAssertEqual(
+            PDFPageReference.markdown(for: pdf, page: 7, root: root),
+            "[Book.pdf · p. 7](/Book.pdf#page=7)"
+        )
+    }
+
     func testBacklinksTreatPDFPageLinksAsTheSameWorkspaceFile() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1349,6 +1389,48 @@ extension PKSNotesTests {
         XCTAssertEqual(model.previewPDFPage, 7)
         XCTAssertEqual(model.selected, note.standardizedFileURL)
         XCTAssertEqual(model.draft, "# Note")
+    }
+
+    @MainActor
+    func testInternalPDFSelectionLinkCarriesExactAnchorThroughFileAuthority() async throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = root.appendingPathComponent("Note.md")
+        let pdf = root.appendingPathComponent("Book.pdf")
+        try "# Note".write(to: note, atomically: true, encoding: .utf8)
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+
+        let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Exact evidence"))
+        let anchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 4,
+            normalizedRects: [CGRect(x: 0.12, y: 0.4, width: 0.33, height: 0.05)],
+            fingerprint: fingerprint
+        ))
+
+        let model = NotesModel()
+        model.openWorkspace(root)
+        model.openNote(note)
+        await waitForNote(model, note)
+
+        let link = try XCTUnwrap(URL(string: "/Book.pdf#\(anchor.fragment)"))
+        XCTAssertTrue(model.openInternalLink(link))
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        XCTAssertEqual(model.previewPDFPage, 4)
+        XCTAssertEqual(model.previewPDFAnchor, anchor)
+        XCTAssertEqual(model.selected, note.standardizedFileURL)
+
+        model.closePDFPreview()
+        XCTAssertNil(model.previewPDFAnchor)
     }
 
     @MainActor
@@ -1484,11 +1566,18 @@ extension PKSNotesTests {
         model.openWorkspace(root)
         model.openFile(pdf, pdfPage: 4)
 
+        let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Important fact\nSecond line"))
+        let anchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 4,
+            normalizedRects: [CGRect(x: 0.2, y: 0.3, width: 0.4, height: 0.08)],
+            fingerprint: fingerprint
+        ))
         XCTAssertTrue(model.appendPDFReference(
             pdf: pdf,
             page: 4,
             commentary: "My interpretation",
             selectedText: "Important fact\nSecond line",
+            anchor: anchor,
             to: note
         ))
         XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
@@ -1496,7 +1585,7 @@ extension PKSNotesTests {
         XCTAssertNil(model.selected)
 
         let content = try String(contentsOf: note, encoding: .utf8)
-        XCTAssertTrue(content.contains("My interpretation\n\n[Book.pdf · p. 4](/Book.pdf#page=4)"))
+        XCTAssertTrue(content.contains("My interpretation\n\n[Book.pdf · p. 4](/Book.pdf#\(anchor.fragment))"))
         XCTAssertTrue(content.contains("> Important fact\n> Second line"))
     }
 }

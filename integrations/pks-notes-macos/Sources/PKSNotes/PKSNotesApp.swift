@@ -282,6 +282,7 @@ private struct PDFCaptureRequest: Equatable {
     let pdf: URL
     let page: Int
     let selectedText: String?
+    let anchor: PDFSourceAnchor?
 }
 
 struct NotesWindow: View {
@@ -807,8 +808,18 @@ struct NotesWindow: View {
         showingQuickOpen = true
     }
 
-    private func beginPDFCapture(pdf: URL, page: Int, selectedText: String?) {
-        pdfCaptureRequest = PDFCaptureRequest(pdf: pdf, page: page, selectedText: selectedText)
+    private func beginPDFCapture(
+        pdf: URL,
+        page: Int,
+        selectedText: String?,
+        anchor: PDFSourceAnchor?
+    ) {
+        pdfCaptureRequest = PDFCaptureRequest(
+            pdf: pdf,
+            page: page,
+            selectedText: selectedText,
+            anchor: anchor
+        )
         pdfCaptureCommentary = ""
         quickOpenQuery = ""
         quickOpenIndex = 0
@@ -828,6 +839,7 @@ struct NotesWindow: View {
                 page: capture.page,
                 commentary: pdfCaptureCommentary,
                 selectedText: capture.selectedText,
+                anchor: capture.anchor,
                 to: item.url
             ) {
                 let studyNote = item.url
@@ -854,7 +866,8 @@ struct NotesWindow: View {
                 page: capture.page,
                 root: root,
                 commentary: pdfCaptureCommentary,
-                selectedText: capture.selectedText
+                selectedText: capture.selectedText,
+                anchor: capture.anchor
               )
         else { return }
 
@@ -1938,8 +1951,14 @@ struct NotesWindow: View {
             url: url,
             root: model.root,
             requestedPage: model.previewPDFPage,
-            onAddPageToNote: { page, selectedText in
-                beginPDFCapture(pdf: url, page: page, selectedText: selectedText)
+            requestedAnchor: model.previewPDFAnchor,
+            onAddPageToNote: { page, selectedText, anchor in
+                beginPDFCapture(
+                    pdf: url,
+                    page: page,
+                    selectedText: selectedText,
+                    anchor: anchor
+                )
             }
         )
     }

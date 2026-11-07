@@ -307,6 +307,7 @@ final class NotesModel: ObservableObject {
     @Published private(set) var selected: URL?
     @Published private(set) var previewPDF: URL?
     @Published private(set) var previewPDFPage: Int?
+    @Published private(set) var previewPDFAnchor: PDFSourceAnchor?
     @Published var draft: String = "" {
         didSet {
             draftRevision &+= 1
@@ -500,6 +501,7 @@ final class NotesModel: ObservableObject {
         selected = nil
         previewPDF = nil
         previewPDFPage = nil
+        previewPDFAnchor = nil
         externalTitle = nil
         externalBody = nil
         previewSource = nil
@@ -599,7 +601,8 @@ final class NotesModel: ObservableObject {
     func openFile(
         _ url: URL,
         navigationDecision: UnsavedNoteDecision? = nil,
-        pdfPage: Int? = nil
+        pdfPage: Int? = nil,
+        pdfAnchor: PDFSourceAnchor? = nil
     ) {
         guard let root, WorkspaceFiles.contains(url, in: root) else {
             message = AppLanguage.current.text("File is outside the selected workspace."); return
@@ -616,7 +619,13 @@ final class NotesModel: ObservableObject {
             openValidatedNote(url, navigationDecision: navigationDecision, preservePDFPreview: false)
         } else if url.pathExtension.lowercased() == "pdf" {
             if previewPDF == url {
-                if let pdfPage { previewPDFPage = pdfPage }
+                if let pdfAnchor {
+                    previewPDFAnchor = pdfAnchor
+                    previewPDFPage = pdfAnchor.page
+                } else if let pdfPage {
+                    previewPDFAnchor = nil
+                    previewPDFPage = pdfPage
+                }
                 return
             }
             let preservesActiveNote = navigationDecision == nil && selected != nil && externalBody == nil
@@ -631,7 +640,8 @@ final class NotesModel: ObservableObject {
                 draft = ""
             }
             previewPDF = url
-            previewPDFPage = pdfPage
+            previewPDFAnchor = pdfAnchor
+            previewPDFPage = pdfAnchor?.page ?? pdfPage
             externalTitle = nil
             externalBody = nil
             previewSource = nil
@@ -786,6 +796,7 @@ final class NotesModel: ObservableObject {
     func closePDFPreview() {
         previewPDF = nil
         previewPDFPage = nil
+        previewPDFAnchor = nil
         backlinkTask?.cancel()
         backlinks = []
         loadingBacklinks = false
@@ -906,6 +917,7 @@ final class NotesModel: ObservableObject {
         page: Int,
         commentary: String? = nil,
         selectedText: String? = nil,
+        anchor: PDFSourceAnchor? = nil,
         to note: URL
     ) -> Bool {
         guard let root,
@@ -917,7 +929,8 @@ final class NotesModel: ObservableObject {
                 page: page,
                 root: root,
                 commentary: commentary,
-                selectedText: selectedText
+                selectedText: selectedText,
+                anchor: anchor
               )
         else {
             message = AppLanguage.current.text("Could not add PDF page to note.")
@@ -1081,10 +1094,14 @@ final class NotesModel: ObservableObject {
             message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
             return false
         }
-        let page = resolved.pathExtension.lowercased() == "pdf"
-            ? URL(string: value).flatMap(PDFPageReference.page(from:))
+        let linkURL = URL(string: value)
+        let anchor = resolved.pathExtension.lowercased() == "pdf"
+            ? linkURL.flatMap(PDFPageReference.anchor(from:))
             : nil
-        openFile(resolved, pdfPage: page)
+        let page = resolved.pathExtension.lowercased() == "pdf"
+            ? anchor?.page ?? linkURL.flatMap(PDFPageReference.page(from:))
+            : nil
+        openFile(resolved, pdfPage: page, pdfAnchor: anchor)
         return true
     }
 
@@ -1099,10 +1116,13 @@ final class NotesModel: ObservableObject {
             }
         }
         guard FileManager.default.fileExists(atPath: resolved.path) else { return false }
-        let page = resolved.pathExtension.lowercased() == "pdf"
-            ? PDFPageReference.page(from: url)
+        let anchor = resolved.pathExtension.lowercased() == "pdf"
+            ? PDFPageReference.anchor(from: url)
             : nil
-        openFile(resolved, pdfPage: page)
+        let page = resolved.pathExtension.lowercased() == "pdf"
+            ? anchor?.page ?? PDFPageReference.page(from: url)
+            : nil
+        openFile(resolved, pdfPage: page, pdfAnchor: anchor)
         return true
     }
 

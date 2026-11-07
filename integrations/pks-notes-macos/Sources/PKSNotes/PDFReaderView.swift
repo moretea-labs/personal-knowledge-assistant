@@ -2,6 +2,104 @@ import AppKit
 import PDFKit
 import SwiftUI
 
+struct PDFSourceAnchor: Equatable {
+    static let maxRects = 32
+
+    let page: Int
+    let normalizedRects: [CGRect]
+    let fingerprint: String
+
+    init?(page: Int, normalizedRects: [CGRect], fingerprint: String) {
+        let cleanFingerprint = fingerprint.lowercased()
+        guard page > 0,
+              !normalizedRects.isEmpty,
+              normalizedRects.count <= Self.maxRects,
+              cleanFingerprint.count == 16,
+              cleanFingerprint.allSatisfy({ $0.isHexDigit })
+        else { return nil }
+
+        let rects = normalizedRects.map(\.standardized)
+        guard rects.allSatisfy({ rect in
+            rect.minX.isFinite && rect.minY.isFinite
+                && rect.width.isFinite && rect.height.isFinite
+                && rect.width > 0 && rect.height > 0
+                && rect.minX >= 0 && rect.minY >= 0
+                && rect.maxX <= 1.000_01 && rect.maxY <= 1.000_01
+        }) else { return nil }
+
+        self.page = page
+        self.normalizedRects = rects
+        self.fingerprint = cleanFingerprint
+    }
+
+    static func fingerprint(for text: String) -> String? {
+        let normalized = text
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .precomposedStringWithCanonicalMapping
+        guard !normalized.isEmpty else { return nil }
+
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in normalized.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(format: "%016llx", hash)
+    }
+
+    var fragment: String {
+        let locale = Locale(identifier: "en_US_POSIX")
+        let rects = normalizedRects.map { rect in
+            String(
+                format: "%.5f,%.5f,%.5f,%.5f",
+                locale: locale,
+                rect.minX, rect.minY, rect.width, rect.height
+            )
+        }.joined(separator: "~")
+        return "page=\(page)&rects=\(rects)&fp=\(fingerprint)"
+    }
+
+    func rects(in pageBounds: CGRect) -> [CGRect] {
+        normalizedRects.map { rect in
+            CGRect(
+                x: pageBounds.minX + rect.minX * pageBounds.width,
+                y: pageBounds.minY + rect.minY * pageBounds.height,
+                width: rect.width * pageBounds.width,
+                height: rect.height * pageBounds.height
+            )
+        }
+    }
+
+    static func parse(fragment: String) -> PDFSourceAnchor? {
+        var page: Int?
+        var rectString: String?
+        var fingerprint: String?
+
+        for part in fragment.split(separator: "&") {
+            let pair = part.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard pair.count == 2 else { continue }
+            switch pair[0].lowercased() {
+            case "page": page = Int(pair[1])
+            case "rects": rectString = String(pair[1])
+            case "fp": fingerprint = String(pair[1])
+            default: continue
+            }
+        }
+
+        guard let page, let rectString, let fingerprint else { return nil }
+        let rects = rectString.split(separator: "~").compactMap { encoded -> CGRect? in
+            let values = encoded.split(separator: ",", omittingEmptySubsequences: false)
+            guard values.count == 4,
+                  let x = Double(values[0]), let y = Double(values[1]),
+                  let width = Double(values[2]), let height = Double(values[3])
+            else { return nil }
+            return CGRect(x: x, y: y, width: width, height: height)
+        }
+        guard rects.count == rectString.split(separator: "~").count else { return nil }
+        return PDFSourceAnchor(page: page, normalizedRects: rects, fingerprint: fingerprint)
+    }
+}
+
 enum PDFPageReference {
     static func page(from url: URL) -> Int? {
         guard let fragment = url.fragment else { return nil }
@@ -14,7 +112,17 @@ enum PDFPageReference {
         return nil
     }
 
-    static func markdown(for url: URL, page: Int, root: URL) -> String? {
+    static func anchor(from url: URL) -> PDFSourceAnchor? {
+        guard let fragment = url.fragment else { return nil }
+        return PDFSourceAnchor.parse(fragment: fragment)
+    }
+
+    static func markdown(
+        for url: URL,
+        page: Int,
+        root: URL,
+        anchor: PDFSourceAnchor? = nil
+    ) -> String? {
         guard page > 0 else { return nil }
         let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath()
         let canonicalURL = url.standardizedFileURL.resolvingSymlinksInPath()
@@ -30,7 +138,8 @@ enum PDFPageReference {
         let label = canonicalURL.lastPathComponent
             .replacingOccurrences(of: "[", with: "\\[")
             .replacingOccurrences(of: "]", with: "\\]")
-        return "[\(label) · p. \(page)](/\(encoded)#page=\(page))"
+        let fragment = anchor?.page == page ? anchor!.fragment : "page=\(page)"
+        return "[\(label) · p. \(page)](/\(encoded)#\(fragment))"
     }
 
     static func noteSnippet(
@@ -38,9 +147,10 @@ enum PDFPageReference {
         page: Int,
         root: URL,
         commentary: String? = nil,
-        selectedText: String? = nil
+        selectedText: String? = nil,
+        anchor: PDFSourceAnchor? = nil
     ) -> String? {
-        guard let reference = markdown(for: url, page: page, root: root) else { return nil }
+        guard let reference = markdown(for: url, page: page, root: root, anchor: anchor) else { return nil }
 
         var sections: [String] = []
         if let commentary {
@@ -113,16 +223,24 @@ final class PDFReaderController: ObservableObject {
     @Published private(set) var searchMatchCount = 0
     @Published private(set) var isSearching = false
     @Published private(set) var invalidRequestedPage: Int?
+    @Published private(set) var invalidRequestedSelection = false
 
     private weak var pdfView: PDFView?
     private var document: PDFDocument?
     private var documentURL: URL?
     private var requestedPage: Int?
+    private var requestedAnchor: PDFSourceAnchor?
     private var viewObservers: [NSObjectProtocol] = []
     private var findObservers: [NSObjectProtocol] = []
     private var searchMatches: [PDFSelection] = []
 
-    func attach(view: PDFView, document: PDFDocument, url: URL, requestedPage: Int?) {
+    func attach(
+        view: PDFView,
+        document: PDFDocument,
+        url: URL,
+        requestedPage: Int?,
+        requestedAnchor: PDFSourceAnchor?
+    ) {
         if pdfView !== view {
             removeViewObservers()
             pdfView = view
@@ -131,9 +249,11 @@ final class PDFReaderController: ObservableObject {
 
         let documentChanged = self.document !== document || documentURL != url
         let pageRequestChanged = self.requestedPage != requestedPage
+        let anchorRequestChanged = self.requestedAnchor != requestedAnchor
         self.document = document
         documentURL = url
         self.requestedPage = requestedPage
+        self.requestedAnchor = requestedAnchor
 
         if view.document !== document {
             view.document = document
@@ -143,8 +263,8 @@ final class PDFReaderController: ObservableObject {
         view.backgroundColor = .textBackgroundColor
 
         if !documentChanged {
-            if pageRequestChanged {
-                applyRequestedPage(requestedPage)
+            if pageRequestChanged || anchorRequestChanged {
+                applyRequestedSource(page: requestedPage, anchor: requestedAnchor)
             } else {
                 syncFromView()
             }
@@ -156,8 +276,8 @@ final class PDFReaderController: ObservableObject {
         outline = Self.flattenOutline(document.outlineRoot, in: document)
         installFindObservers(for: document)
 
-        if let requestedPage {
-            applyRequestedPage(requestedPage)
+        if requestedPage != nil || requestedAnchor != nil {
+            applyRequestedSource(page: requestedPage, anchor: requestedAnchor)
         } else if let restored = PDFReadingPositionStore.pageIndex(
             for: url,
             pageCount: document.pageCount
@@ -173,6 +293,60 @@ final class PDFReaderController: ObservableObject {
             await Task.yield()
             self?.fitWidth()
         }
+    }
+
+    private func applyRequestedSource(page: Int?, anchor: PDFSourceAnchor?) {
+        if let anchor {
+            applyRequestedAnchor(anchor)
+        } else {
+            invalidRequestedSelection = false
+            pdfView?.currentSelection = nil
+            applyRequestedPage(page)
+        }
+    }
+
+    private func applyRequestedAnchor(_ anchor: PDFSourceAnchor) {
+        guard anchor.page >= 1, anchor.page <= pageCount,
+              let document,
+              let page = document.page(at: anchor.page - 1),
+              let view = pdfView
+        else {
+            invalidRequestedSelection = false
+            applyRequestedPage(anchor.page)
+            return
+        }
+
+        invalidRequestedPage = nil
+        view.go(to: page)
+
+        let pageBounds = page.bounds(for: .cropBox)
+        let selections = anchor.rects(in: pageBounds).compactMap { page.selection(for: $0) }
+        guard selections.count == anchor.normalizedRects.count,
+              let combined = selections.first
+        else {
+            invalidRequestedSelection = true
+            view.currentSelection = nil
+            syncFromView()
+            return
+        }
+
+        for selection in selections.dropFirst() {
+            combined.add(selection)
+        }
+        guard let text = combined.string,
+              PDFSourceAnchor.fingerprint(for: text) == anchor.fingerprint
+        else {
+            invalidRequestedSelection = true
+            view.currentSelection = nil
+            syncFromView()
+            return
+        }
+
+        invalidRequestedSelection = false
+        combined.color = NSColor.systemYellow.withAlphaComponent(0.45)
+        view.currentSelection = combined
+        view.go(to: combined)
+        syncFromView()
     }
 
     private func applyRequestedPage(_ oneBasedPage: Int?) {
@@ -201,6 +375,44 @@ final class PDFReaderController: ObservableObject {
         return text
     }
 
+    func selectedSourceAnchor() -> PDFSourceAnchor? {
+        guard let document,
+              let selection = pdfView?.currentSelection,
+              let text = selectedText(),
+              let fingerprint = PDFSourceAnchor.fingerprint(for: text)
+        else { return nil }
+
+        let pages = selection.pages
+        guard pages.count == 1, let page = pages.first else { return nil }
+        let pageIndex = document.index(for: page)
+        guard pageIndex >= 0, pageIndex < document.pageCount else { return nil }
+
+        let pageBounds = page.bounds(for: .cropBox)
+        guard pageBounds.width > 0, pageBounds.height > 0 else { return nil }
+
+        let lines = selection.selectionsByLine()
+        let selections = lines.isEmpty ? [selection] : lines
+        guard selections.count <= PDFSourceAnchor.maxRects else { return nil }
+
+        let normalizedRects = selections.compactMap { line -> CGRect? in
+            let clipped = line.bounds(for: page).standardized.intersection(pageBounds)
+            guard !clipped.isNull, clipped.width > 0, clipped.height > 0 else { return nil }
+            return CGRect(
+                x: (clipped.minX - pageBounds.minX) / pageBounds.width,
+                y: (clipped.minY - pageBounds.minY) / pageBounds.height,
+                width: clipped.width / pageBounds.width,
+                height: clipped.height / pageBounds.height
+            )
+        }
+        guard normalizedRects.count == selections.count else { return nil }
+
+        return PDFSourceAnchor(
+            page: pageIndex + 1,
+            normalizedRects: normalizedRects,
+            fingerprint: fingerprint
+        )
+    }
+
     func goPrevious() {
         pdfView?.goToPreviousPage(nil)
         syncFromView()
@@ -212,6 +424,7 @@ final class PDFReaderController: ObservableObject {
     }
 
     func goToPage(_ oneBasedPage: Int) {
+        invalidRequestedSelection = false
         guard let document,
               let page = document.page(at: min(max(0, oneBasedPage - 1), max(0, pageCount - 1)))
         else { return }
@@ -401,7 +614,8 @@ struct NativePDFPreview: View {
     let url: URL
     let root: URL?
     let requestedPage: Int?
-    let onAddPageToNote: (Int, String?) -> Void
+    let requestedAnchor: PDFSourceAnchor?
+    let onAddPageToNote: (Int, String?, PDFSourceAnchor?) -> Void
 
     @State private var document: PDFDocument?
     @State private var attemptedURL: URL?
@@ -427,12 +641,24 @@ struct NativePDFPreview: View {
                         .padding(.horizontal, 12)
                         .frame(minHeight: 30)
                         .background(Color(nsColor: .controlBackgroundColor))
+                    } else if controller.invalidRequestedSelection {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle")
+                            Text(language.text("Referenced PDF selection has changed."))
+                            Spacer()
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 30)
+                        .background(Color(nsColor: .controlBackgroundColor))
                     }
                     Divider()
                     PDFCanvas(
                         document: document,
                         url: url,
                         requestedPage: requestedPage,
+                        requestedAnchor: requestedAnchor,
                         controller: controller
                     )
                     .accessibilityIdentifier("pks-pdf-canvas")
@@ -514,9 +740,12 @@ struct NativePDFPreview: View {
             .accessibilityIdentifier("pks-pdf-next-page")
 
             Button {
+                let selectedText = controller.selectedText()
+                let anchor = controller.selectedSourceAnchor()
                 onAddPageToNote(
-                    controller.currentPageIndex + 1,
-                    controller.selectedText()
+                    anchor?.page ?? controller.currentPageIndex + 1,
+                    selectedText,
+                    anchor
                 )
             } label: {
                 Label(language.text("Add to Note"), systemImage: "note.text.badge.plus")
@@ -626,11 +855,14 @@ struct NativePDFPreview: View {
     }
 
     private func copyCurrentPageReference() {
+        let anchor = controller.selectedSourceAnchor()
+        let page = anchor?.page ?? controller.currentPageIndex + 1
         guard let root,
               let markdown = PDFPageReference.markdown(
                 for: url,
-                page: controller.currentPageIndex + 1,
-                root: root
+                page: page,
+                root: root,
+                anchor: anchor
               ) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(markdown, forType: .string)
@@ -660,6 +892,7 @@ private struct PDFCanvas: NSViewRepresentable {
     let document: PDFDocument
     let url: URL
     let requestedPage: Int?
+    let requestedAnchor: PDFSourceAnchor?
     let controller: PDFReaderController
 
     final class Coordinator {
@@ -675,12 +908,24 @@ private struct PDFCanvas: NSViewRepresentable {
 
     func makeNSView(context: Context) -> PDFView {
         let view = PDFView()
-        controller.attach(view: view, document: document, url: url, requestedPage: requestedPage)
+        controller.attach(
+            view: view,
+            document: document,
+            url: url,
+            requestedPage: requestedPage,
+            requestedAnchor: requestedAnchor
+        )
         return view
     }
 
     func updateNSView(_ view: PDFView, context: Context) {
-        controller.attach(view: view, document: document, url: url, requestedPage: requestedPage)
+        controller.attach(
+            view: view,
+            document: document,
+            url: url,
+            requestedPage: requestedPage,
+            requestedAnchor: requestedAnchor
+        )
     }
 
     static func dismantleNSView(_ view: PDFView, coordinator: Coordinator) {
