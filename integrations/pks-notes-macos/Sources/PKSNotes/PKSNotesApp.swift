@@ -266,12 +266,6 @@ enum ReadingMode: String, CaseIterable {
     }
 }
 
-private struct PreviewWarmupKey: Hashable {
-    let identity: String
-    let revision: UInt64
-    let enabled: Bool
-}
-
 private struct OutlineWarmupKey: Hashable {
     let identity: String
     let revision: UInt64
@@ -604,31 +598,6 @@ struct NotesWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.paste)) { _ in
             handlePaste()
         }
-        .task(id: PreviewWarmupKey(
-            identity: model.selected?.path ?? "",
-            revision: model.draftRevision,
-            enabled: mode == .edit && model.selected != nil && !model.loadingNote
-        )) {
-            guard mode == .edit, !model.loadingNote, model.externalBody == nil,
-                  let identity = model.selected?.path else { return }
-            let input = model.draft
-            let revision = model.draftRevision
-            guard previewCache?.matches(identity: identity, revision: revision, matchID: nil) != true
-            else { return }
-            // Idle-only parse in the background; no preview view is mounted or laid out.
-            do { try await Task.sleep(for: .milliseconds(520)) }
-            catch { return }
-            guard !Task.isCancelled else { return }
-            let parser = Task.detached(priority: .utility) {
-                MarkdownPreviewParsing.prepare(input, match: nil)
-            }
-            defer { parser.cancel() }
-            let sections = await parser.value
-            guard !Task.isCancelled, model.selected?.path == identity,
-                  model.draftRevision == revision, mode == .edit else { return }
-            previewCache = MarkdownPreviewSnapshot(identity: identity, revision: revision,
-                                                    matchID: nil, sections: sections)
-        }
         .task(id: OutlineWarmupKey(
             identity: model.selected?.path ?? "",
             revision: model.draftRevision,
@@ -641,8 +610,15 @@ struct NotesWindow: View {
             }
             let input = model.draft
             let revision = model.draftRevision
-            // Keep typing responsive; coalesce rapid edits before scanning headings.
-            do { try await Task.sleep(for: .milliseconds(140)) }
+            // Keep typing responsive. Large notes make a full heading pass
+            // measurably expensive, so require a longer idle window before doing
+            // this derived outline work.
+            let bytes = input.utf8.count
+            let delay: Duration = bytes >= 5_000_000 ? .milliseconds(1_200)
+                : bytes >= 1_000_000 ? .milliseconds(700)
+                : bytes >= 250_000 ? .milliseconds(320)
+                : .milliseconds(140)
+            do { try await Task.sleep(for: delay) }
             catch { return }
             let scanner = Task.detached(priority: .utility) {
                 MarkdownOutline.headings(in: input)
