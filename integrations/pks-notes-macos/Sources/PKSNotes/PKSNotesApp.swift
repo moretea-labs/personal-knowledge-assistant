@@ -6,6 +6,22 @@ import PDFKit
 @MainActor
 final class PKSNotesAppDelegate: NSObject, NSApplicationDelegate {
     weak var notesModel: NotesModel?
+    private var markdownKeyMonitor: Any?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        markdownKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard let command = MarkdownShortcut.command(for: event),
+                  MarkdownNativeCommand.perform(command) else { return event }
+            return nil
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if let markdownKeyMonitor {
+            NSEvent.removeMonitor(markdownKeyMonitor)
+            self.markdownKeyMonitor = nil
+        }
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model = notesModel else { return .terminateNow }
@@ -45,6 +61,10 @@ struct PKSNotesApp: App {
         .commands {
             // This single-window editor uses Cmd+N for a note, not another app window.
             CommandGroup(replacing: .newItem) {}
+            // PKS Notes edits plain Markdown. Remove AppKit rich-text formatting
+            // equivalents (notably Cmd+B/Cmd+I) so one shortcut has one authority.
+            CommandGroup(replacing: .textFormatting) {}
+
             CommandGroup(replacing: .pasteboard) {
                 Button(language.text("Cut")) { NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil) }
                     .keyboardShortcut("x", modifiers: .command)
@@ -56,25 +76,25 @@ struct PKSNotesApp: App {
                 .keyboardShortcut("v", modifiers: .command)
             }
             CommandMenu("Markdown") {
-                Button(language.text("Bold")) { NotesMenuEvent.postFormat("bold") }
+                Button(language.text("Bold")) { MarkdownNativeCommand.perform("bold") }
                     .keyboardShortcut("b", modifiers: .command)
-                Button(language.text("Italic")) { NotesMenuEvent.postFormat("italic") }
+                Button(language.text("Italic")) { MarkdownNativeCommand.perform("italic") }
                     .keyboardShortcut("i", modifiers: .command)
-                Button(language.text("Inline Code")) { NotesMenuEvent.postFormat("code") }
+                Button(language.text("Inline Code")) { MarkdownNativeCommand.perform("code") }
                     .keyboardShortcut("e", modifiers: .command)
-                Button(language.text("Link")) { NotesMenuEvent.postFormat("link") }
+                Button(language.text("Link")) { MarkdownNativeCommand.perform("link") }
                     .keyboardShortcut("k", modifiers: .command)
                 Divider()
-                Button(language.text("Heading 1")) { NotesMenuEvent.postFormat("h1") }
+                Button(language.text("Heading 1")) { MarkdownNativeCommand.perform("h1") }
                     .keyboardShortcut("1", modifiers: [.command, .shift])
-                Button(language.text("Heading 2")) { NotesMenuEvent.postFormat("h2") }
+                Button(language.text("Heading 2")) { MarkdownNativeCommand.perform("h2") }
                     .keyboardShortcut("2", modifiers: [.command, .shift])
-                Button(language.text("Heading 3")) { NotesMenuEvent.postFormat("h3") }
+                Button(language.text("Heading 3")) { MarkdownNativeCommand.perform("h3") }
                     .keyboardShortcut("3", modifiers: [.command, .shift])
                 Divider()
-                Button(language.text("Bullet List")) { NotesMenuEvent.postFormat("bullet") }
+                Button(language.text("Bullet List")) { MarkdownNativeCommand.perform("bullet") }
                     .keyboardShortcut("8", modifiers: [.command, .shift])
-                Button(language.text("Task")) { NotesMenuEvent.postFormat("task") }
+                Button(language.text("Task")) { MarkdownNativeCommand.perform("task") }
                     .keyboardShortcut("9", modifiers: [.command, .shift])
             }
             CommandMenu("PKS") {
@@ -129,17 +149,88 @@ enum NotesGeometry {
     }
 }
 
+enum MarkdownShortcut {
+    static func command(for event: NSEvent) -> String? {
+        command(
+            key: event.charactersIgnoringModifiers?.lowercased(),
+            modifiers: event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        )
+    }
+
+    static func command(key: String?, modifiers: NSEvent.ModifierFlags) -> String? {
+        if modifiers == .command {
+            switch key {
+            case "b": return "bold"
+            case "i": return "italic"
+            case "e": return "code"
+            case "k": return "link"
+            default: return nil
+            }
+        }
+        if modifiers == [.command, .shift] {
+            switch key {
+            case "1": return "h1"
+            case "2": return "h2"
+            case "3": return "h3"
+            case "8": return "bullet"
+            case "9": return "task"
+            default: return nil
+            }
+        }
+        return nil
+    }
+}
+
+enum MarkdownNativeCommand {
+    static func activeTextView() -> NSTextView? {
+        let responder = (NSApp.keyWindow ?? NSApp.mainWindow)?.firstResponder
+        guard let textView = responder as? NSTextView,
+              textView.isEditable, !textView.isFieldEditor else { return nil }
+        return textView
+    }
+
+    @discardableResult
+    static func perform(_ value: String) -> Bool {
+        guard let textView = activeTextView(),
+              let command = editCommand(for: value) else { return false }
+        let original = textView.string
+        let result = MarkdownEditing.apply(command, to: original, selection: textView.selectedRange())
+        apply(result, from: original, in: textView)
+        return true
+    }
+
+    static func apply(_ result: MarkdownEditResult, from original: String, in textView: NSTextView) {
+        guard let replacement = MarkdownEditing.minimalChange(from: original, to: result.text) else { return }
+        textView.insertText(replacement.text, replacementRange: replacement.range)
+        textView.didChangeText()
+        DispatchQueue.main.async {
+            textView.setSelectedRange(result.selection)
+            textView.scrollRangeToVisible(result.selection)
+        }
+    }
+
+    private static func editCommand(for value: String) -> MarkdownEditCommand? {
+        switch value {
+        case "bold": .bold
+        case "italic": .italic
+        case "code": .inlineCode
+        case "link": .link
+        case "h1": .heading(1)
+        case "h2": .heading(2)
+        case "h3": .heading(3)
+        case "bullet": .bullet
+        case "task": .task
+        default: nil
+        }
+    }
+}
+
 private enum NotesMenuEvent {
     static let quickOpen = Notification.Name("PKSNotesMenuQuickOpen")
     static let newNote = Notification.Name("PKSNotesMenuNewNote")
     static let search = Notification.Name("PKSNotesMenuSearch")
     static let toggleEdit = Notification.Name("PKSNotesToggleEditPreview")
     static let paste = Notification.Name("PKSNotesPaste")
-    static let markdownFormat = Notification.Name("PKSNotesMarkdownFormat")
-
-    static func postFormat(_ value: String) {
-        NotificationCenter.default.post(name: markdownFormat, object: value)
-    }
 }
 
 private enum SidebarTab: String, CaseIterable {
@@ -265,12 +356,14 @@ struct NotesWindow: View {
                 }
 
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
-                    Button {
-                        showingMindMap.toggle()
-                    } label: {
+                    Toggle(isOn: $showingMindMap) {
                         toolbarSymbol(showingMindMap ? "doc.text" : "point.3.connected.trianglepath.dotted")
                     }
+                    .toggleStyle(.button)
+                    .buttonStyle(.plain)
                     .help(language.text(showingMindMap ? "Return to Markdown" : "Mind Map"))
+                    .accessibilityLabel(language.text("Mind Map"))
+                    .accessibilityValue(language.text(showingMindMap ? "On" : "Off"))
                     .accessibilityIdentifier("pks-mind-map-toggle")
                 }
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
@@ -442,10 +535,6 @@ struct NotesWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.toggleEdit)) { _ in
             toggleEditPreview()
         }
-        .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.markdownFormat)) { note in
-            guard let value = note.object as? String else { return }
-            applyMarkdownFormat(value)
-        }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.paste)) { _ in
             handlePaste()
         }
@@ -484,6 +573,11 @@ struct NotesWindow: View {
             expandedFolderPaths.removeAll()
             treeCursorPath = nil
             previewCache = nil
+        }
+        .onChange(of: model.loadingNote) { _, loading in
+            if !loading, mode != .read {
+                resetNativeEditorUndoBaseline()
+            }
         }
         .onChange(of: model.selected) { _, note in
             let openAsMap = note != nil && note == pendingMindMapOpen
@@ -1309,32 +1403,32 @@ struct NotesWindow: View {
         }
     }
 
-    private func applyMarkdownFormat(_ value: String) {
-        guard editorFocused, model.selected != nil,
-              model.externalBody == nil,
-              let textView = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
-        let command: MarkdownEditCommand
-        switch value {
-        case "bold": command = .bold
-        case "italic": command = .italic
-        case "code": command = .inlineCode
-        case "link": command = .link
-        case "h1": command = .heading(1)
-        case "h2": command = .heading(2)
-        case "h3": command = .heading(3)
-        case "bullet": command = .bullet
-        case "task": command = .task
-        default: return
+    private func markdownTextView(in view: NSView?) -> NSTextView? {
+        guard let view else { return nil }
+        if let textView = view as? NSTextView,
+           textView.isEditable, !textView.isFieldEditor {
+            return textView
         }
-        let original = textView.string
-        let result = MarkdownEditing.apply(command, to: original, selection: textView.selectedRange())
-        applyNativeEditorChange(result, from: original, in: textView)
+        for subview in view.subviews {
+            if let match = markdownTextView(in: subview) { return match }
+        }
+        return nil
+    }
+
+    /// A newly mounted/reloaded TextEditor must not inherit AppKit undo operations
+    /// recorded while its visible string represented another draft/view state.
+    private func resetNativeEditorUndoBaseline() {
+        Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(60))
+            markdownTextView(in: NSApp.keyWindow?.contentView)?.undoManager?.removeAllActions()
+        }
     }
 
     private func handlePaste() {
-        guard editorFocused, model.selected != nil,
+        guard model.selected != nil,
               model.externalBody == nil,
-              let textView = NSApp.keyWindow?.firstResponder as? NSTextView else {
+              let textView = MarkdownNativeCommand.activeTextView() else {
             NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
             return
         }
@@ -1353,19 +1447,7 @@ struct NotesWindow: View {
         }
         let original = textView.string
         let result = MarkdownEditing.insert(markdown, into: original, selection: textView.selectedRange())
-        applyNativeEditorChange(result, from: original, in: textView)
-    }
-
-    private func applyNativeEditorChange(_ result: MarkdownEditResult, from original: String,
-                                         in textView: NSTextView) {
-        guard let replacement = MarkdownEditing.minimalChange(from: original, to: result.text) else { return }
-        // Inserting through NSTextView, instead of assigning the SwiftUI binding,
-        // lets the native text system register a single undoable edit.
-        textView.insertText(replacement.text, replacementRange: replacement.range)
-        DispatchQueue.main.async {
-            textView.setSelectedRange(result.selection)
-            textView.scrollRangeToVisible(result.selection)
-        }
+        MarkdownNativeCommand.apply(result, from: original, in: textView)
     }
 
     private func jumpToOutlineHeading(_ heading: MarkdownOutlineHeading) {
@@ -1590,6 +1672,7 @@ struct NotesWindow: View {
             // The old draft remains intact until an off-main file load succeeds.
             .disabled(model.loadingNote)
             .accessibilityIdentifier("pks-markdown-editor")
+            .onAppear { resetNativeEditorUndoBaseline() }
     }
 
     private var renderedNote: some View {

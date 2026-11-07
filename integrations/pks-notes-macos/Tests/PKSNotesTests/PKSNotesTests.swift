@@ -165,6 +165,18 @@ final class PKSNotesTests: XCTestCase {
         }
     }
 
+    func testMarkdownShortcutMappingUsesOneExplicitModifierContract() {
+        XCTAssertEqual(MarkdownShortcut.command(key: "b", modifiers: .command), "bold")
+        XCTAssertEqual(MarkdownShortcut.command(key: "i", modifiers: .command), "italic")
+        XCTAssertEqual(MarkdownShortcut.command(key: "e", modifiers: .command), "code")
+        XCTAssertEqual(MarkdownShortcut.command(key: "k", modifiers: .command), "link")
+        XCTAssertEqual(MarkdownShortcut.command(key: "1", modifiers: [.command, .shift]), "h1")
+        XCTAssertEqual(MarkdownShortcut.command(key: "8", modifiers: [.command, .shift]), "bullet")
+        XCTAssertEqual(MarkdownShortcut.command(key: "9", modifiers: [.command, .shift]), "task")
+        XCTAssertNil(MarkdownShortcut.command(key: "b", modifiers: [.command, .option]))
+        XCTAssertNil(MarkdownShortcut.command(key: "x", modifiers: .command))
+    }
+
     func testApplicationAppearanceAndLanguagePreferencesAreIndependent() {
         XCTAssertEqual(AppAppearance.allCases.map(\.rawValue), ["system", "light", "dark"])
         XCTAssertEqual(AppAppearance.restored("unknown"), .system)
@@ -177,6 +189,8 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Search"), "搜索")
         XCTAssertEqual(AppLanguage.english.text("Search"), "Search")
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Markdown"), "Markdown")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("On"), "开启")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Off"), "关闭")
     }
 
     func testReadingThemeDefaultsAndParsedPreviewCacheIdentity() {

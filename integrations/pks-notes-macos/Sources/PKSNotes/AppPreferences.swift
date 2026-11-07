@@ -111,6 +111,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Read": "阅读",
         "Return to Markdown": "返回 Markdown",
         "Mind Map": "思维导图",
+        "On": "开启",
+        "Off": "关闭",
         "Links and related notes": "链接与相关笔记",
         "Relationships": "关联",
         "Outgoing": "链接到",
