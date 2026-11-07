@@ -278,6 +278,12 @@ private struct OutlineWarmupKey: Hashable {
     let enabled: Bool
 }
 
+private struct RelationshipWarmupKey: Hashable {
+    let identity: String
+    let revision: UInt64
+    let enabled: Bool
+}
+
 private struct PDFCaptureRequest: Equatable {
     let pdf: URL
     let page: Int
@@ -299,6 +305,7 @@ struct NotesWindow: View {
     @AppStorage("PKSNotesWidthAdjustment") private var widthAdjustment = 0.0
     @State private var previewCache: MarkdownPreviewSnapshot?
     @State private var outlineHeadings: [MarkdownOutlineHeading] = []
+    @State private var outgoingLinks: [MindMapLink] = []
     @State private var visibleTreeRows: [NoteTreePresentation.Row] = []
     @State private var quickOpenEntries: [NoteTreePresentation.QuickOpenEntry] = []
     @State private var showingQuickOpen = false
@@ -469,10 +476,10 @@ struct NotesWindow: View {
 
                                 if model.previewPDF == nil {
                                     relationshipSectionTitle(language.text("Outgoing"))
-                                    if model.outgoingLinks.isEmpty {
+                                    if outgoingLinks.isEmpty {
                                         relationshipEmpty(language.text("No links from this note."))
                                     } else {
-                                        ForEach(Array(model.outgoingLinks.enumerated()), id: \.offset) { _, link in
+                                        ForEach(Array(outgoingLinks.enumerated()), id: \.offset) { _, link in
                                             relationshipButton(
                                                 title: link.label,
                                                 detail: link.target,
@@ -640,6 +647,27 @@ struct NotesWindow: View {
                   model.draftRevision == revision else { return }
             outlineHeadings = headings
         }
+        .task(id: RelationshipWarmupKey(
+            identity: showingBacklinks && model.previewPDF == nil ? (model.selected?.path ?? "") : "",
+            revision: showingBacklinks && model.previewPDF == nil ? model.draftRevision : 0,
+            enabled: showingBacklinks && model.previewPDF == nil && model.selected != nil
+        )) {
+            guard showingBacklinks, model.previewPDF == nil, model.externalBody == nil,
+                  let identity = model.selected?.path else {
+                outgoingLinks = []
+                return
+            }
+            let input = model.draft
+            let revision = model.draftRevision
+            let scanner = Task.detached(priority: .utility) {
+                MindMapOutline.knowledgeLinks(in: input)
+            }
+            defer { scanner.cancel() }
+            let links = await scanner.value
+            guard !Task.isCancelled, showingBacklinks, model.previewPDF == nil,
+                  model.selected?.path == identity, model.draftRevision == revision else { return }
+            outgoingLinks = links
+        }
         .onReceive(model.$files) { files in
             visibleTreeRows = NoteTreePresentation.visibleRows(files, expandedPaths: expandedFolderPaths)
             quickOpenEntries = NoteTreePresentation.quickOpenEntries(files)
@@ -666,6 +694,7 @@ struct NotesWindow: View {
                 mode = .read
             }
             showingBacklinks = false
+            outgoingLinks = []
             if let note, let root = model.root {
                 expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: note, in: root))
                 treeCursorPath = note.path

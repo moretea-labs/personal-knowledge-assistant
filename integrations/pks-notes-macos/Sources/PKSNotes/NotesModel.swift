@@ -372,7 +372,6 @@ final class NotesModel: ObservableObject {
         return requestedNote.deletingPathExtension().lastPathComponent
     }
     var groupedHits: [SearchResultGroup] { SearchResultGroup.group(hits) }
-    var outgoingLinks: [MindMapLink] { MindMapOutline.knowledgeLinks(in: draft) }
     var selectedIsFavorite: Bool {
         guard let selected else { return false }
         return favoriteNotes.contains(selected.standardizedFileURL)
