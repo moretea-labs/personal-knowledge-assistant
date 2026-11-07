@@ -1861,10 +1861,56 @@ extension PKSNotesTests {
             target.standardizedFileURL
         )
 
-        let scan = WorkspaceBacklinks.scan(target: target, root: root, files: tree)
+        let cache = WorkspaceBacklinkParseCache(capacity: 8)
+        let scan = WorkspaceBacklinks.scan(
+            target: target,
+            root: root,
+            files: tree,
+            parseCache: cache
+        )
         XCTAssertEqual(scan.backlinks, [NoteBacklink(source: source.standardizedFileURL, count: 2)])
         XCTAssertEqual(scan.skippedDatalessFiles, 0)
+        XCTAssertEqual(cache.entryCount, 2)
         XCTAssertFalse(WorkspaceFiles.isDataless(source))
+    }
+
+    func testBacklinkParseCacheReusesUnchangedLinksAndInvalidatesReplacement() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let source = root.appendingPathComponent("Source.md")
+        try "[Alpha](/Alpha.md)".write(to: source, atomically: true, encoding: .utf8)
+
+        let cache = WorkspaceBacklinkParseCache(capacity: 2)
+        let first = try XCTUnwrap(cache.lookup(source))
+        XCTAssertFalse(first.hit)
+        XCTAssertEqual(first.links.map(\.target), ["/Alpha.md"])
+        XCTAssertEqual(cache.entryCount, 1)
+
+        let second = try XCTUnwrap(cache.lookup(source))
+        XCTAssertTrue(second.hit)
+        XCTAssertEqual(second.links, first.links)
+
+        // Atomic replacement changes inode/ctime even if a filesystem happens to
+        // preserve a coarse modification timestamp. The old parse must not win.
+        try "[Beta](/Beta.md)".write(to: source, atomically: true, encoding: .utf8)
+        let third = try XCTUnwrap(cache.lookup(source))
+        XCTAssertFalse(third.hit)
+        XCTAssertEqual(third.links.map(\.target), ["/Beta.md"])
+        XCTAssertEqual(cache.entryCount, 1)
+
+        let another = root.appendingPathComponent("Another.md")
+        let thirdFile = root.appendingPathComponent("Third.md")
+        try "[A](/A.md)".write(to: another, atomically: true, encoding: .utf8)
+        try "[T](/T.md)".write(to: thirdFile, atomically: true, encoding: .utf8)
+        _ = cache.lookup(another)
+        _ = cache.lookup(thirdFile)
+        XCTAssertLessThanOrEqual(cache.entryCount, 2)
+
+        cache.removeAll()
+        XCTAssertEqual(cache.entryCount, 0)
     }
 }
 
