@@ -422,6 +422,10 @@ struct NotesWindow: View {
                     } label: {
                         HStack(spacing: 4) {
                             toolbarSymbol("link")
+                            if model.previewPDF != nil {
+                                Text(language.text("Linked Notes"))
+                                    .font(.caption.weight(.medium))
+                            }
                             if !model.backlinks.isEmpty {
                                 Text("\(model.backlinks.count)")
                                     .font(.caption2.monospacedDigit())
