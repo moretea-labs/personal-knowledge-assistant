@@ -12,6 +12,7 @@ struct MindMapCanvas: View {
     @State private var renameTitle = ""
     @State private var editingNodeID: Int?
     @State private var interchangeError: String?
+    @State private var branchDeleteCandidateID: Int?
     @State private var collapsed: Set<Int> = []
     @State private var zoom: CGFloat = 1.0
     @State private var dropTargetID: Int?
@@ -84,6 +85,27 @@ struct MindMapCanvas: View {
                     fitToContent(viewport: viewport.size)
                 }
             }
+        }
+        .confirmationDialog(
+            language.text("Delete selected branch?"),
+            isPresented: Binding(
+                get: { branchDeleteCandidateID != nil },
+                set: { if !$0 { branchDeleteCandidateID = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(language.text("Delete Branch"), role: .destructive) {
+                if let id = branchDeleteCandidateID,
+                   let updated = MindMapOutline.deleteListSubtree(in: source, nodeID: id) {
+                    source = updated
+                    selectedID = nil
+                    collapsed.removeAll()
+                }
+                branchDeleteCandidateID = nil
+            }
+            Button(language.text("Cancel"), role: .cancel) { branchDeleteCandidateID = nil }
+        } message: {
+            Text(language.text("The selected list branch and its child nodes will be removed from this note."))
         }
         .alert(language.text("Mind Map Import/Export"), isPresented: Binding(
             get: { interchangeError != nil },
@@ -271,6 +293,25 @@ struct MindMapCanvas: View {
                     .onExitCommand { finishRename(save: false) }
                     .accessibilityIdentifier("pks-mind-map-inline-title")
                     .onAppear { titleEditorFocused = true }
+                Button {
+                    finishRename(save: true)
+                } label: {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .help(language.text("Save"))
+                .accessibilityIdentifier("pks-mind-map-inline-save")
+                Button {
+                    finishRename(save: false)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(language.text("Cancel"))
+                .accessibilityIdentifier("pks-mind-map-inline-cancel")
             } else {
                 Text(node.title)
                     .font(.system(size: node.depth == 0 ? 16 : 14,
@@ -329,13 +370,26 @@ struct MindMapCanvas: View {
         } isTargeted: { targeted in
             dropTargetID = targeted ? node.id : nil
         }
+        .contextMenu {
+            Button(language.text("Rename node"), systemImage: "pencil") {
+                if editingNodeID != nil { finishRename(save: true) }
+                selectedID = node.id
+                beginRename()
+            }
+            Button(language.text("Delete Branch"), systemImage: "trash", role: .destructive) {
+                branchDeleteCandidateID = node.id
+            }
+            .disabled(MindMapOutline.deleteListSubtree(in: source, nodeID: node.id) == nil)
+        }
         .onTapGesture {
-            guard editingNodeID == nil else { return }
+            guard editingNodeID != node.id else { return }
+            if editingNodeID != nil { finishRename(save: true) }
             selectedID = node.id
             canvasFocused = true
         }
         .onTapGesture(count: 2) {
-            guard editingNodeID == nil else { return }
+            guard editingNodeID != node.id else { return }
+            if editingNodeID != nil { finishRename(save: true) }
             selectedID = node.id
             beginRename()
         }

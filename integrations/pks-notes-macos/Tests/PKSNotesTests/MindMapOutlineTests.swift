@@ -28,6 +28,58 @@ extension MindMapOutlineTests {
 }
 
 extension MindMapOutlineTests {
+    func testDeleteListSubtreeKeepsUnrelatedHeadingsAndSiblings() {
+        XCTAssertEqual(MindMapOutline.deleteListSubtree(
+            in: "# Root\n- Parent\n  - Child A\n    - Grandchild\n  - Child B\n- Another",
+            nodeID: 1
+        ), "# Root\n- Another")
+        XCTAssertEqual(MindMapOutline.deleteListSubtree(
+            in: "# Root\n- Parent\n  - Child\n", nodeID: 1
+        ), "# Root\n")
+        XCTAssertEqual(MindMapOutline.deleteListSubtree(
+            in: "# Root\n- Parent\n  - Child\n- Another", nodeID: 2
+        ), "# Root\n- Parent\n- Another")
+        XCTAssertNil(MindMapOutline.deleteListSubtree(
+            in: "# Root\n- Child", nodeID: 0
+        ))
+    }
+
+    func testDeleteListSubtreeRejectsNonListContentInsideBranch() {
+        for source in [
+            "# Root\n- Parent\n  - Child\n  Attached notes\n- Next",
+            "# Root\n- Parent\n  ~~~swift\n  print(1)\n  ~~~\n  - Child\n- Next",
+            "# Root\n- Parent\n  - Child\n  ![photo](photo.png)\n- Next",
+            "# Root\n- Parent\n  - Child\n  - \n- Next"
+        ] {
+            XCTAssertNil(MindMapOutline.deleteListSubtree(in: source, nodeID: 1), source)
+        }
+    }
+
+    func testDeleteLeafRejectsProseAndCodeThatBelongToTheItem() {
+        for source in [
+            "# Root\n- A\n  Explanation belongs to A\n- B",
+            "# Root\n- A\n\n    A second paragraph\n- B",
+            "# Root\n- A\n  ```swift\n  print(1)\n  ```\n- B",
+            "# Root\n- A\n  ![Image](attachments/a.png)\n- B"
+        ] {
+            XCTAssertNil(MindMapOutline.deleteLeaf(in: source, nodeID: 1), source)
+        }
+        XCTAssertEqual(
+            MindMapOutline.deleteLeaf(in: "# Root\n- A\n\n- B", nodeID: 1),
+            "# Root\n\n- B"
+        )
+    }
+
+    func testAddChildRejectsReparentingExistingMarkdownProse() {
+        let heading = "# Root\nThis is a paragraph.\n- Existing"
+        XCTAssertNil(MindMapOutline.addChild(in: heading, parentID: 0))
+        let list = "# Root\n- A\n  Attached paragraph\n- B"
+        XCTAssertNil(MindMapOutline.addChild(in: list, parentID: 1))
+        XCTAssertEqual(MindMapOutline.addChild(
+            in: "# Root\n\n- A", parentID: 0
+        ), "# Root\n- New idea\n\n- A")
+    }
+
     func testLeafDeletionDoesNotDiscardDescendantsOrHeadings() {
         XCTAssertEqual(MindMapOutline.deleteLeaf(in: "# Root\n- A\n- B", nodeID: 1), "# Root\n- B")
         XCTAssertNil(MindMapOutline.deleteLeaf(in: "# Root\n- Parent\n  - Child", nodeID: 1))
