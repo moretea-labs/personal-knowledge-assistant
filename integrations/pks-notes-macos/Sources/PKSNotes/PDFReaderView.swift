@@ -2,6 +2,20 @@ import AppKit
 import PDFKit
 import SwiftUI
 
+enum PDFDocumentLoading {
+    static func load(_ url: URL) async -> PDFDocument? {
+        let loader = Task.detached(priority: .userInitiated) {
+            PDFDocument(url: url)
+        }
+        let loaded = await loader.value
+        guard !Task.isCancelled else {
+            loader.cancel()
+            return nil
+        }
+        return loaded
+    }
+}
+
 struct PDFSourceAnchor: Equatable {
     static let maxRects = 32
 
@@ -675,8 +689,13 @@ struct NativePDFPreview: View {
             }
         }
         .task(id: url) {
-            document = PDFDocument(url: url)
-            attemptedURL = url
+            document = nil
+            attemptedURL = nil
+            let requestedURL = url
+            let loaded = await PDFDocumentLoading.load(requestedURL)
+            guard !Task.isCancelled else { return }
+            document = loaded
+            attemptedURL = requestedURL
         }
         .onChange(of: controller.currentPageIndex) { _, page in
             pageText = String(page + 1)
