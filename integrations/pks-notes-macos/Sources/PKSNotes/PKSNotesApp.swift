@@ -144,6 +144,8 @@ private enum NotesMenuEvent {
 
 private enum SidebarTab: String, CaseIterable {
     case notes = "Notes"
+    case recent = "Recent"
+    case favorites = "Favorites"
     case search = "Search"
 }
 
@@ -190,11 +192,25 @@ struct NotesWindow: View {
     @State private var allOpenableFiles: [NoteItem] = []
     @State private var showingQuickOpen = false
     @State private var showingBacklinks = false
+    @State private var showingOutline = false
     @State private var quickOpenQuery = ""
     @State private var quickOpenIndex = 0
 
     private var quickOpenMatches: [NoteItem] {
         NoteTreePresentation.quickOpen(allOpenableFiles, query: quickOpenQuery)
+    }
+
+    private var outlineHeadings: [MarkdownOutlineHeading] {
+        MarkdownOutline.headings(in: model.draft)
+    }
+
+    private var sidebarSectionTitleKey: String {
+        switch sidebarTab {
+        case .notes: "FOLDERS"
+        case .recent: "RECENT NOTES"
+        case .favorites: "FAVORITES"
+        case .search: "SEARCH RESULTS"
+        }
     }
 
     private var theme: NotesTheme { NotesTheme.restored(themeID) }
@@ -258,6 +274,30 @@ struct NotesWindow: View {
                     .help(language.text(showingMindMap ? "Return to Markdown" : "Mind Map"))
                     .accessibilityIdentifier("pks-mind-map-toggle")
                 }
+                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
+                    Button {
+                        showingOutline.toggle()
+                    } label: {
+                        toolbarSymbol("list.bullet.indent")
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(outlineHeadings.isEmpty)
+                    .help(language.text("Document Outline"))
+                    .accessibilityIdentifier("pks-outline-menu")
+                    .popover(isPresented: $showingOutline, arrowEdge: .bottom) {
+                        outlinePopover
+                    }
+
+                    Button {
+                        model.toggleFavorite()
+                    } label: {
+                        toolbarSymbol(model.selectedIsFavorite ? "star.fill" : "star")
+                    }
+                    .buttonStyle(.plain)
+                    .help(language.text(model.selectedIsFavorite ? "Remove from Favorites" : "Add to Favorites"))
+                    .accessibilityIdentifier("pks-favorite-toggle")
+                }
+
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
                     Button {
                         showingBacklinks.toggle()
@@ -339,7 +379,7 @@ struct NotesWindow: View {
                                     ForEach(model.relatedHits.prefix(6)) { hit in
                                         relationshipButton(
                                             title: hit.title,
-                                            detail: hit.sourceLabel,
+                                            detail: language.text(hit.sourceLabel),
                                             symbol: "sparkles"
                                         ) {
                                             showingBacklinks = false
@@ -858,7 +898,7 @@ struct NotesWindow: View {
                                                 .font(.system(size: 12, weight: .medium))
                                                 .lineLimit(2)
                                         }
-                                        Text(hit.sourceLabel + " · " + hit.sourceLocation)
+                                        Text(language.text(hit.sourceLabel) + " · " + hit.sourceLocation)
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
                                             .lineLimit(1)
@@ -1012,6 +1052,8 @@ struct NotesWindow: View {
                     .padding(.bottom, 3)
 
                 navigationRow(.notes, symbol: "square.stack.3d.up", title: language.text("All Notes"))
+                navigationRow(.recent, symbol: "clock", title: language.text("Recent"))
+                navigationRow(.favorites, symbol: "star", title: language.text("Favorites"))
                 navigationRow(.search, symbol: "text.magnifyingglass", title: language.text("PKS Search"))
 
                 Button(action: openQuickPicker) {
@@ -1039,7 +1081,7 @@ struct NotesWindow: View {
             .padding(.bottom, 19)
 
             HStack(spacing: 6) {
-                Text(language.text(sidebarTab == .notes ? "FOLDERS" : "SEARCH RESULTS"))
+                Text(language.text(sidebarSectionTitleKey))
                     .font(.system(size: 10, weight: .semibold))
                     .tracking(0.75)
                     .foregroundStyle(.tertiary)
@@ -1098,22 +1140,27 @@ struct NotesWindow: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                if sidebarTab == .search {
+                switch sidebarTab {
+                case .search:
                     searchResultRows
-                } else {
-                Group {
-                    if model.loadingFiles {
-                        HStack {
-                            ProgressView().controlSize(.small)
-                            Text(language.text("Loading local Markdown…"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                case .recent:
+                    savedNoteRows(model.recentNotes, emptyMessage: language.text("No recent notes yet."))
+                case .favorites:
+                    savedNoteRows(model.favoriteNotes, emptyMessage: language.text("No favorite notes yet."))
+                case .notes:
+                    Group {
+                        if model.loadingFiles {
+                            HStack {
+                                ProgressView().controlSize(.small)
+                                Text(language.text("Loading local Markdown…"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        ForEach(visibleTreeRows) { row in
+                            fileTreeRow(row)
                         }
                     }
-                    ForEach(visibleTreeRows) { row in
-                        fileTreeRow(row)
-                    }
-                }
                 }
                 }
                 .padding(.horizontal, 10)
@@ -1188,6 +1235,17 @@ struct NotesWindow: View {
         }
         Button(language.text("Copy File Path"), systemImage: "doc.on.doc") {
             model.copySource(url.path)
+        }
+        if let root = model.root,
+           ["md", "markdown"].contains(url.pathExtension.lowercased()),
+           WorkspaceFiles.contains(url, in: root) {
+            Button(
+                language.text(model.favoriteNotes.contains(url.standardizedFileURL)
+                    ? "Remove from Favorites" : "Add to Favorites"),
+                systemImage: model.favoriteNotes.contains(url.standardizedFileURL) ? "star.slash" : "star"
+            ) {
+                model.toggleFavorite(url)
+            }
         }
         if model.canManage(url) {
             Divider()
@@ -1303,6 +1361,122 @@ struct NotesWindow: View {
         DispatchQueue.main.async {
             textView.setSelectedRange(result.selection)
             textView.scrollRangeToVisible(result.selection)
+        }
+    }
+
+    private var outlinePopover: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(language.text("Document Outline"))
+                        .font(.headline)
+                    Spacer()
+                    Text("\(outlineHeadings.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+
+                Divider()
+
+                if outlineHeadings.isEmpty {
+                    Text(language.text("No headings in this note."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(14)
+                } else {
+                    ForEach(outlineHeadings) { heading in
+                        Button {
+                            jumpToOutlineHeading(heading)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "number")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(.tertiary)
+                                    .frame(width: 14)
+                                Text(heading.title)
+                                    .font(.system(size: 12.5, weight: heading.level <= 2 ? .semibold : .regular))
+                                    .lineLimit(2)
+                                Spacer(minLength: 6)
+                                Text("H\(heading.level)")
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.leading, CGFloat(max(0, heading.level - 1)) * 10)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("pks-outline-heading-\(heading.id)")
+                    }
+                }
+            }
+        }
+        .frame(width: 320, height: min(430, CGFloat(94 + outlineHeadings.count * 38)))
+    }
+
+    private func jumpToOutlineHeading(_ heading: MarkdownOutlineHeading) {
+        showingOutline = false
+        showingMindMap = false
+        mode = .edit
+        Task { @MainActor in
+            editorFocused = true
+            // A read-only preview must first mount the native TextEditor before
+            // its NSTextView can become first responder.
+            try? await Task.sleep(for: .milliseconds(40))
+            guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
+            let length = (textView.string as NSString).length
+            let location = min(max(0, heading.utf16Offset), length)
+            let range = NSRange(location: location, length: 0)
+            textView.setSelectedRange(range)
+            textView.scrollRangeToVisible(range)
+        }
+    }
+
+    @ViewBuilder
+    private func savedNoteRows(_ notes: [URL], emptyMessage: String) -> some View {
+        if notes.isEmpty {
+            Text(emptyMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 12)
+        } else {
+            ForEach(notes, id: \.path) { note in
+                Button {
+                    model.openFile(note)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: model.favoriteNotes.contains(note.standardizedFileURL) ? "star.fill" : "doc.text")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 16)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(note.deletingPathExtension().lastPathComponent)
+                                .font(.system(size: 12.5, weight: model.selected == note ? .semibold : .medium))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Text(NoteTreePresentation.quickOpenFolder(for: note, in: model.root))
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(model.selected == note
+                                ? Color.primary.opacity(colorScheme == .dark ? 0.15 : 0.075)
+                                : .clear,
+                                in: RoundedRectangle(cornerRadius: NotesGeometry.selectionCorner))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .contextMenu { fileActions(note) }
+                .accessibilityIdentifier("pks-saved-note-\(note.lastPathComponent)")
+            }
         }
     }
 

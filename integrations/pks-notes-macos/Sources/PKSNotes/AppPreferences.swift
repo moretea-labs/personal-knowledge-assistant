@@ -274,7 +274,23 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Preparing Markdown preview…": "正在准备 Markdown 预览…",
         "Attachment unavailable": "附件不可用",
         "Loading or missing attachment": "正在加载附件或附件缺失",
-        "Link target not available in this workspace.": "链接目标在此工作区中不可用。"
+        "Link target not available in this workspace.": "链接目标在此工作区中不可用。",
+        "Save": "保存",
+        "Recent": "最近",
+        "Favorites": "收藏",
+        "RECENT NOTES": "最近笔记",
+        "FAVORITES": "收藏",
+        "No recent notes yet.": "还没有最近笔记。",
+        "No favorite notes yet.": "还没有收藏笔记。",
+        "Add to Favorites": "添加到收藏",
+        "Remove from Favorites": "从收藏中移除",
+        "Document Outline": "文档大纲",
+        "No headings in this note.": "此笔记没有标题。",
+        "Unsaved Markdown changes": "未保存的 Markdown 更改",
+        "Discard Changes": "放弃更改",
+        "Local file": "本地文件",
+        "Web page": "网页",
+        "PKS source": "PKS 来源"
     ]
 }
 

@@ -294,6 +294,8 @@ final class NotesModel: ObservableObject {
     @Published private(set) var loadingBacklinks = false
     @Published private(set) var relatedHits: [SearchHit] = []
     @Published private(set) var loadingRelated = false
+    @Published private(set) var recentNotes: [URL] = []
+    @Published private(set) var favoriteNotes: [URL] = []
     @Published private(set) var relatedError: String?
     private var savedModification: Date?
     private var autoSaveTask: Task<Void, Never>?
@@ -311,6 +313,26 @@ final class NotesModel: ObservableObject {
     var body: String { externalBody ?? draft }
     var groupedHits: [SearchResultGroup] { SearchResultGroup.group(hits) }
     var outgoingLinks: [MindMapLink] { MindMapOutline.knowledgeLinks(in: draft) }
+    var selectedIsFavorite: Bool {
+        guard let selected else { return false }
+        return favoriteNotes.contains(selected.standardizedFileURL)
+    }
+
+    func toggleFavorite(_ note: URL? = nil) {
+        guard let root, let target = (note ?? selected)?.standardizedFileURL,
+              WorkspaceFiles.contains(target, in: root) else { return }
+        favoriteNotes = NoteNavigationStore.toggleFavorite(target, in: root)
+    }
+
+    private func reloadNavigationPreferences() {
+        guard let root else {
+            recentNotes = []
+            favoriteNotes = []
+            return
+        }
+        recentNotes = NoteNavigationStore.recent(in: root)
+        favoriteNotes = NoteNavigationStore.favorites(in: root)
+    }
 
     /// The Markdown file remains the only writer/authority; the task only schedules save().
     private func scheduleAutoSave() {
@@ -400,6 +422,7 @@ final class NotesModel: ObservableObject {
         root = resolved
         message = nil
         UserDefaults.standard.set(resolved.path, forKey: "PKSNotesWorkspace")
+        reloadNavigationPreferences()
         files = []
         backlinks = []
         backlinkTask?.cancel()
@@ -467,11 +490,14 @@ final class NotesModel: ObservableObject {
             selectedDecision = decision
         } else {
             let alert = NSAlert()
-            alert.messageText = "Unsaved Markdown changes"
-            alert.informativeText = "Save changes to \(title) before leaving this note?"
-            alert.addButton(withTitle: "Save")
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Discard Changes")
+            let language = AppLanguage.current
+            alert.messageText = language.text("Unsaved Markdown changes")
+            alert.informativeText = language.resolved == .simplifiedChinese
+                ? "离开此笔记前保存对「\(title)」的更改？"
+                : "Save changes to \(title) before leaving this note?"
+            alert.addButton(withTitle: language.text("Save"))
+            alert.addButton(withTitle: language.text("Cancel"))
+            alert.addButton(withTitle: language.text("Discard Changes"))
             switch alert.runModal() {
             case .alertFirstButtonReturn: selectedDecision = .save
             case .alertThirdButtonReturn: selectedDecision = .discard
@@ -588,6 +614,9 @@ final class NotesModel: ObservableObject {
         }
         cancelNoteLoad()
         UserDefaults.standard.set(url.path, forKey: "PKSNotesLastOpenedMarkdown")
+        if let root {
+            recentNotes = NoteNavigationStore.recordRecent(url, in: root)
+        }
         backlinkTask?.cancel()
         backlinks = []
         loadingBacklinks = false
@@ -885,6 +914,10 @@ final class NotesModel: ObservableObject {
                isInside(URL(fileURLWithPath: previous), item: target) {
                 UserDefaults.standard.removeObject(forKey: "PKSNotesLastOpenedMarkdown")
             }
+            if let root {
+                NoteNavigationStore.removePath(target, in: root)
+                reloadNavigationPreferences()
+            }
             refresh()
             message = nil
             return destination as URL?
@@ -949,6 +982,8 @@ final class NotesModel: ObservableObject {
                let renamed = rebased(URL(fileURLWithPath: previous)) {
                 UserDefaults.standard.set(renamed.path, forKey: "PKSNotesLastOpenedMarkdown")
             }
+            NoteNavigationStore.replacePath(target, with: destination, in: root)
+            reloadNavigationPreferences()
             refresh()
             message = nil
             return destination
@@ -1049,6 +1084,8 @@ final class NotesModel: ObservableObject {
                let moved = rebased(URL(fileURLWithPath: previous)) {
                 UserDefaults.standard.set(moved.path, forKey: "PKSNotesLastOpenedMarkdown")
             }
+            NoteNavigationStore.replacePath(target, with: destination, in: root)
+            reloadNavigationPreferences()
             refresh()
             message = nil
             return destination
