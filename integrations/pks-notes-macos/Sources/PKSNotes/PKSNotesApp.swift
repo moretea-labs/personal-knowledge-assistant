@@ -861,26 +861,30 @@ struct NotesWindow: View {
         pdfCaptureCommentary = ""
     }
 
+    private func savePDFCapture(to studyNote: URL) {
+        guard let capture = pdfCaptureRequest else { return }
+        guard model.appendPDFReference(
+            pdf: capture.pdf,
+            page: capture.page,
+            commentary: pdfCaptureCommentary,
+            selectedText: capture.selectedText,
+            anchor: capture.anchor,
+            to: studyNote
+        ) else { return }
+
+        closeQuickPicker()
+        pendingEditorFocus = studyNote
+        model.openStudyNote(studyNote)
+        if model.selected == studyNote {
+            pendingEditorFocus = nil
+            mode = .edit
+            Task { @MainActor in editorFocused = true }
+        }
+    }
+
     private func openQuickMatch(_ item: NoteItem) {
-        if let capture = pdfCaptureRequest {
-            if model.appendPDFReference(
-                pdf: capture.pdf,
-                page: capture.page,
-                commentary: pdfCaptureCommentary,
-                selectedText: capture.selectedText,
-                anchor: capture.anchor,
-                to: item.url
-            ) {
-                let studyNote = item.url
-                closeQuickPicker()
-                pendingEditorFocus = studyNote
-                model.openStudyNote(studyNote)
-                if model.selected == studyNote {
-                    pendingEditorFocus = nil
-                    mode = .edit
-                    Task { @MainActor in editorFocused = true }
-                }
-            }
+        if pdfCaptureRequest != nil {
+            savePDFCapture(to: item.url)
             return
         }
         closeQuickPicker()
@@ -928,6 +932,15 @@ struct NotesWindow: View {
                     )
                     .font(.subheadline.weight(.semibold))
                     Spacer()
+                    if let studyNote = model.selected, model.externalBody == nil {
+                        Button(language.text("Add to Study Note")) {
+                            savePDFCapture(to: studyNote)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .help(studyNote.deletingPathExtension().lastPathComponent)
+                        .accessibilityIdentifier("pks-pdf-capture-current-note")
+                    }
                     Button(language.text("New note from this page")) {
                         createNoteFromPDFCapture()
                     }

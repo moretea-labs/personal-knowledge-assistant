@@ -221,6 +221,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Your note": "你的笔记",
         "Your note…": "写下你的理解…",
         "Study Note": "学习笔记",
+        "Add to Study Note": "添加到学习笔记",
         "Open note only": "仅打开笔记",
         "New note from this page": "用此页新建笔记",
         "Search Markdown notes…": "搜索 Markdown 笔记…",
