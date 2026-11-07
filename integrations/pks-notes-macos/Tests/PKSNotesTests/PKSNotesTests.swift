@@ -249,12 +249,23 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(results[0].id, "chunk_test")
     }
 
-    func testSafeNoteNames() {
+    func testSafeNoteNames() throws {
         XCTAssertEqual(WorkspaceFiles.safeNewNoteName("中文"), "中文.md")
         XCTAssertEqual(WorkspaceFiles.safeNewNoteName("test.md"), "test.md")
         XCTAssertNil(WorkspaceFiles.safeNewNoteName("../outside"))
         XCTAssertNil(WorkspaceFiles.safeNewNoteName(".private"))
         XCTAssertNil(WorkspaceFiles.safeNewNoteName("/absolute"))
+
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        try Data().write(to: folder.appendingPathComponent("Book · p.4.md"))
+        XCTAssertEqual(
+            WorkspaceFiles.nextAvailableNoteName(basedOn: "Book · p.4", in: folder),
+            "Book · p.4 2.md"
+        )
+        XCTAssertEqual(WorkspaceFiles.nextUntitledName(in: folder), "Untitled.md")
     }
 
     func testPathContainmentAndSymlinkEscape() throws {

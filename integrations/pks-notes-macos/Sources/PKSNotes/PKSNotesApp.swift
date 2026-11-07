@@ -811,9 +811,15 @@ struct NotesWindow: View {
               )
         else { return }
 
+        let sourceTitle = capture.pdf.deletingPathExtension().lastPathComponent
+        guard let filename = WorkspaceFiles.nextAvailableNoteName(
+            basedOn: "\(sourceTitle) · p.\(capture.page)",
+            in: root
+        ) else { return }
+
         pdfCaptureRequest = nil
         showingQuickOpen = false
-        guard let created = model.newNote(initialContent: "\(snippet)\n") else { return }
+        guard let created = model.newNote(named: filename, initialContent: "\(snippet)\n") else { return }
         pendingEditorFocus = created
         mode = .edit
     }

@@ -198,15 +198,21 @@ enum WorkspaceFiles {
     }
 
     /// Deterministic collision-safe suggestion; O_EXCL remains the final writer guard.
-    static func nextUntitledName(in folder: URL) -> String? {
+    static func nextAvailableNoteName(basedOn name: String, in folder: URL) -> String? {
+        guard let normalized = safeNewNoteName(name) else { return nil }
+        let stem = String(normalized.dropLast(3))
         for index in 0..<10_000 {
-            let base = index == 0 ? "Untitled" : "Untitled \(index + 1)"
+            let base = index == 0 ? stem : "\(stem) \(index + 1)"
             let filename = base + ".md"
             if !FileManager.default.fileExists(atPath: folder.appendingPathComponent(filename).path) {
                 return filename
             }
         }
         return nil
+    }
+
+    static func nextUntitledName(in folder: URL) -> String? {
+        nextAvailableNoteName(basedOn: "Untitled", in: folder)
     }
 
     static func storePastedPNG(_ data: Data, for note: URL, in root: URL, stem: String = "pasted-image") -> String? {
