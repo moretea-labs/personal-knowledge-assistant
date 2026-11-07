@@ -307,6 +307,13 @@ struct NotesWindow: View {
         }
     }
 
+    private var pdfCapturePreviewText: String? {
+        guard let text = pdfCaptureRequest?.selectedText?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else { return nil }
+        return text
+    }
+
     private var outlineHeadings: [MarkdownOutlineHeading] {
         MarkdownOutline.headings(in: model.draft)
     }
@@ -813,6 +820,7 @@ struct NotesWindow: View {
 
     private var quickOpenSheet: some View {
         let matches = quickOpenMatches
+        let selectedPreview = pdfCapturePreviewText
         return VStack(alignment: .leading, spacing: 0) {
             if let capture = pdfCaptureRequest {
                 HStack(spacing: 10) {
@@ -830,7 +838,25 @@ struct NotesWindow: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
-                .padding(.bottom, 8)
+                .padding(.bottom, selectedPreview == nil ? 8 : 6)
+
+                if let selectedPreview {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "quote.opening")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 2)
+                        Text(selectedPreview)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(language.text("Selected PDF text"))
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 10)
+                }
             }
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
@@ -938,7 +964,7 @@ struct NotesWindow: View {
         .frame(
             width: 560,
             height: (matches.isEmpty ? 176 : min(470, max(238, CGFloat(matches.count) * 54 + 83)))
-                + (pdfCaptureRequest == nil ? 0 : 44)
+                + (pdfCaptureRequest == nil ? 0 : (selectedPreview == nil ? 44 : 88))
         )
         .background(Color(nsColor: .windowBackgroundColor))
         .animation(.easeOut(duration: 0.16), value: matches.isEmpty)

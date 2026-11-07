@@ -507,7 +507,8 @@ struct NativePDFPreview: View {
                     controller.selectedText()
                 )
             } label: {
-                Image(systemName: "note.text.badge.plus")
+                Label(language.text("Add to Note"), systemImage: "note.text.badge.plus")
+                    .font(.caption.weight(.medium))
             }
             .buttonStyle(.plain)
             .disabled(root == nil || controller.pageCount == 0)
