@@ -390,6 +390,11 @@ struct BacklinkScanResult: Equatable {
     let skippedDatalessFiles: Int
 }
 
+private struct GlobalFileIndexSnapshot {
+    let files: [NoteItem]
+    let quickOpenEntries: [NoteTreePresentation.QuickOpenEntry]
+}
+
 enum WorkspaceBacklinks {
     static func markdownFiles(_ items: [NoteItem]) -> [URL] {
         var result: [URL] = []
@@ -453,6 +458,7 @@ final class NotesModel: ObservableObject {
     @Published private(set) var files: [NoteItem] = []
     @Published private(set) var loadingFiles = false
     @Published private(set) var globalFiles: [NoteItem] = []
+    @Published private(set) var globalQuickOpenEntries: [NoteTreePresentation.QuickOpenEntry] = []
     @Published private(set) var indexingFiles = false
     @Published private(set) var globalFileIndexReady = false
     @Published private(set) var loadingNote = false
@@ -517,8 +523,9 @@ final class NotesModel: ObservableObject {
     private var fileRefreshTask: Task<Void, Never>?
     private var folderLoadTask: Task<Void, Never>?
     private var pendingFolderPaths: Set<String> = []
+    private var preferredFolderPath: String?
     private var loadedFolderPaths: Set<String> = []
-    private var globalFileScanTask: Task<[NoteItem], Never>?
+    private var globalFileScanTask: Task<GlobalFileIndexSnapshot, Never>?
     private var globalFileScanGeneration: UInt64 = 0
     private var knowledgeLinkTask: Task<Void, Never>?
     private var fileRefreshGeneration: UInt64 = 0
@@ -691,8 +698,10 @@ final class NotesModel: ObservableObject {
         folderLoadTask = nil
         globalFileScanTask = nil
         pendingFolderPaths.removeAll()
+        preferredFolderPath = nil
         loadedFolderPaths.removeAll()
         globalFiles = []
+        globalQuickOpenEntries = []
         globalFileIndexReady = false
         indexingFiles = false
 
@@ -720,13 +729,30 @@ final class NotesModel: ObservableObject {
     func loadExpandedFolders(_ paths: Set<String>) {
         guard let root else { return }
         let rootPath = root.standardizedFileURL.path
-        let candidates = paths.compactMap { path -> String? in
+        let expanded = Set(paths.compactMap { path -> String? in
             let normalized = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
-            guard normalized.hasPrefix(rootPath + "/"),
-                  !loadedFolderPaths.contains(normalized) else { return nil }
-            return normalized
+            return normalized.hasPrefix(rootPath + "/") ? normalized : nil
+        })
+
+        // A folder collapsed before its queued read starts should consume no I/O.
+        // Already-loaded children stay as a presentation cache for cheap reopen.
+        pendingFolderPaths.formIntersection(expanded)
+        pendingFolderPaths.formUnion(expanded.filter { !loadedFolderPaths.contains($0) })
+        if let preferredFolderPath, !expanded.contains(preferredFolderPath) {
+            self.preferredFolderPath = nil
         }
-        pendingFolderPaths.formUnion(candidates)
+        startPendingFolderLoad()
+    }
+
+    /// Direct user expansion outranks restored/background disclosure work.
+    func loadExpandedFolder(_ folder: URL) {
+        guard let root else { return }
+        let rootPath = root.standardizedFileURL.path
+        let normalized = folder.standardizedFileURL.path
+        guard normalized.hasPrefix(rootPath + "/"),
+              !loadedFolderPaths.contains(normalized) else { return }
+        preferredFolderPath = normalized
+        pendingFolderPaths.insert(normalized)
         startPendingFolderLoad()
     }
 
@@ -735,24 +761,34 @@ final class NotesModel: ObservableObject {
               !pendingFolderPaths.isEmpty else { return }
 
         let rootPath = root.standardizedFileURL.path
-        let targets = pendingFolderPaths
-            .filter { $0.hasPrefix(rootPath + "/") && !loadedFolderPaths.contains($0) }
-            .sorted {
-                $0.split(separator: "/").count < $1.split(separator: "/").count
-            }
-        guard !targets.isEmpty else {
+        let candidates = pendingFolderPaths.filter {
+            $0.hasPrefix(rootPath + "/") && !loadedFolderPaths.contains($0)
+        }
+        guard !candidates.isEmpty else {
             pendingFolderPaths.removeAll()
+            preferredFolderPath = nil
             return
         }
-        pendingFolderPaths.subtract(targets)
+
+        let target: String
+        if let preferred = preferredFolderPath, candidates.contains(preferred) {
+            target = preferred
+            preferredFolderPath = nil
+        } else {
+            target = candidates.min {
+                let lhsDepth = $0.split(separator: "/").count
+                let rhsDepth = $1.split(separator: "/").count
+                if lhsDepth != rhsDepth { return lhsDepth < rhsDepth }
+                return $0.localizedStandardCompare($1) == .orderedAscending
+            }!
+        }
+        pendingFolderPaths.remove(target)
 
         let generation = fileRefreshGeneration
         folderLoadTask = Task { [weak self] in
             let loader = Task.detached(priority: .userInitiated) {
-                targets.map { path -> (URL, [NoteItem]) in
-                    let folder = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
-                    return (folder, WorkspaceFiles.tree(in: folder, recursive: false))
-                }
+                let folder = URL(fileURLWithPath: target, isDirectory: true).standardizedFileURL
+                return (folder, WorkspaceFiles.tree(in: folder, recursive: false))
             }
             let loaded = await withTaskCancellationHandler {
                 await loader.value
@@ -760,19 +796,18 @@ final class NotesModel: ObservableObject {
                 loader.cancel()
             }
 
-            guard !Task.isCancelled, let self, self.root == root,
-                  self.fileRefreshGeneration == generation else { return }
-            var updated = self.files
-            for (folder, children) in loaded {
-                updated = WorkspaceFiles.replacingChildren(
-                    in: updated,
-                    folder: folder,
-                    with: children
-                )
-                self.loadedFolderPaths.insert(folder.path)
-            }
-            self.files = updated
+            guard let self, self.fileRefreshGeneration == generation else { return }
             self.folderLoadTask = nil
+            guard !Task.isCancelled, self.root == root else { return }
+
+            // Mark loaded before publishing @Published files so the synchronous
+            // SwiftUI receive path cannot enqueue the same folder again.
+            self.loadedFolderPaths.insert(loaded.0.path)
+            self.files = WorkspaceFiles.replacingChildren(
+                in: self.files,
+                folder: loaded.0,
+                with: loaded.1
+            )
             self.startPendingFolderLoad()
         }
     }
@@ -782,28 +817,38 @@ final class NotesModel: ObservableObject {
         if globalFileIndexReady { return globalFiles }
 
         let generation = fileRefreshGeneration
-        let scan: Task<[NoteItem], Never>
+        let scan: Task<GlobalFileIndexSnapshot, Never>
         if let current = globalFileScanTask, globalFileScanGeneration == generation {
             scan = current
         } else {
             indexingFiles = true
             let task = Task.detached(priority: .utility) {
-                WorkspaceFiles.flatFiles(in: root)
+                let files = WorkspaceFiles.flatFiles(in: root)
+                guard !Task.isCancelled else {
+                    return GlobalFileIndexSnapshot(files: files, quickOpenEntries: [])
+                }
+                return GlobalFileIndexSnapshot(
+                    files: files,
+                    quickOpenEntries: NoteTreePresentation.quickOpenEntries(files)
+                )
             }
             globalFileScanTask = task
             globalFileScanGeneration = generation
             scan = task
         }
 
-        let scanned = await scan.value
+        let snapshot = await scan.value
         guard self.root == root, fileRefreshGeneration == generation else { return [] }
+        // Publish readiness before the derived entries so the SwiftUI receive path
+        // can swap from shallow/local results to the complete index immediately.
         globalFileIndexReady = true
-        globalFiles = scanned
+        globalFiles = snapshot.files
+        globalQuickOpenEntries = snapshot.quickOpenEntries
         indexingFiles = false
         if globalFileScanGeneration == generation {
             globalFileScanTask = nil
         }
-        return scanned
+        return snapshot.files
     }
 
     func prepareGlobalFileIndex() {
