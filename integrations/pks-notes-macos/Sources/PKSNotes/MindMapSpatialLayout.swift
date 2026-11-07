@@ -70,8 +70,9 @@ enum MindMapSpatialLayout {
         let roots = nodes.filter { (parentByID[$0.id] ?? nil) == nil }
         var placements: [MindMapPlacement] = []
 
-        func place(_ id: Int, top: CGFloat) {
-            guard let node = nodeByID[id] else { return }
+        @discardableResult
+        func place(_ id: Int, top: CGFloat) -> CGFloat? {
+            guard let node = nodeByID[id] else { return nil }
             let children = childrenByID[id] ?? []
             let ownSize = nodeSize(node)
             let height = subtreeHeight(id)
@@ -83,9 +84,8 @@ enum MindMapSpatialLayout {
                 var childTop = top + max(0, (height - childrenHeight) / 2)
                 for child in children {
                     let childHeight = subtreeHeight(child)
-                    place(child, top: childTop)
-                    if let childPlacement = placements.first(where: { $0.id == child }) {
-                        childCenters.append(childPlacement.center.y)
+                    if let childCenterY = place(child, top: childTop) {
+                        childCenters.append(childCenterY)
                     }
                     childTop += childHeight + siblingGap
                 }
@@ -104,6 +104,7 @@ enum MindMapSpatialLayout {
                 center: CGPoint(x: centerX, y: centerY),
                 size: ownSize
             ))
+            return centerY
         }
 
         var top = margin

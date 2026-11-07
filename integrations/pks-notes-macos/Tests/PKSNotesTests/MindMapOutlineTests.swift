@@ -180,6 +180,22 @@ extension MindMapOutlineTests {
         XCTAssertGreaterThan(layout.size.width, 560)
     }
 
+    func testSpatialLayoutHandlesSixHundredSiblingsWithoutRepeatedPlacementLookup() {
+        let nodes = [MindMapNode(id: 0, depth: 0, title: "Root")]
+            + (1...600).map { MindMapNode(id: $0, depth: 1, title: "Child \($0)") }
+        let snapshot = MindMapSpatialLayout.layout(nodes)
+        XCTAssertEqual(snapshot.placements.count, 601)
+        XCTAssertEqual(snapshot.placements.first?.id, 0)
+        let leaves = Array(snapshot.placements.dropFirst())
+        XCTAssertTrue(leaves.allSatisfy { $0.parentID == 0 })
+        XCTAssertEqual(snapshot.placements[0].center.y,
+                       (leaves[0].center.y + leaves[599].center.y) / 2,
+                       accuracy: 0.001)
+        XCTAssertTrue(zip(leaves, leaves.dropFirst()).allSatisfy {
+            $1.center.y > $0.center.y + $0.size.height
+        })
+    }
+
     func testSpatialLayoutSupportsMultipleRoots() {
         let nodes = MindMapOutline.nodes(in: "# One\n- A\n# Two\n- B")
         let layout = MindMapSpatialLayout.layout(nodes)
