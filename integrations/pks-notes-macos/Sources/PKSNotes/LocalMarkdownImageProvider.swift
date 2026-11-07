@@ -16,7 +16,7 @@ struct LocalMarkdownImageProvider: ImageProvider {
         } else if let url, ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
             DefaultImageProvider.default.makeImage(url: url)
         } else {
-            Label("Attachment unavailable", systemImage: "photo.badge.exclamationmark")
+            Label(AppLanguage.current.text("Attachment unavailable"), systemImage: "photo.badge.exclamationmark")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -36,7 +36,7 @@ private struct LocalAttachmentImage: View {
                     .frame(maxWidth: 760)
                     .accessibilityLabel(file.lastPathComponent)
             } else {
-                Label("Loading or missing attachment", systemImage: "photo")
+                Label(AppLanguage.current.text("Loading or missing attachment"), systemImage: "photo")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

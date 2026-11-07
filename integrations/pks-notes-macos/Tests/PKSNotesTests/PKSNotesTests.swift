@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import SwiftUI
 import XCTest
 @testable import PKSNotes
 
@@ -16,14 +18,16 @@ final class PKSNotesTests: XCTestCase {
     func testWorkspaceTitleHidesICloudInternalFolderName() {
         XCTAssertEqual(
             NotesGeometry.workspaceTitle(
-                URL(fileURLWithPath: "/Users/reader/Library/Mobile Documents/com~apple~CloudDocs")
+                URL(fileURLWithPath: "/Users/reader/Library/Mobile Documents/com~apple~CloudDocs"),
+                language: .english
             ), "iCloud Drive"
         )
         XCTAssertEqual(
-            NotesGeometry.workspaceTitle(URL(fileURLWithPath: "/tmp/学习笔记管理")),
+            NotesGeometry.workspaceTitle(URL(fileURLWithPath: "/tmp/学习笔记管理"), language: .english),
             "学习笔记管理"
         )
-        XCTAssertEqual(NotesGeometry.workspaceTitle(nil), "PKS Library")
+        XCTAssertEqual(NotesGeometry.workspaceTitle(nil, language: .english), "PKS Library")
+        XCTAssertEqual(NotesGeometry.workspaceTitle(nil, language: .simplifiedChinese), "PKS 资料库")
     }
 
     func testBackgroundMarkdownPreviewParsingAndSearchHeadingNavigation() async {
@@ -109,7 +113,7 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(model.isDirty)
         XCTAssertEqual(model.draft, "# Local pending")
         XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "# External revision")
-        XCTAssertTrue(model.message?.contains("changed outside") == true)
+        XCTAssertTrue(model.message?.contains(AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")) == true)
     }
 
     func testTypographyThemesChangeLayoutNotOnlyBackgrounds() {
@@ -129,17 +133,73 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(profiles.allSatisfy { $0.bodySize >= 14 && $0.pageWidth >= 600 })
     }
 
+    func testReadingThemesRespectApplicationLightAndDarkAppearance() {
+        func luminance(_ color: Color, appearanceName: NSAppearance.Name) -> CGFloat {
+            guard let appearance = NSAppearance(named: appearanceName) else {
+                XCTFail("Missing appearance \(appearanceName)")
+                return 0
+            }
+            var value: CGFloat = 0
+            appearance.performAsCurrentDrawingAppearance {
+                guard let resolved = NSColor(color).usingColorSpace(.sRGB) else {
+                    XCTFail("Could not resolve theme color")
+                    return
+                }
+                value = 0.2126 * resolved.redComponent
+                    + 0.7152 * resolved.greenComponent
+                    + 0.0722 * resolved.blueComponent
+            }
+            return value
+        }
+
+        for theme in NotesTheme.allCases {
+            let lightCanvas = luminance(theme.canvas, appearanceName: .aqua)
+            let darkCanvas = luminance(theme.canvas, appearanceName: .darkAqua)
+            let lightInk = luminance(theme.ink, appearanceName: .aqua)
+            let darkInk = luminance(theme.ink, appearanceName: .darkAqua)
+
+            XCTAssertGreaterThan(lightCanvas, 0.72, "\(theme) must stay light in Light appearance")
+            XCTAssertLessThan(darkCanvas, 0.32, "\(theme) must stay dark in Dark appearance")
+            XCTAssertLessThan(lightInk, 0.48, "\(theme) must use readable dark ink in Light appearance")
+            XCTAssertGreaterThan(darkInk, 0.62, "\(theme) must use readable light ink in Dark appearance")
+        }
+    }
+
+    func testMarkdownShortcutMappingUsesOneExplicitModifierContract() {
+        XCTAssertEqual(MarkdownShortcut.command(key: "b", modifiers: .command), "bold")
+        XCTAssertEqual(MarkdownShortcut.command(key: "i", modifiers: .command), "italic")
+        XCTAssertEqual(MarkdownShortcut.command(key: "e", modifiers: .command), "code")
+        XCTAssertEqual(MarkdownShortcut.command(key: "k", modifiers: .command), "link")
+        XCTAssertEqual(MarkdownShortcut.command(key: "1", modifiers: [.command, .shift]), "h1")
+        XCTAssertEqual(MarkdownShortcut.command(key: "8", modifiers: [.command, .shift]), "bullet")
+        XCTAssertEqual(MarkdownShortcut.command(key: "9", modifiers: [.command, .shift]), "task")
+        XCTAssertNil(MarkdownShortcut.command(key: "b", modifiers: [.command, .option]))
+        XCTAssertNil(MarkdownShortcut.command(key: "x", modifiers: .command))
+    }
+
+    func testApplicationAppearanceAndLanguagePreferencesAreIndependent() {
+        XCTAssertEqual(AppAppearance.allCases.map(\.rawValue), ["system", "light", "dark"])
+        XCTAssertEqual(AppAppearance.restored("unknown"), .system)
+        XCTAssertNil(AppAppearance.system.colorScheme)
+        XCTAssertEqual(AppAppearance.light.colorScheme, .light)
+        XCTAssertEqual(AppAppearance.dark.colorScheme, .dark)
+
+        XCTAssertEqual(AppLanguage.allCases.map(\.rawValue), ["system", "zh-Hans", "en"])
+        XCTAssertEqual(AppLanguage.restored("unknown"), .system)
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Search"), "搜索")
+        XCTAssertEqual(AppLanguage.english.text("Search"), "Search")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Markdown"), "Markdown")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("On"), "开启")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Off"), "关闭")
+    }
+
     func testReadingThemeDefaultsAndParsedPreviewCacheIdentity() {
         XCTAssertEqual(NotesTheme.allCases.map(\.rawValue),
                        ["system", "paper", "warm", "midnight", "graphite"])
         XCTAssertEqual(NotesTheme.restored("nonexistent"), .system)
         XCTAssertEqual(NotesTheme.restored("warm"), .warm)
         XCTAssertEqual(NotesTheme.restored("graphite"), .graphite)
-        XCTAssertEqual(NotesTheme.graphite.appearance, .dark)
         XCTAssertEqual(NotesTheme.graphite.readingFont, .default)
-        XCTAssertEqual(NotesTheme.midnight.appearance, .dark)
-        XCTAssertEqual(NotesTheme.warm.appearance, .light)
-        XCTAssertNil(NotesTheme.system.appearance)
 
         let markdown = "# 标题\n\nSome **bold** Markdown and a [link](x.md)."
         let blocks = MarkdownPreviewParsing.prepare(markdown, match: nil)
@@ -759,7 +819,7 @@ final class PKSNotesTests: XCTestCase {
         model.save()
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "# Changed externally")
         XCTAssertTrue(model.isDirty)
-        XCTAssertTrue(model.message?.contains("changed outside") == true)
+        XCTAssertTrue(model.message?.contains(AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")) == true)
     }
 
     func testRelativeMarkdownLinkAndAttachmentResolveInsideWorkspace() throws {
@@ -811,10 +871,10 @@ final class PKSNotesTests: XCTestCase {
         let missing = FileManager.default.temporaryDirectory
             .appendingPathComponent("pks-notes-missing-\(UUID().uuidString).md")
         model.revealInFinder(missing)
-        XCTAssertEqual(model.message, "The original file is not available locally.")
+        XCTAssertEqual(model.message, AppLanguage.current.text("The original file is not available locally."))
         model.message = nil
         model.openInDefaultApp(missing)
-        XCTAssertEqual(model.message, "The original file is not available locally.")
+        XCTAssertEqual(model.message, AppLanguage.current.text("The original file is not available locally."))
     }
 
     func testPKSDocumentGroupingPreservesRankAndIndividualHits() {
@@ -895,7 +955,7 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(model.selected, latest)
         XCTAssertEqual(model.draft, "# Preserve unsaved source")
         XCTAssertEqual(try String(contentsOf: latest, encoding: .utf8), "# Latest")
-        XCTAssertTrue(model.message?.contains("Cannot open the note") == true)
+        XCTAssertTrue(model.message?.contains(AppLanguage.current.text("Cannot open the note")) == true)
     }
 
     @MainActor

@@ -90,8 +90,44 @@ extension MindMapOutline {
         // Only list items can be removed without potentially orphaning prose/sections.
         let trimmed = lines[nodeID].trimmingCharacters(in: .whitespaces)
         guard ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) else { return nil }
+        // A Markdown list item can own paragraphs, task details, or fenced code
+        // even without parsed child nodes. Do not orphan that content.
+        let nextNode = position + 1 < parsed.count ? parsed[position + 1].id : lines.count
+        guard !lines[(nodeID + 1)..<nextNode]
+            .contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        else { return nil }
         lines.remove(at: nodeID)
         return lines.joined(separator: "\n")
+    }
+
+    /// Explicit branch deletion: only a complete, list-only subtree may be
+    /// deleted. Never remove Markdown paragraphs, headings, code or attachments
+    /// as a side effect of a graph edit.
+    static func deleteListSubtree(in source: String, nodeID: Int) -> String? {
+        let parsed = nodes(in: source)
+        guard let position = parsed.firstIndex(where: { $0.id == nodeID }) else { return nil }
+        let selected = parsed[position]
+        var lines = source.components(separatedBy: "\n")
+        guard lines.indices.contains(nodeID),
+              ["- ", "* ", "+ "].contains(where: {
+                  lines[nodeID].trimmingCharacters(in: .whitespaces).hasPrefix($0)
+              }) else { return nil }
+
+        let endID = parsed.dropFirst(position + 1)
+            .first(where: { $0.depth <= selected.depth })?.id ?? lines.count
+        let knownNodeIDs = Set(parsed.map(\.id))
+        for index in nodeID..<endID {
+            let trimmed = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            guard knownNodeIDs.contains(index),
+                  ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) else {
+                return nil
+            }
+        }
+        lines.removeSubrange(nodeID..<endID)
+        var result = lines.joined(separator: "\n")
+        if source.hasSuffix("\n") && !result.hasSuffix("\n") { result += "\n" }
+        return result
     }
 
     static func addChild(in source: String, parentID: Int, title: String = "New idea") -> String? {
@@ -100,6 +136,12 @@ extension MindMapOutline {
         let line = lines[parentID]
         let indent = line.prefix(while: { $0 == " " }).count
         let isList = ["- ", "* ", "+ "].contains(where: { line.trimmingCharacters(in: .whitespaces).hasPrefix($0) })
+        // Inserting ahead of attached prose would accidentally make that prose
+        // part of the newly created child instead of the original parent.
+        let nextParsedID = nodes(in: source).first(where: { $0.id > parentID })?.id ?? lines.count
+        guard !lines[(parentID + 1)..<nextParsedID]
+            .contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        else { return nil }
         lines.insert(String(repeating: " ", count: indent + (isList ? 2 : 0)) + "- " + title, at: parentID + 1)
         return lines.joined(separator: "\n")
     }

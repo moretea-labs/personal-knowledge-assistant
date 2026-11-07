@@ -4,18 +4,22 @@ import UniformTypeIdentifiers
 
 /// An editable Markdown-backed mind-map canvas. Markdown remains the only document authority.
 struct MindMapCanvas: View {
+    @Environment(\.notesLanguage) private var language
     @Binding var source: String
     let openLink: (String) -> Void
     let importOutline: (String, String) -> Bool
     @State private var selectedID: Int?
     @State private var renameTitle = ""
-    @State private var renaming = false
+    @State private var editingNodeID: Int?
+    @State private var editingCreatedNodeID: Int?
     @State private var interchangeError: String?
+    @State private var branchDeleteCandidateID: Int?
     @State private var collapsed: Set<Int> = []
     @State private var zoom: CGFloat = 1.0
     @State private var dropTargetID: Int?
     @State private var gestureBaseZoom: CGFloat?
     @FocusState private var canvasFocused: Bool
+    @FocusState private var titleEditorFocused: Bool
 
     private var nodes: [MindMapNode] { MindMapOutline.nodes(in: source) }
 
@@ -46,14 +50,13 @@ struct MindMapCanvas: View {
                             Image(systemName: "point.3.connected.trianglepath.dotted")
                                 .font(.system(size: 36, weight: .ultraLight))
                                 .foregroundStyle(.secondary)
-                            Text("Start with a central topic")
+                            Text(language.text("Start with a central topic"))
                                 .font(.headline)
-                            Text("The mind map is saved in the same Markdown note.")
+                            Text(language.text("The mind map is saved in the same Markdown note."))
                                 .foregroundStyle(.secondary)
-                            Button("Create Mind Map") {
+                            Button(language.text("Create Mind Map")) {
                                 source = MindMapOutline.createMap()
-                                selectedID = 0
-                                canvasFocused = true
+                                startEditingNode(0, title: "New Mind Map")
                             }
                             .buttonStyle(.borderedProminent)
                             .accessibilityIdentifier("pks-mind-map-create")
@@ -84,43 +87,67 @@ struct MindMapCanvas: View {
                 }
             }
         }
-        .alert("Rename Node", isPresented: $renaming) {
-            TextField("Title", text: $renameTitle)
-            Button("Save") {
-                if let id = selectedID,
-                   let updated = MindMapOutline.rename(in: source, nodeID: id, to: renameTitle) {
+        .confirmationDialog(
+            language.text("Delete selected branch?"),
+            isPresented: Binding(
+                get: { branchDeleteCandidateID != nil },
+                set: { if !$0 { branchDeleteCandidateID = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(language.text("Delete Branch"), role: .destructive) {
+                if let id = branchDeleteCandidateID,
+                   let updated = MindMapOutline.deleteListSubtree(in: source, nodeID: id) {
                     source = updated
+                    selectedID = nil
+                    collapsed.removeAll()
                 }
+                branchDeleteCandidateID = nil
             }
-            Button("Cancel", role: .cancel) {}
+            Button(language.text("Cancel"), role: .cancel) { branchDeleteCandidateID = nil }
+        } message: {
+            Text(language.text("The selected list branch and its child nodes will be removed from this note."))
         }
-        .alert("Mind Map Import/Export", isPresented: Binding(
+        .alert(language.text("Mind Map Import/Export"), isPresented: Binding(
             get: { interchangeError != nil },
             set: { if !$0 { interchangeError = nil } }
         )) {
-            Button("OK", role: .cancel) { interchangeError = nil }
+            Button(language.text("OK"), role: .cancel) { interchangeError = nil }
         } message: {
             Text(interchangeError ?? "")
         }
         .focusable()
         .focused($canvasFocused)
+        .onAppear {
+            Task { @MainActor in
+                await Task.yield()
+                if editingNodeID == nil {
+                    canvasFocused = true
+                }
+            }
+        }
         .onKeyPress(.downArrow) {
+            guard editingNodeID == nil else { return .ignored }
             moveSelection(by: 1)
             return .handled
         }
         .onKeyPress(.upArrow) {
+            guard editingNodeID == nil else { return .ignored }
             moveSelection(by: -1)
             return .handled
         }
         .onKeyPress(.tab) {
+            guard editingNodeID == nil else { return .ignored }
             addChild()
             return .handled
         }
         .onKeyPress(.return) {
+            guard editingNodeID == nil else { return .ignored }
             addSibling()
             return .handled
         }
         .onKeyPress(.delete) {
+            guard editingNodeID == nil else { return .ignored }
             deleteSelectedLeaf()
             return .handled
         }
@@ -129,19 +156,19 @@ struct MindMapCanvas: View {
 
     private var toolbar: some View {
         HStack {
-            Text("Mind Map").font(.headline)
+            Text(language.text("Mind Map")).font(.headline)
             Spacer()
-            Button("Add Child", systemImage: "plus") { addChild() }
+            Button(language.text("Add Child"), systemImage: "plus") { addChild() }
                 .disabled(nodes.isEmpty)
-                .help("Add child (Tab)")
+                .help(language.text("Add child (Tab)"))
                 .accessibilityIdentifier("pks-mind-map-add-child")
 
-            Button("Add Sibling", systemImage: "plus.square.on.square") { addSibling() }
+            Button(language.text("Add Sibling"), systemImage: "plus.square.on.square") { addSibling() }
                 .disabled(nodes.isEmpty)
-                .help("Add sibling (Return)")
+                .help(language.text("Add sibling (Return)"))
                 .accessibilityIdentifier("pks-mind-map-add-sibling")
 
-            Button("Rename", systemImage: "pencil") { beginRename() }
+            Button(language.text("Rename"), systemImage: "pencil") { beginRename() }
                 .disabled(selectedID == nil)
 
             Button {
@@ -149,7 +176,7 @@ struct MindMapCanvas: View {
             } label: {
                 Image(systemName: "arrow.left")
             }
-            .help("Promote node")
+            .help(language.text("Promote node"))
             .disabled(selectedID == nil || shiftedSource(deeper: false) == nil)
 
             Button {
@@ -157,10 +184,10 @@ struct MindMapCanvas: View {
             } label: {
                 Image(systemName: "arrow.right")
             }
-            .help("Make child of previous sibling")
+            .help(language.text("Make child of previous sibling"))
             .disabled(selectedID == nil || shiftedSource(deeper: true) == nil)
 
-            Button("Delete Leaf", systemImage: "trash") { deleteSelectedLeaf() }
+            Button(language.text("Delete Leaf"), systemImage: "trash") { deleteSelectedLeaf() }
             .disabled(selectedID == nil || MindMapOutline.deleteLeaf(in: source, nodeID: selectedID ?? -1) == nil)
 
             Divider().frame(height: 18)
@@ -170,43 +197,43 @@ struct MindMapCanvas: View {
             } label: {
                 Image(systemName: "arrow.down.right.and.arrow.up.left")
             }
-            .help("Fit map to window")
+            .help(language.text("Fit map to window"))
 
             Button { zoom = clampedZoom(zoom - 0.15) } label: {
                 Image(systemName: "minus.magnifyingglass")
             }
-            .help("Zoom out")
-            Text("(Int(zoom * 100))%")
+            .help(language.text("Zoom out"))
+            Text("\(Int((zoom * 100).rounded()))%")
                 .font(.caption.monospacedDigit())
                 .frame(width: 45)
             Button { zoom = clampedZoom(zoom + 0.15) } label: {
                 Image(systemName: "plus.magnifyingglass")
             }
-            .help("Zoom in")
+            .help(language.text("Zoom in"))
 
             Menu {
-                Button("Import MindNode v9 Package…") { importMindNode() }
-                Button("Export MindNode v9 Using Template…") { exportMindNode() }
+                Button(language.text("Import MindNode Package…")) { importMindNode() }
+                Button(language.text("Export MindNode Using Template…")) { exportMindNode() }
                     .disabled(nodes.isEmpty)
-                Button("Import OPML from MindNode…") { importOPML() }
-                Button("Export OPML for MindNode…") { exportOPML() }
+                Button(language.text("Import OPML from MindNode…")) { importOPML() }
+                Button(language.text("Export OPML for MindNode…")) { exportOPML() }
                     .disabled(nodes.isEmpty)
                 Divider()
-                Button("Export PNG Image…") { exportPNG() }
+                Button(language.text("Export PNG Image…")) { exportPNG() }
                     .disabled(nodes.isEmpty)
-                Button("Export PDF…") { exportPDF() }
+                Button(language.text("Export PDF…")) { exportPDF() }
                     .disabled(nodes.isEmpty)
             } label: {
                 Image(systemName: "square.and.arrow.up.on.square")
             }
-            .help("MindNode v9 package interchange, OPML, PNG and PDF export")
+            .help(language.text("MindNode package interchange, OPML, PNG and PDF export"))
             .accessibilityIdentifier("pks-mind-map-interchange")
         }
         .padding(16)
     }
 
     @ViewBuilder
-    private func spatialCanvas(_ layout: MindMapLayoutSnapshot) -> some View {
+    private func spatialCanvas(_ layout: MindMapLayoutSnapshot, exporting: Bool = false) -> some View {
         let byID = Dictionary(uniqueKeysWithValues: layout.placements.map { ($0.id, $0) })
         // Build once per rendered map. Never reparse the full Markdown for each card.
         let allNodes = nodes
@@ -221,7 +248,7 @@ struct MindMapCanvas: View {
             }
 
             ForEach(layout.placements) { placement in
-                nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id))
+                nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id), exporting: exporting)
                     .frame(width: placement.size.width, height: placement.size.height)
                     .position(placement.center)
             }
@@ -252,26 +279,71 @@ struct MindMapCanvas: View {
     }
 
     @ViewBuilder
-    private func nodeCard(_ node: MindMapNode, hasChildren: Bool) -> some View {
+    private func nodeCard(_ node: MindMapNode, hasChildren: Bool, exporting: Bool = false) -> some View {
         HStack(spacing: 9) {
             if hasChildren {
-                Button {
-                    if !collapsed.insert(node.id).inserted { collapsed.remove(node.id) }
-                } label: {
-                    Image(systemName: collapsed.contains(node.id) ? "chevron.right" : "chevron.down")
+                if exporting {
+                    Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .semibold))
+                } else {
+                    Button {
+                        if !collapsed.insert(node.id).inserted { collapsed.remove(node.id) }
+                    } label: {
+                        Image(systemName: collapsed.contains(node.id) ? "chevron.right" : "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             } else {
                 Color.clear.frame(width: 10, height: 10)
             }
 
-            Text(node.title)
-                .font(.system(size: node.depth == 0 ? 16 : 14, weight: node.depth == 0 ? .semibold : .medium))
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if !exporting && editingNodeID == node.id {
+                TextField(language.text("Node title"), text: $renameTitle)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: node.depth == 0 ? 16 : 14, weight: .medium))
+                    .focused($titleEditorFocused)
+                    .onSubmit { finishRename(save: true) }
+                    .onExitCommand { finishRename(save: false) }
+                    .onKeyPress(.escape) {
+                        finishRename(save: false)
+                        return .handled
+                    }
+                    .accessibilityIdentifier("pks-mind-map-inline-title")
+                    .onAppear {
+                        Task { @MainActor in
+                            await Task.yield()
+                            titleEditorFocused = true
+                        }
+                    }
+                Button {
+                    finishRename(save: true)
+                } label: {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .help(language.text("Save"))
+                .accessibilityIdentifier("pks-mind-map-inline-save")
+                Button {
+                    finishRename(save: false)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(language.text("Cancel"))
+                .accessibilityIdentifier("pks-mind-map-inline-cancel")
+            } else {
+                Text(node.title)
+                    .font(.system(size: node.depth == 0 ? 16 : 14,
+                                  weight: node.depth == 0 ? .semibold : .medium))
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
 
-            if let link = MindMapOutline.links(in: node.title).first {
+            if !exporting, let link = MindMapOutline.links(in: node.title).first {
                 Button {
                     openLink(link.target)
                 } label: {
@@ -280,13 +352,13 @@ struct MindMapCanvas: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Open (link.label)")
-                .accessibilityLabel("Open linked note (link.label)")
+                .help("\(language.text("Open linked note")) · \(link.label)")
+                .accessibilityLabel("\(language.text("Open linked note")) \(link.label)")
             }
         }
         .padding(.horizontal, 13)
         .background(
-            selectedID == node.id
+            !exporting && selectedID == node.id
                 ? Color.accentColor.opacity(0.16)
                 : (node.depth == 0 ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor)),
             in: RoundedRectangle(cornerRadius: node.depth == 0 ? 14 : 11)
@@ -294,12 +366,12 @@ struct MindMapCanvas: View {
         .overlay {
             RoundedRectangle(cornerRadius: node.depth == 0 ? 14 : 11)
                 .strokeBorder(
-                    dropTargetID == node.id
+                    !exporting && dropTargetID == node.id
                         ? Color.accentColor
-                        : (selectedID == node.id ? Color.accentColor.opacity(0.60) : Color.primary.opacity(0.08)),
+                        : (!exporting && selectedID == node.id ? Color.accentColor.opacity(0.60) : Color.primary.opacity(0.08)),
                     style: StrokeStyle(
-                        lineWidth: dropTargetID == node.id ? 2 : 1,
-                        dash: dropTargetID == node.id ? [5, 3] : []
+                        lineWidth: !exporting && dropTargetID == node.id ? 2 : 1,
+                        dash: !exporting && dropTargetID == node.id ? [5, 3] : []
                     )
                 )
                 .allowsHitTesting(false)
@@ -321,13 +393,27 @@ struct MindMapCanvas: View {
         } isTargeted: { targeted in
             dropTargetID = targeted ? node.id : nil
         }
+        .contextMenu {
+            Button(language.text("Rename node"), systemImage: "pencil") {
+                if editingNodeID != nil { finishRename(save: true) }
+                selectedID = node.id
+                beginRename()
+            }
+            Button(language.text("Delete Branch"), systemImage: "trash", role: .destructive) {
+                branchDeleteCandidateID = node.id
+            }
+            .disabled(MindMapOutline.deleteListSubtree(in: source, nodeID: node.id) == nil)
+        }
         .onTapGesture {
+            guard editingNodeID != node.id else { return }
+            if editingNodeID != nil { finishRename(save: true) }
             selectedID = node.id
             canvasFocused = true
         }
         .onTapGesture(count: 2) {
+            guard editingNodeID != node.id else { return }
+            if editingNodeID != nil { finishRename(save: true) }
             selectedID = node.id
-            canvasFocused = true
             beginRename()
         }
     }
@@ -336,9 +422,8 @@ struct MindMapCanvas: View {
         guard let id = selectedID ?? nodes.first?.id,
               let updated = MindMapOutline.addChild(in: source, parentID: id) else { return }
         source = updated
-        selectedID = id + 1
         collapsed.removeAll()
-        canvasFocused = true
+        startEditingNode(id + 1, title: "New idea", created: true)
     }
 
     private func addSibling() {
@@ -353,9 +438,8 @@ struct MindMapCanvas: View {
             .trimmingCharacters(in: .whitespaces)
         let isList = ["- ", "* ", "+ "].contains(where: { trimmedLine.hasPrefix($0) })
         source = updated
-        selectedID = isList ? siblingLine : id + 1
         collapsed.removeAll()
-        canvasFocused = true
+        startEditingNode(isList ? siblingLine : id + 1, title: "New idea", created: true)
     }
 
     private func deleteSelectedLeaf() {
@@ -367,22 +451,22 @@ struct MindMapCanvas: View {
 
     private func exportMindNode() {
         let sourcePanel = NSOpenPanel()
-        sourcePanel.title = "Choose a MindNode v9 Template"
-        sourcePanel.message = "A real MindNode v9 document is needed to preserve native package structure. The template will remain unchanged."
+        sourcePanel.title = language.text("Choose a MindNode Template")
+        sourcePanel.message = language.text("A real MindNode document is needed to preserve native package structure. Verified package versions 7 and 9 are supported; the template remains unchanged.")
         sourcePanel.canChooseDirectories = true
         sourcePanel.canChooseFiles = true
         sourcePanel.allowsMultipleSelection = false
         guard sourcePanel.runModal() == .OK, let template = sourcePanel.url else { return }
 
         let savePanel = NSSavePanel()
-        savePanel.title = "Export Native MindNode v9"
+        savePanel.title = language.text("Export Native MindNode")
         savePanel.directoryURL = template.deletingLastPathComponent()
         savePanel.nameFieldStringValue = "Mind Map.mindnode"
         savePanel.allowedContentTypes = [UTType(filenameExtension: "mindnode", conformingTo: .package) ?? .package]
         guard savePanel.runModal() == .OK, let destination = savePanel.url else { return }
         do {
             try MindNodePackage.exportOutline(source, usingTemplate: template, to: destination)
-            interchangeError = "New MindNode v9 package exported. Check it in MindNode before relying on it; original template and Markdown were not changed."
+            interchangeError = language.text("New MindNode package exported. The original template and Markdown were not changed.")
         } catch {
             interchangeError = error.localizedDescription
         }
@@ -390,8 +474,8 @@ struct MindMapCanvas: View {
 
     private func importMindNode() {
         let panel = NSOpenPanel()
-        panel.title = "Import MindNode Package"
-        panel.message = "Select a .mindnode package. Only the node hierarchy is imported; original files are not modified."
+        panel.title = language.text("Import MindNode Package")
+        panel.message = language.text("Select a .mindnode package. Only the node hierarchy is imported; original files are not modified.")
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = false
@@ -399,7 +483,7 @@ struct MindMapCanvas: View {
         do {
             let markdown = try MindNodePackage.importOutline(from: url)
             if importOutline(markdown, url.deletingPathExtension().lastPathComponent) {
-                interchangeError = "MindNode hierarchy imported into a new Markdown note. Themes, images, notes, tasks and cross-connections are not imported."
+                interchangeError = language.text("MindNode hierarchy imported into a new Markdown note. Themes, images, notes, tasks and cross-connections are not imported.")
             }
         } catch {
             interchangeError = error.localizedDescription
@@ -408,7 +492,7 @@ struct MindMapCanvas: View {
 
     private func importOPML() {
         let panel = NSOpenPanel()
-        panel.title = "Import Mind Map from OPML"
+        panel.title = language.text("Import Mind Map from OPML")
         panel.allowedContentTypes = [UTType(filenameExtension: "opml") ?? .xml]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -424,7 +508,7 @@ struct MindMapCanvas: View {
         do {
             let data = try MindMapInterchange.exportOPML(source)
             let panel = NSSavePanel()
-            panel.title = "Export for MindNode (OPML)"
+            panel.title = language.text("Export for MindNode (OPML)")
             panel.allowedContentTypes = [UTType(filenameExtension: "opml") ?? .xml]
             panel.nameFieldStringValue = "Mind Map.opml"
             guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -438,12 +522,14 @@ struct MindMapCanvas: View {
     /// Rendering uses the existing spatial layout and never modifies the source.
     private func exportPNG() {
         guard !nodes.isEmpty else { return }
-        let size = mapLayout.size
+        // Export the complete Markdown outline, independent of the user's collapsed viewport.
+        let layout = MindMapSpatialLayout.layout(nodes)
+        let size = layout.size
         guard size.width * size.height <= 20_000_000 else {
-            interchangeError = "This map is too large for a single PNG. Try PDF."
+            interchangeError = language.text("This map is too large for a single PNG. Try PDF.")
             return
         }
-        let content = spatialCanvas(mapLayout)
+        let content = spatialCanvas(layout, exporting: true)
             .background(Color.white)
             .environment(\.colorScheme, .light)
         let renderer = ImageRenderer(content: content)
@@ -452,7 +538,7 @@ struct MindMapCanvas: View {
               let tiff = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiff),
               let data = bitmap.representation(using: .png, properties: [:]) else {
-            interchangeError = "Cannot render this mind map as an image."
+            interchangeError = language.text("Cannot render this mind map as an image.")
             return
         }
         saveExport(data, type: .png, extensionName: "png")
@@ -460,8 +546,9 @@ struct MindMapCanvas: View {
 
     private func exportPDF() {
         guard !nodes.isEmpty else { return }
-        let size = mapLayout.size
-        let content = spatialCanvas(mapLayout)
+        let layout = MindMapSpatialLayout.layout(nodes)
+        let size = layout.size
+        let content = spatialCanvas(layout, exporting: true)
             .background(Color.white)
             .environment(\.colorScheme, .light)
             .frame(width: size.width, height: size.height)
@@ -470,7 +557,7 @@ struct MindMapCanvas: View {
         view.layoutSubtreeIfNeeded()
         let data = view.dataWithPDF(inside: view.bounds)
         guard !data.isEmpty else {
-            interchangeError = "Cannot render this mind map as a PDF."
+            interchangeError = language.text("Cannot render this mind map as a PDF.")
             return
         }
         saveExport(data, type: .pdf, extensionName: "pdf")
@@ -478,7 +565,7 @@ struct MindMapCanvas: View {
 
     private func saveExport(_ data: Data, type: UTType, extensionName: String) {
         let panel = NSSavePanel()
-        panel.title = "Export Mind Map"
+        panel.title = language.text("Export Mind Map")
         panel.allowedContentTypes = [type]
         panel.nameFieldStringValue = "Mind Map.\(extensionName)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -514,8 +601,42 @@ struct MindMapCanvas: View {
 
     private func beginRename() {
         guard let node = nodes.first(where: { $0.id == selectedID }) else { return }
-        renameTitle = node.title
-        renaming = true
+        startEditingNode(node.id, title: node.title)
+    }
+
+    private func startEditingNode(_ id: Int, title: String, created: Bool = false) {
+        selectedID = id
+        renameTitle = title
+        editingNodeID = id
+        editingCreatedNodeID = created ? id : nil
+        canvasFocused = false
+        titleEditorFocused = false
+    }
+
+    private func finishRename(save: Bool) {
+        guard let id = editingNodeID else { return }
+        if save {
+            // Invalid titles stay in the inline editor instead of silently
+            // committing the placeholder/original text.
+            guard let updated = MindMapOutline.rename(in: source, nodeID: id, to: renameTitle) else {
+                return
+            }
+            source = updated
+        } else if editingCreatedNodeID == id,
+                  let updated = MindMapOutline.deleteLeaf(in: source, nodeID: id) {
+            // Add Child/Sibling inserts a safe leaf before inline naming. Cancel
+            // must restore the original Markdown rather than keep "New idea".
+            source = updated
+            selectedID = nodes.first?.id
+        }
+        editingNodeID = nil
+        editingCreatedNodeID = nil
+        titleEditorFocused = false
+        canvasFocused = false
+        Task { @MainActor in
+            await Task.yield()
+            canvasFocused = true
+        }
     }
 
     private func shiftedSource(deeper: Bool) -> String? {

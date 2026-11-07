@@ -74,7 +74,7 @@ final class ProPurchases: ObservableObject {
             case .pending:
                 message = "Purchase pending approval. Pro will unlock after verification."
             case .userCancelled:
-                break
+                message = "Purchase cancelled."
             @unknown default:
                 message = "Unexpected App Store purchase result."
             }
@@ -100,19 +100,20 @@ final class ProPurchases: ObservableObject {
 
 struct ProSettingsView: View {
     @EnvironmentObject private var purchases: ProPurchases
+    @Environment(\.notesLanguage) private var language
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("PKS Notes Pro", systemImage: "point.3.connected.trianglepath.dotted")
+            Label(language.text("PKS Notes Pro"), systemImage: "point.3.connected.trianglepath.dotted")
                 .font(.title2.weight(.semibold))
-            Text("Your Markdown and PDF files always remain yours. No PKS account, subscription or server.")
+            Text(language.text("Your Markdown and PDF files always remain yours. No PKS account, subscription or server."))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Divider()
-            Label("Editable mind maps and MindNode interchange", systemImage: "checkmark.circle")
-            Label("Backlinks and related knowledge", systemImage: "checkmark.circle")
+            Label(language.text("Editable mind maps and MindNode interchange"), systemImage: "checkmark.circle")
+            Label(language.text("Backlinks and related knowledge"), systemImage: "checkmark.circle")
             if purchases.unlocked {
-                Label("Pro unlocked", systemImage: "checkmark.seal.fill")
+                Label(language.text("Pro unlocked"), systemImage: "checkmark.seal.fill")
                     .foregroundStyle(.green).font(.headline)
             } else {
                 Button {
@@ -120,8 +121,10 @@ struct ProSettingsView: View {
                 } label: {
                     if purchases.busy {
                         ProgressView().controlSize(.small)
+                    } else if let product = purchases.product {
+                        Text("\(language.text("Unlock Pro")) · \(product.displayPrice)")
                     } else {
-                        Text(purchases.product.map { "Unlock Pro · \($0.displayPrice)" } ?? "Pro not currently available")
+                        Text(language.text("Pro not currently available"))
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -129,14 +132,14 @@ struct ProSettingsView: View {
                 .accessibilityIdentifier("pks-purchase-pro")
             }
             if purchases.product == nil && !purchases.unlocked {
-                Button("Retry Loading Pro") { Task { await purchases.loadProduct() } }
+                Button(language.text("Retry Loading Pro")) { Task { await purchases.loadProduct() } }
                     .disabled(purchases.busy)
             }
-            Button("Restore Purchases") { Task { await purchases.restore() } }
+            Button(language.text("Restore Purchases")) { Task { await purchases.restore() } }
                 .disabled(purchases.busy)
                 .accessibilityIdentifier("pks-restore-purchases")
             if let message = purchases.message {
-                Text(message).font(.callout).foregroundStyle(.secondary)
+                Text(language.text(message)).font(.callout).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }

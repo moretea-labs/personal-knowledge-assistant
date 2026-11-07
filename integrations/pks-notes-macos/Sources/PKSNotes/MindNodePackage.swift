@@ -1,7 +1,8 @@
 import Foundation
 
-/// Read-only, version-bounded importer for MindNode Classic v9 packages.
-/// Schema reference: masamitsu-konya/mindnode-mcp (MIT), document.py.
+/// Read-only, version-bounded importer for MindNode binary-plist packages.
+/// Real documents from the current MindNode 2026.7.1 library use schema
+/// version 9; older library documents use the compatible version 7 tree.
 /// Never write to the input package: Markdown remains PKS Notes' only writer.
 enum MindNodePackage {
     enum Failure: LocalizedError {
@@ -13,7 +14,7 @@ enum MindNodePackage {
 
         var errorDescription: String? {
             switch self {
-            case .unsupported: "Only MindNode v9 package documents are supported in this importer."
+            case .unsupported: "Only verified MindNode package versions 7 and 9 are supported in this importer."
             case .malformed: "This is not a valid MindNode package with a readable node tree."
             case .tooLarge: "The MindNode node data is too large (maximum 12 MB)."
             case .notOutline: "Native MindNode export requires one root and only Markdown heading/list nodes. Use OPML to exchange a larger note."
@@ -23,7 +24,7 @@ enum MindNodePackage {
     }
 
     static func importOutline(from url: URL) throws -> String {
-        let document = try readV9Package(from: url)
+        let document = try readSupportedPackage(from: url)
         guard let canvas = document["canvas"] as? [String: Any],
               let maps = canvas["mindMaps"] as? [[String: Any]],
               !maps.isEmpty else { throw Failure.malformed }
@@ -32,21 +33,17 @@ enum MindNodePackage {
             guard let node = map["mainNode"] as? [String: Any] else { throw Failure.malformed }
             return node
         }
-        var lines: [String] = roots.count == 1 ? [] : ["# Mind Maps"]
+
+        struct ImportedTopic {
+            let title: String
+            let children: [ImportedTopic]
+        }
+
         var seen = 0
-        func traverse(_ node: [String: Any], depth: Int) throws {
+        func visibleTopics(_ node: [String: Any], depth: Int) throws -> [ImportedTopic] {
             seen += 1
             guard seen <= 10_000, depth < 64 else { throw Failure.tooLarge }
-            let html = (node["title"] as? [String: Any])?["text"] as? String
-            guard let html, !html.isEmpty else { throw Failure.malformed }
-            let title = plainTitle(html)
-            guard !title.isEmpty, title.count <= 10_000 else { throw Failure.malformed }
-            if depth == 0 && roots.count == 1 {
-                lines.append("# " + title)
-            } else {
-                let listDepth = roots.count == 1 ? depth - 1 : depth
-                lines.append(String(repeating: "  ", count: max(0, listDepth)) + "- " + title)
-            }
+
             let children: [[String: Any]]
             if let value = node["subnodes"] {
                 guard let nested = value as? [[String: Any]] else { throw Failure.malformed }
@@ -54,13 +51,46 @@ enum MindNodePackage {
             } else {
                 children = []
             }
-            for child in children { try traverse(child, depth: depth + 1) }
+            let visibleChildren = try children.flatMap { try visibleTopics($0, depth: depth + 1) }
+
+            if let titleValue = node["title"] {
+                guard let titleDictionary = titleValue as? [String: Any],
+                      let html = titleDictionary["text"] as? String else { throw Failure.malformed }
+                let title = plainTitle(html)
+                if !title.isEmpty {
+                    guard title.count <= 10_000 else { throw Failure.malformed }
+                    return [ImportedTopic(title: title, children: visibleChildren)]
+                }
+            }
+
+            // MindNode permits untitled layout/grouping nodes. They carry no
+            // Markdown content, so promote visible descendants rather than
+            // inventing placeholder text or rejecting a valid historical map.
+            return visibleChildren
         }
-        for node in roots { try traverse(node, depth: 0) }
+
+        let topics = try roots.flatMap { try visibleTopics($0, depth: 0) }
+        guard !topics.isEmpty else { throw Failure.malformed }
+
+        var lines: [String] = []
+        func emitChildren(_ children: [ImportedTopic], depth: Int) {
+            for child in children {
+                lines.append(String(repeating: "  ", count: depth) + "- " + child.title)
+                emitChildren(child.children, depth: depth + 1)
+            }
+        }
+
+        if roots.count == 1, topics.count == 1 {
+            lines.append("# " + topics[0].title)
+            emitChildren(topics[0].children, depth: 0)
+        } else {
+            lines.append("# Mind Maps")
+            emitChildren(topics, depth: 0)
+        }
         return lines.joined(separator: "\n") + "\n"
     }
 
-    private static func readV9Package(from url: URL) throws -> [String: Any] {
+    private static func readSupportedPackage(from url: URL) throws -> [String: Any] {
         guard url.pathExtension.lowercased() == "mindnode" else { throw Failure.unsupported }
         let package = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard package.isDirectory == true, package.isSymbolicLink != true else { throw Failure.malformed }
@@ -74,17 +104,19 @@ enum MindNodePackage {
         guard let document = try PropertyListSerialization.propertyList(
             from: data, options: [], format: &format
         ) as? [String: Any] else { throw Failure.malformed }
-        guard format == .binary, document["version"] as? Int == 9 else { throw Failure.unsupported }
+        guard format == .binary,
+              let version = document["version"] as? Int,
+              [7, 9].contains(version) else { throw Failure.unsupported }
         return document
     }
 
-    /// Create a new native v9 package by cloning a user-selected compatible template.
+    /// Create a new native package by cloning a user-selected compatible template.
     /// This is intentionally template-based: MindNode has undocumented required plist
     /// fields, print settings and package files. Never synthesize a fake native package.
     /// Unknown template metadata and style survive; old nodes/resources are replaced.
     static func exportOutline(_ markdown: String, usingTemplate template: URL, to destination: URL) throws {
         let topic = try exportTopic(markdown)
-        let original = try readV9Package(from: template)
+        let original = try readSupportedPackage(from: template)
         guard var canvas = original["canvas"] as? [String: Any],
               let maps = canvas["mindMaps"] as? [[String: Any]],
               let first = maps.first,
@@ -139,20 +171,30 @@ enum MindNodePackage {
             if info.isDirectory != true { totalSize += info.fileSize ?? 0 }
             guard totalSize <= 96 * 1024 * 1024 else { throw Failure.tooLarge }
         }
-        do {
-            try fileManager.copyItem(at: template, to: destination)
-            try bytes.write(to: destination.appendingPathComponent("contents.xml"), options: .atomic)
-            let oldPreview = destination.appendingPathComponent("QuickLook/Preview.jpg")
-            if fileManager.fileExists(atPath: oldPreview.path) {
-                try fileManager.removeItem(at: oldPreview)
+        // Stage the complete package beside the destination. On an export
+        // collision or write failure, remove ONLY our random staging directory.
+        // Never delete a destination another app may have created concurrently.
+        let staging = destination.deletingLastPathComponent()
+            .appendingPathComponent(".pks-notes-\(UUID().uuidString).mindnode", isDirectory: true)
+        defer {
+            if fileManager.fileExists(atPath: staging.path) {
+                try? fileManager.removeItem(at: staging)
             }
-        } catch {
-            // A partially copied package must never be mistaken for a finished map.
-            if fileManager.fileExists(atPath: destination.path) {
-                try? fileManager.removeItem(at: destination)
-            }
-            throw error
         }
+        try fileManager.copyItem(at: template, to: staging)
+        try bytes.write(to: staging.appendingPathComponent("contents.xml"), options: .atomic)
+        // The new outline contains no attachments; carrying forward the
+        // template's private images and stale preview would leak unrelated data.
+        for folder in ["resources", "QuickLook"] {
+            let oldData = staging.appendingPathComponent(folder, isDirectory: true)
+            if fileManager.fileExists(atPath: oldData.path) {
+                try fileManager.removeItem(at: oldData)
+            }
+        }
+        guard !fileManager.fileExists(atPath: destination.path) else {
+            throw Failure.destinationExists
+        }
+        try fileManager.moveItem(at: staging, to: destination)
     }
 
     private struct ExportTopic {
@@ -167,6 +209,12 @@ enum MindNodePackage {
             throw Failure.notOutline
         }
         let topicLines = Set(topics.map(\.id))
+        // Do not silently downgrade Markdown tasks, linked notes, or images
+        // into plain textual node titles. OPML remains the interchange option.
+        let richTitlePattern = #"(?:!\[[^\]]*\]\([^)]+\)|\[\[[^\]]+\]\]|\[[^\]]+\]\([^)]+\)|^\[[ xX]\](?:\s|$))"#
+        guard topics.allSatisfy({ topic in
+            topic.title.range(of: richTitlePattern, options: .regularExpression) == nil
+        }) else { throw Failure.notOutline }
         // Native export is intentionally strict: never silently drop prose,
         // tasks, images, fenced code, or other content from a user document.
         for (index, line) in lines.enumerated() {

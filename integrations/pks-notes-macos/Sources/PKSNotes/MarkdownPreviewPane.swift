@@ -40,6 +40,7 @@ struct MarkdownPreviewSnapshot {
 /// Native preview uses a window-owned parsed snapshot, independent of view lifetime.
 struct MarkdownPreviewPane: View {
     @EnvironmentObject private var model: NotesModel
+    @Environment(\.notesLanguage) private var language
     let source: String
     let live: Bool
     let identity: String
@@ -69,7 +70,7 @@ struct MarkdownPreviewPane: View {
         ScrollViewReader { scroll in
             ScrollView {
                 if rendered.isEmpty {
-                    ProgressView("Preparing Markdown preview…")
+                    ProgressView(language.text("Preparing Markdown preview…"))
                         .frame(maxWidth: .infinity, minHeight: 180)
                 } else {
                     LazyVStack(alignment: .leading, spacing: 4) {
@@ -83,7 +84,7 @@ struct MarkdownPreviewPane: View {
                                 .environment(\.openURL, OpenURLAction { url in
                                     if url.scheme == nil || url.isFileURL {
                                         if !model.openInternalLink(url) {
-                                            model.message = "Link target not available in this workspace."
+                                            model.message = language.text("Link target not available in this workspace.")
                                         }
                                         return .handled
                                     }

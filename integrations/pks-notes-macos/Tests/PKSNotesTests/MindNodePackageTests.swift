@@ -39,6 +39,30 @@ final class MindNodePackageTests: XCTestCase {
                              as? [String: Any])?["version"] as? Int, 9)
     }
 
+    func testImportsVerifiedVersion7PackageTree() throws {
+        let (base, package) = try fixture(version: 7)
+        defer { try? FileManager.default.removeItem(at: base) }
+        XCTAssertEqual(try MindNodePackage.importOutline(from: package),
+                       "# Project & Roadmap\n- Feature <A>\n  - Grandchild\n")
+    }
+
+    func testUntitledStructuralNodesPromoteVisibleDescendants() throws {
+        let structural: [String: Any] = [
+            "subnodes": [
+                [
+                    "subnodes": [
+                        ["title": ["text": "<p>First visible topic</p>"], "subnodes": []],
+                        ["title": ["text": "<p>Second visible topic</p>"], "subnodes": []]
+                    ]
+                ]
+            ]
+        ]
+        let (base, package) = try fixture(node: structural)
+        defer { try? FileManager.default.removeItem(at: base) }
+        XCTAssertEqual(try MindNodePackage.importOutline(from: package),
+                       "# Mind Maps\n- First visible topic\n- Second visible topic\n")
+    }
+
     func testRejectsUnsupportedVersionAndMalformedNodeTree() throws {
         let (oldBase, old) = try fixture(version: 8)
         defer { try? FileManager.default.removeItem(at: oldBase) }
@@ -51,6 +75,19 @@ final class MindNodePackageTests: XCTestCase {
         let (invalidBase, invalid) = try fixture(node: malformed)
         defer { try? FileManager.default.removeItem(at: invalidBase) }
         XCTAssertThrowsError(try MindNodePackage.importOutline(from: invalid))
+    }
+
+    func testVerifiedVersion7TemplateExportRoundTripsAndPreservesVersion() throws {
+        let (base, template) = try fixture(version: 7)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let destination = base.appendingPathComponent("ExportV7.mindnode", isDirectory: true)
+        let markdown = "# Legacy Project\n- Topic\n  - Nested\n"
+        try MindNodePackage.exportOutline(markdown, usingTemplate: template, to: destination)
+        XCTAssertEqual(try MindNodePackage.importOutline(from: destination), markdown)
+
+        let data = try Data(contentsOf: destination.appendingPathComponent("contents.xml"))
+        XCTAssertEqual(try (PropertyListSerialization.propertyList(from: data, format: nil)
+                             as? [String: Any])?["version"] as? Int, 7)
     }
 
     func testNativeV9TemplateExportRoundTripsAndDoesNotModifySource() throws {
@@ -81,6 +118,46 @@ final class MindNodePackageTests: XCTestCase {
             XCTAssertThrowsError(try MindNodePackage.exportOutline(
                 invalid, usingTemplate: template, to: destination
             ), invalid)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        }
+    }
+
+    func testNativeExportDoesNotCarryTemplateAttachmentsOrPreview() throws {
+        let (base, template) = try fixture()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let manager = FileManager.default
+        let resources = template.appendingPathComponent("resources", isDirectory: true)
+        let quickLook = template.appendingPathComponent("QuickLook", isDirectory: true)
+        try manager.createDirectory(at: resources, withIntermediateDirectories: true)
+        try manager.createDirectory(at: quickLook, withIntermediateDirectories: true)
+        try Data("private original image bytes".utf8)
+            .write(to: resources.appendingPathComponent("user-image.png"))
+        try Data("stale preview".utf8)
+            .write(to: quickLook.appendingPathComponent("Preview.jpg"))
+
+        let output = base.appendingPathComponent("Export.mindnode", isDirectory: true)
+        try MindNodePackage.exportOutline("# Fresh\n- Topic\n", usingTemplate: template, to: output)
+        XCTAssertEqual(try MindNodePackage.importOutline(from: output), "# Fresh\n- Topic\n")
+        XCTAssertFalse(manager.fileExists(atPath: output.appendingPathComponent("resources").path))
+        XCTAssertFalse(manager.fileExists(atPath: output.appendingPathComponent("QuickLook").path))
+        XCTAssertTrue(manager.fileExists(atPath: resources.appendingPathComponent("user-image.png").path))
+        XCTAssertTrue(manager.fileExists(atPath: quickLook.appendingPathComponent("Preview.jpg").path))
+    }
+
+    func testNativeExportRejectsRichMarkdownInsteadOfFlatteningIt() throws {
+        let (base, template) = try fixture()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let destination = base.appendingPathComponent("Rich.mindnode")
+        for source in [
+            "# Root\n- [ ] Pending",
+            "# Root\n- [x] Completed",
+            "# Root\n- ![screenshot](attachments/image.png)",
+            "# Root\n- [Linked note](other.md)",
+            "# Root\n- [[Some note]]"
+        ] {
+            XCTAssertThrowsError(try MindNodePackage.exportOutline(
+                source, usingTemplate: template, to: destination
+            ), source)
             XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
         }
     }

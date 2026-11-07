@@ -70,28 +70,9 @@ struct MarkdownSection: Identifiable {
         }
 
         for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("~~~") {
-                if fence == nil { fence = "~" }
-                else if fence == "~" { fence = nil }
-            } else if trimmed.hasPrefix("~~~") == false &&
-                      trimmed.first == Character(UnicodeScalar(96)!) &&
-                      trimmed.prefix(3).count == 3 &&
-                      trimmed.prefix(3).allSatisfy({ $0 == Character(UnicodeScalar(96)!) }) {
-                if fence == nil { fence = Character(UnicodeScalar(96)!) }
-                else if fence == Character(UnicodeScalar(96)!) { fence = nil }
-            }
-            var foundHeading: String?
-            if fence == nil {
-                let hashes = line.prefix { $0 == "#" }.count
-                if (1...6).contains(hashes), line.dropFirst(hashes).first == " " {
-                    foundHeading = String(line.dropFirst(hashes + 1))
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            }
-            if let heading = foundHeading {
+            if let heading = MarkdownHeadingScanner.heading(in: line, fence: &fence) {
                 flush()
-                currentHeading = heading
+                currentHeading = heading.title
             }
             currentLines.append(line)
         }
