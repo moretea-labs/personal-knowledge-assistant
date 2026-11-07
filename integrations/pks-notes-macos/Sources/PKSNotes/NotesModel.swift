@@ -91,7 +91,7 @@ enum WorkspaceFiles {
         return true
     }
 
-    static func tree(in root: URL) -> [NoteItem] {
+    static func tree(in root: URL, recursive: Bool = true) -> [NoteItem] {
         let fm = FileManager.default
         // File Provider can block on contentsOfDirectory(at:includingPropertiesForKeys:).
         // Plain names plus lstat are enough to classify entries without hydrating iCloud files.
@@ -104,7 +104,7 @@ enum WorkspaceFiles {
             let kind = info.st_mode & mode_t(S_IFMT)
             if kind == mode_t(S_IFLNK) { return nil }
             if kind == mode_t(S_IFDIR) {
-                let children = tree(in: url)
+                let children = recursive ? tree(in: url, recursive: true) : []
                 return NoteItem(url: url, children: children)
             }
             return kind == mode_t(S_IFREG) ? NoteItem(url: url, children: nil) : nil
@@ -308,12 +308,18 @@ final class NotesModel: ObservableObject {
     @Published private(set) var previewPDF: URL?
     @Published private(set) var previewPDFPage: Int?
     @Published var draft: String = "" {
-        didSet { scheduleAutoSave() }
+        didSet {
+            draftRevision &+= 1
+            bodyRevision &+= 1
+            scheduleAutoSave()
+        }
     }
     @Published private(set) var autoSavePending = false
     @Published private(set) var baseline: String = ""
     @Published private(set) var externalTitle: String?
-    @Published private(set) var externalBody: String?
+    @Published private(set) var externalBody: String? {
+        didSet { bodyRevision &+= 1 }
+    }
     @Published private(set) var previewSource: SearchHit?
     @Published private(set) var activeMatch: SearchHit?
     @Published private(set) var matchJumpSequence = 0
@@ -331,6 +337,12 @@ final class NotesModel: ObservableObject {
     @Published private(set) var recentNotes: [URL] = []
     @Published private(set) var favoriteNotes: [URL] = []
     @Published private(set) var relatedError: String?
+
+    // Lightweight render identities. They change with content mutations but never
+    // become content authorities; views can invalidate derived work in O(1).
+    private(set) var draftRevision: UInt64 = 0
+    private(set) var bodyRevision: UInt64 = 0
+
     private struct CachedNote {
         let content: String
         let modification: Date?
@@ -348,10 +360,16 @@ final class NotesModel: ObservableObject {
     private var securityScopedFolder: URL?
     private var backlinkTask: Task<Void, Never>?
     private var relatedTask: Task<Void, Never>?
+    private var fileRefreshTask: Task<Void, Never>?
+    private var fileRefreshGeneration: UInt64 = 0
 
     var isDirty: Bool { selected != nil && draft != baseline }
     var title: String { externalTitle ?? previewPDF?.lastPathComponent ?? selected?.lastPathComponent ?? "Select a note" }
     var body: String { externalBody ?? draft }
+    var openingNoteName: String? {
+        guard loadingNote, let requestedNote else { return nil }
+        return requestedNote.deletingPathExtension().lastPathComponent
+    }
     var groupedHits: [SearchResultGroup] { SearchResultGroup.group(hits) }
     var outgoingLinks: [MindMapLink] { MindMapOutline.knowledgeLinks(in: draft) }
     var selectedIsFavorite: Bool {
@@ -378,17 +396,23 @@ final class NotesModel: ObservableObject {
     /// The Markdown file remains the only writer/authority; the task only schedules save().
     private func scheduleAutoSave() {
         autoSaveTask?.cancel()
-        guard !loadingNote, isDirty, let note = selected else {
+        guard !loadingNote, let note = selected else {
             autoSavePending = false
             return
         }
         autoSavePending = true
-        let snapshot = draft
+        let revision = draftRevision
         autoSaveTask = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(650)) }
             catch { return }
             guard !Task.isCancelled, let self,
-                  self.selected == note, self.draft == snapshot, self.isDirty else { return }
+                  self.selected == note, self.draftRevision == revision else { return }
+            // Exact draft/baseline comparison is intentionally deferred until
+            // typing has gone idle, avoiding an O(document-size) comparison per key.
+            guard self.isDirty else {
+                self.autoSavePending = false
+                return
+            }
             self.save()
         }
     }
@@ -501,15 +525,31 @@ final class NotesModel: ObservableObject {
 
     func refresh() {
         guard let root else { return }
+        fileRefreshTask?.cancel()
+        fileRefreshGeneration &+= 1
+        let generation = fileRefreshGeneration
+        let showProgressiveTopLevel = files.isEmpty
         loadingFiles = true
-        Task.detached(priority: .userInitiated) { [weak self] in
-            let scanned = WorkspaceFiles.tree(in: root)
-            guard let model = self else { return }
-            await MainActor.run {
-                guard model.root == root else { return }
-                model.files = scanned
-                model.loadingFiles = false
+
+        fileRefreshTask = Task.detached(priority: .userInitiated) { [weak self] in
+            if showProgressiveTopLevel {
+                let shallow = WorkspaceFiles.tree(in: root, recursive: false)
+                guard !Task.isCancelled else { return }
+                await self?.publishFiles(shallow, root: root, generation: generation, complete: false)
             }
+
+            let scanned = WorkspaceFiles.tree(in: root)
+            guard !Task.isCancelled else { return }
+            await self?.publishFiles(scanned, root: root, generation: generation, complete: true)
+        }
+    }
+
+    private func publishFiles(_ scanned: [NoteItem], root: URL, generation: UInt64, complete: Bool) {
+        guard self.root == root, fileRefreshGeneration == generation else { return }
+        files = scanned
+        if complete {
+            loadingFiles = false
+            fileRefreshTask = nil
         }
     }
 
@@ -571,7 +611,9 @@ final class NotesModel: ObservableObject {
         }
 
         if ["md", "markdown"].contains(url.pathExtension.lowercased()) {
-            openNote(url, navigationDecision: navigationDecision)
+            // openFile already proved workspace containment and regular-file type.
+            // Do not repeat the full symlink/lstat chain on the main actor.
+            openValidatedNote(url, navigationDecision: navigationDecision, preservePDFPreview: false)
         } else if url.pathExtension.lowercased() == "pdf" {
             if previewPDF == url {
                 if let pdfPage { previewPDFPage = pdfPage }
@@ -609,18 +651,11 @@ final class NotesModel: ObservableObject {
     }
 
     func openNote(_ url: URL, navigationDecision: UnsavedNoteDecision? = nil) {
-        if requestedNote == url { return }
-        if selected == url {
-            cancelNoteLoad() // A re-selection wins over another pending file load.
-            if previewPDF != nil { closePDFPreview() }
-            return
-        }
         guard let root, WorkspaceFiles.contains(url, in: root),
               ["md", "markdown"].contains(url.pathExtension.lowercased()) else {
             message = AppLanguage.current.text("Only Markdown files inside the selected workspace can be edited."); return
         }
-        guard confirmLeavingNote(decision: navigationDecision) else { return }
-        loadNote(url)
+        openValidatedNote(url, navigationDecision: navigationDecision, preservePDFPreview: false)
     }
 
     /// Loads one Markdown note beside the active PDF while keeping the canonical
@@ -630,18 +665,27 @@ final class NotesModel: ObservableObject {
             openNote(url, navigationDecision: navigationDecision)
             return
         }
-        if requestedNote == url { return }
-        if selected == url {
-            cancelNoteLoad()
-            return
-        }
         guard let root, WorkspaceFiles.contains(url, in: root),
               ["md", "markdown"].contains(url.pathExtension.lowercased()) else {
             message = AppLanguage.current.text("Only Markdown files inside the selected workspace can be edited.")
             return
         }
+        openValidatedNote(url, navigationDecision: navigationDecision, preservePDFPreview: true)
+    }
+
+    private func openValidatedNote(
+        _ url: URL,
+        navigationDecision: UnsavedNoteDecision?,
+        preservePDFPreview: Bool
+    ) {
+        if requestedNote == url { return }
+        if selected == url {
+            cancelNoteLoad() // A re-selection wins over another pending file load.
+            if !preservePDFPreview, previewPDF != nil { closePDFPreview() }
+            return
+        }
         guard confirmLeavingNote(decision: navigationDecision) else { return }
-        loadNote(url, preservePDFPreview: true)
+        loadNote(url, preservePDFPreview: preservePDFPreview)
     }
 
     private func cancelNoteLoad() {
@@ -1367,7 +1411,7 @@ final class NotesModel: ObservableObject {
         cancelNoteLoad()
         previewTask?.cancel()
         let sourceNote = selected
-        let sourceDraft = draft
+        let sourceDraftRevision = draftRevision
         let sourceRoot = root
         previewTask = Task {
             do {
@@ -1383,7 +1427,7 @@ final class NotesModel: ObservableObject {
                 // Discard means the old draft may still be dirty until this preview
                 // commits. Only reject a stale response if context changed since launch.
                 guard !Task.isCancelled, selected == sourceNote,
-                      draft == sourceDraft, root == sourceRoot else { return }
+                      draftRevision == sourceDraftRevision, root == sourceRoot else { return }
                 selected = nil
                 previewPDF = nil
                 externalTitle = hit.title + " · read-only PKS result"

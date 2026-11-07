@@ -33,6 +33,25 @@ enum NoteTreePresentation {
         return result
     }
 
+    struct QuickOpenEntry: Identifiable {
+        let item: NoteItem
+        let foldedName: String
+        let foldedFolder: String
+        var id: String { item.id }
+    }
+
+    /// Normalize file names/folders once when the filesystem tree changes instead of
+    /// repeating Unicode case/diacritic folding on every Quick Open keystroke.
+    static func quickOpenEntries(_ items: [NoteItem]) -> [QuickOpenEntry] {
+        openableFiles(items).map { item in
+            QuickOpenEntry(
+                item: item,
+                foldedName: fold(item.name),
+                foldedFolder: fold(item.url.deletingLastPathComponent().path)
+            )
+        }
+    }
+
     /// Show a note's folder path relative to its selected workspace.
     /// This makes identically named notes in import/backup folders distinguishable.
     static func quickOpenFolder(for url: URL, in root: URL?) -> String {
@@ -49,23 +68,19 @@ enum NoteTreePresentation {
 
     /// Case/diacritic-insensitive native file matching, without another search index.
     /// Name prefix matches precede name substring, then parent-folder path matches.
-    static func quickOpen(_ files: [NoteItem], query: String, limit: Int = 24) -> [NoteItem] {
-        let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    static func quickOpen(_ entries: [QuickOpenEntry], query: String, limit: Int = 24) -> [NoteItem] {
+        let search = fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !search.isEmpty, limit > 0 else { return [] }
-        func score(_ item: NoteItem) -> Int? {
-            let name = item.name.folding(options: [.caseInsensitive, .diacriticInsensitive],
-                                         locale: .current)
-            if name == search { return 0 }
-            if name.hasPrefix(search) { return 1 }
-            if name.contains(search) { return 2 }
-            let folder = item.url.deletingLastPathComponent().path
-                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            return folder.contains(search) ? 3 : nil
-        }
-        return files.compactMap { item -> (item: NoteItem, rank: Int)? in
-            guard let rank = score(item) else { return nil }
-            return (item, rank)
+
+        return entries.compactMap { entry -> (item: NoteItem, rank: Int)? in
+            let rank: Int?
+            if entry.foldedName == search { rank = 0 }
+            else if entry.foldedName.hasPrefix(search) { rank = 1 }
+            else if entry.foldedName.contains(search) { rank = 2 }
+            else if entry.foldedFolder.contains(search) { rank = 3 }
+            else { rank = nil }
+            guard let rank else { return nil }
+            return (entry.item, rank)
         }
         .sorted {
             if $0.rank != $1.rank { return $0.rank < $1.rank }
@@ -73,6 +88,14 @@ enum NoteTreePresentation {
         }
         .prefix(limit)
         .map(\.item)
+    }
+
+    static func quickOpen(_ files: [NoteItem], query: String, limit: Int = 24) -> [NoteItem] {
+        quickOpen(quickOpenEntries(files), query: query, limit: limit)
+    }
+
+    private static func fold(_ value: String) -> String {
+        value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
 
     enum Direction {

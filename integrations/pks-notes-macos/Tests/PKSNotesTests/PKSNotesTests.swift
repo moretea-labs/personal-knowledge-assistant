@@ -204,18 +204,18 @@ final class PKSNotesTests: XCTestCase {
         let markdown = "# 标题\n\nSome **bold** Markdown and a [link](x.md)."
         let blocks = MarkdownPreviewParsing.prepare(markdown, match: nil)
         let cache = MarkdownPreviewSnapshot(
-            identity: "/vault/one.md", source: markdown,
+            identity: "/vault/one.md", revision: 7,
             matchID: nil, sections: blocks
         )
         XCTAssertEqual(cache.sections.count, 1)
-        XCTAssertTrue(cache.matches(identity: "/vault/one.md", source: markdown, matchID: nil))
+        XCTAssertTrue(cache.matches(identity: "/vault/one.md", revision: 7, matchID: nil))
         // Theme and Edit/Split/Read mode intentionally do NOT participate in parse identity.
         for _ in NotesTheme.allCases {
-            XCTAssertTrue(cache.matches(identity: "/vault/one.md", source: markdown, matchID: nil))
+            XCTAssertTrue(cache.matches(identity: "/vault/one.md", revision: 7, matchID: nil))
         }
-        XCTAssertFalse(cache.matches(identity: "/vault/two.md", source: markdown, matchID: nil))
-        XCTAssertFalse(cache.matches(identity: "/vault/one.md", source: markdown + "\nEdit", matchID: nil))
-        XCTAssertFalse(cache.matches(identity: "/vault/one.md", source: markdown, matchID: "new-hit"))
+        XCTAssertFalse(cache.matches(identity: "/vault/two.md", revision: 7, matchID: nil))
+        XCTAssertFalse(cache.matches(identity: "/vault/one.md", revision: 8, matchID: nil))
+        XCTAssertFalse(cache.matches(identity: "/vault/one.md", revision: 7, matchID: "new-hit"))
     }
 
     func testLargeMarkdownUsesLazySectionsWithoutBreakingDocumentReferences() {
@@ -304,6 +304,11 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertFalse(result[1].isMarkdown)
         XCTAssertTrue(result[2].isMarkdown)
         XCTAssertEqual(result.first?.children?.first?.iconName, "doc")
+
+        let shallow = WorkspaceFiles.tree(in: base, recursive: false)
+        XCTAssertEqual(shallow.map { $0.name }, ["分组", "Guide.pdf", "README"])
+        XCTAssertEqual(shallow.first?.children?.count, 0,
+                       "Progressive loading should expose top-level folders before recursive scanning.")
     }
 
     @MainActor
@@ -362,16 +367,20 @@ final class PKSNotesTests: XCTestCase {
             NoteItem(url: pdf, children: nil)
         ]
         let flat = NoteTreePresentation.openableFiles(tree)
+        let entries = NoteTreePresentation.quickOpenEntries(tree)
         XCTAssertEqual(flat.count, 4)
+        XCTAssertEqual(entries.count, 4)
         XCTAssertFalse(flat.contains { $0.isFolder })
-        XCTAssertEqual(NoteTreePresentation.quickOpen(flat, query: "README").map(\.url),
+        XCTAssertEqual(NoteTreePresentation.quickOpen(entries, query: "README").map(\.url),
                        [nested, top])
-        XCTAssertEqual(NoteTreePresentation.quickOpen(flat, query: "中文").first?.url, chinese)
-        XCTAssertEqual(NoteTreePresentation.quickOpen(flat, query: "report").first?.url, pdf)
-        XCTAssertEqual(NoteTreePresentation.quickOpen(flat, query: "documents").count, 2)
-        XCTAssertEqual(NoteTreePresentation.quickOpen(flat, query: "documents", limit: 1).count, 1)
-        XCTAssertTrue(NoteTreePresentation.quickOpen(flat, query: "   ").isEmpty)
-        XCTAssertTrue(NoteTreePresentation.quickOpen(flat, query: "impossible").isEmpty)
+        XCTAssertEqual(NoteTreePresentation.quickOpen(entries, query: "中文").first?.url, chinese)
+        XCTAssertEqual(NoteTreePresentation.quickOpen(entries, query: "report").first?.url, pdf)
+        XCTAssertEqual(NoteTreePresentation.quickOpen(entries, query: "documents").count, 2)
+        XCTAssertEqual(NoteTreePresentation.quickOpen(entries, query: "documents", limit: 1).count, 1)
+        XCTAssertTrue(NoteTreePresentation.quickOpen(entries, query: "   ").isEmpty)
+        XCTAssertTrue(NoteTreePresentation.quickOpen(entries, query: "impossible").isEmpty)
+        XCTAssertEqual(NoteTreePresentation.quickOpen(flat, query: "README").map(\.url),
+                       [nested, top], "Compatibility overload must retain ranking.")
     }
 
     func testFolderExpansionShowsOnlyVisibleDescendants() {

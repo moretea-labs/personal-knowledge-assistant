@@ -28,12 +28,12 @@ enum MarkdownPreviewParsing {
 /// transitions. Neither parsed blocks nor theme preferences are Markdown content authorities.
 struct MarkdownPreviewSnapshot {
     let identity: String
-    let source: String
+    let revision: UInt64
     let matchID: String?
     let sections: [ParsedMarkdownSection]
 
-    func matches(identity: String, source: String, matchID: String?) -> Bool {
-        self.identity == identity && self.source == source && self.matchID == matchID
+    func matches(identity: String, revision: UInt64, matchID: String?) -> Bool {
+        self.identity == identity && self.revision == revision && self.matchID == matchID
     }
 }
 
@@ -42,6 +42,7 @@ struct MarkdownPreviewPane: View {
     @EnvironmentObject private var model: NotesModel
     @Environment(\.notesLanguage) private var language
     let source: String
+    let revision: UInt64
     let live: Bool
     let identity: String
     let theme: NotesTheme
@@ -52,7 +53,7 @@ struct MarkdownPreviewPane: View {
 
     private struct RenderKey: Hashable {
         let identity: String
-        let source: String
+        let revision: UInt64
         let matchID: String?
         let live: Bool
     }
@@ -61,7 +62,7 @@ struct MarkdownPreviewPane: View {
 
     private var rendered: [ParsedMarkdownSection] {
         guard let cache,
-              cache.matches(identity: identity, source: source, matchID: model.activeMatch?.id)
+              cache.matches(identity: identity, revision: revision, matchID: model.activeMatch?.id)
         else { return [] }
         return cache.sections
     }
@@ -113,28 +114,29 @@ struct MarkdownPreviewPane: View {
         }
         .background(theme.canvas)
         .accessibilityIdentifier("pks-markdown-preview")
-        .task(id: RenderKey(identity: identity, source: source,
+        .task(id: RenderKey(identity: identity, revision: revision,
                             matchID: model.activeMatch?.id, live: live)) {
             let match = model.activeMatch
             let matchID = match?.id
-            guard cache?.matches(identity: identity, source: source, matchID: matchID) != true
+            guard cache?.matches(identity: identity, revision: revision, matchID: matchID) != true
             else { return }
 
             // Only debounce edits to the *same* open document. First preview has no artificial delay.
-            if live, let old = cache, old.identity == identity, old.source != source {
+            if live, let old = cache, old.identity == identity, old.revision != revision {
                 do { try await Task.sleep(for: .milliseconds(260)) }
                 catch { return }
             }
             guard !Task.isCancelled else { return }
             let input = source
             let documentID = identity
+            let documentRevision = revision
             let parser = Task.detached(priority: .userInitiated) {
                 MarkdownPreviewParsing.prepare(input, match: match)
             }
             defer { parser.cancel() }
             let sections = await parser.value
             guard !Task.isCancelled else { return }
-            cache = MarkdownPreviewSnapshot(identity: documentID, source: input,
+            cache = MarkdownPreviewSnapshot(identity: documentID, revision: documentRevision,
                                             matchID: matchID, sections: sections)
             renderedRevision &+= 1
         }

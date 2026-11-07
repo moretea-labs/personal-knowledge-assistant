@@ -268,7 +268,13 @@ enum ReadingMode: String, CaseIterable {
 
 private struct PreviewWarmupKey: Hashable {
     let identity: String
-    let source: String
+    let revision: UInt64
+    let enabled: Bool
+}
+
+private struct OutlineWarmupKey: Hashable {
+    let identity: String
+    let revision: UInt64
     let enabled: Bool
 }
 
@@ -291,8 +297,9 @@ struct NotesWindow: View {
     @AppStorage("PKSNotesLineAdjustment") private var lineAdjustment = 0.0
     @AppStorage("PKSNotesWidthAdjustment") private var widthAdjustment = 0.0
     @State private var previewCache: MarkdownPreviewSnapshot?
+    @State private var outlineHeadings: [MarkdownOutlineHeading] = []
     @State private var visibleTreeRows: [NoteTreePresentation.Row] = []
-    @State private var allOpenableFiles: [NoteItem] = []
+    @State private var quickOpenEntries: [NoteTreePresentation.QuickOpenEntry] = []
     @State private var showingQuickOpen = false
     @State private var showingBacklinks = false
     @State private var quickOpenQuery = ""
@@ -301,7 +308,7 @@ struct NotesWindow: View {
     @State private var pdfCaptureCommentary = ""
 
     private var quickOpenMatches: [NoteItem] {
-        let matches = NoteTreePresentation.quickOpen(allOpenableFiles, query: quickOpenQuery)
+        let matches = NoteTreePresentation.quickOpen(quickOpenEntries, query: quickOpenQuery)
         guard pdfCaptureRequest != nil else { return matches }
         return matches.filter {
             !$0.isFolder && ["md", "markdown"].contains($0.url.pathExtension.lowercased())
@@ -313,10 +320,6 @@ struct NotesWindow: View {
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty else { return nil }
         return text
-    }
-
-    private var outlineHeadings: [MarkdownOutlineHeading] {
-        MarkdownOutline.headings(in: model.draft)
     }
 
     private var sidebarSectionTitleKey: String {
@@ -589,13 +592,14 @@ struct NotesWindow: View {
         }
         .task(id: PreviewWarmupKey(
             identity: model.selected?.path ?? "",
-            source: model.body,
+            revision: model.draftRevision,
             enabled: mode == .edit && model.selected != nil && !model.loadingNote
         )) {
             guard mode == .edit, !model.loadingNote, model.externalBody == nil,
                   let identity = model.selected?.path else { return }
             let input = model.draft
-            guard previewCache?.matches(identity: identity, source: input, matchID: nil) != true
+            let revision = model.draftRevision
+            guard previewCache?.matches(identity: identity, revision: revision, matchID: nil) != true
             else { return }
             // Idle-only parse in the background; no preview view is mounted or laid out.
             do { try await Task.sleep(for: .milliseconds(520)) }
@@ -607,13 +611,37 @@ struct NotesWindow: View {
             defer { parser.cancel() }
             let sections = await parser.value
             guard !Task.isCancelled, model.selected?.path == identity,
-                  model.draft == input, mode == .edit else { return }
-            previewCache = MarkdownPreviewSnapshot(identity: identity, source: input,
+                  model.draftRevision == revision, mode == .edit else { return }
+            previewCache = MarkdownPreviewSnapshot(identity: identity, revision: revision,
                                                     matchID: nil, sections: sections)
+        }
+        .task(id: OutlineWarmupKey(
+            identity: model.selected?.path ?? "",
+            revision: model.draftRevision,
+            enabled: model.selected != nil && model.externalBody == nil && model.previewPDF == nil
+        )) {
+            guard model.externalBody == nil, model.previewPDF == nil,
+                  let identity = model.selected?.path else {
+                outlineHeadings = []
+                return
+            }
+            let input = model.draft
+            let revision = model.draftRevision
+            // Keep typing responsive; coalesce rapid edits before scanning headings.
+            do { try await Task.sleep(for: .milliseconds(140)) }
+            catch { return }
+            let scanner = Task.detached(priority: .utility) {
+                MarkdownOutline.headings(in: input)
+            }
+            defer { scanner.cancel() }
+            let headings = await scanner.value
+            guard !Task.isCancelled, model.selected?.path == identity,
+                  model.draftRevision == revision else { return }
+            outlineHeadings = headings
         }
         .onReceive(model.$files) { files in
             visibleTreeRows = NoteTreePresentation.visibleRows(files, expandedPaths: expandedFolderPaths)
-            allOpenableFiles = NoteTreePresentation.openableFiles(files)
+            quickOpenEntries = NoteTreePresentation.quickOpenEntries(files)
         }
         .onChange(of: expandedFolderPaths) { _, expanded in
             visibleTreeRows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expanded)
@@ -1838,6 +1866,23 @@ struct NotesWindow: View {
             }
         }
         .background(theme.canvas)
+        .overlay(alignment: .topTrailing) {
+            if let opening = model.openingNoteName, model.selected != nil {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.mini)
+                    Text("\(language.text("Opening note…")) \(opening)")
+                        .font(.caption)
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(.regularMaterial, in: Capsule())
+                .padding(10)
+                .allowsHitTesting(false)
+                .accessibilityIdentifier("pks-opening-note-indicator")
+            }
+        }
         .navigationTitle(model.previewPDF?.lastPathComponent
                          ?? model.selected?.deletingPathExtension().lastPathComponent
                          ?? model.previewSource?.title
@@ -1850,9 +1895,9 @@ struct NotesWindow: View {
             if let note = model.selected, model.externalBody == nil {
                 HSplitView {
                     pdfReader(url)
-                        .frame(minWidth: 420)
+                        .frame(minWidth: 330)
                     studyNotePane(note)
-                        .frame(minWidth: 320, idealWidth: 420)
+                        .frame(minWidth: 280, idealWidth: 400)
                 }
                 .accessibilityIdentifier("pks-study-workspace")
             } else {
@@ -2011,7 +2056,8 @@ struct NotesWindow: View {
     }
 
     private var renderedNote: some View {
-        MarkdownPreviewPane(source: model.body, live: mode == .split,
+        MarkdownPreviewPane(source: model.body, revision: model.bodyRevision,
+                            live: mode == .split,
                             identity: model.selected?.path ?? model.previewSource?.documentId ?? "",
                             theme: theme,
                             fontAdjustment: fontAdjustment,
