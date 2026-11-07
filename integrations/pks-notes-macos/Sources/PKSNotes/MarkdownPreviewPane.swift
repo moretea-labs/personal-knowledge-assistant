@@ -16,7 +16,7 @@ enum MarkdownPreviewParsing {
         // LazyVStack then constructs only the nearby section views. Keep whole-document
         // parsing for reference links and footnotes (e.g. [ref]: or [^note]:) because
         // their definitions may be used in another section.
-        let lazySections = text.utf8.count >= 24_000 && !text.contains("]:")
+        let lazySections = text.utf8.count >= 12_000 && !text.contains("]:")
         let parts = match != nil || lazySections
             ? MarkdownSection.sections(in: text)
             : [MarkdownSection(id: 0, heading: nil, markdown: text)]

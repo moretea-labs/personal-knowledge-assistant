@@ -331,6 +331,11 @@ final class NotesModel: ObservableObject {
     @Published private(set) var recentNotes: [URL] = []
     @Published private(set) var favoriteNotes: [URL] = []
     @Published private(set) var relatedError: String?
+    private struct CachedNote {
+        let content: String
+        let modification: Date?
+    }
+
     private var savedModification: Date?
     private var autoSaveTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
@@ -338,6 +343,8 @@ final class NotesModel: ObservableObject {
     private var requestedNote: URL?
     private var loadIdentity: UUID?
     private var pendingMatch: SearchHit?
+    private var noteCache: [String: CachedNote] = [:]
+    private var noteCacheOrder: [String] = []
     private var securityScopedFolder: URL?
     private var backlinkTask: Task<Void, Never>?
     private var relatedTask: Task<Void, Never>?
@@ -629,12 +636,20 @@ final class NotesModel: ObservableObject {
         message = nil
 
         // iCloud File Provider can block while hydrating files. Never read Markdown
-        // on the main actor; only publish a successful, current request.
+        // on the main actor; only publish a successful, current request. A small
+        // modification-date-validated cache makes recently visited notes reopen
+        // without hydrating/decoding the same contents again.
+        let cached = noteCache[url.path]
         noteLoadTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
-                let content = try String(contentsOf: url, encoding: .utf8)
                 let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
                 let modification = attrs[.modificationDate] as? Date
+                let content: String
+                if let cached, cached.modification == modification {
+                    content = cached.content
+                } else {
+                    content = try String(contentsOf: url, encoding: .utf8)
+                }
                 guard !Task.isCancelled else { return }
                 await self?.finishOpeningNote(url, identity: identity,
                                               content: content, modification: modification)
@@ -655,6 +670,7 @@ final class NotesModel: ObservableObject {
         baseline = content
         draft = content
         savedModification = modification
+        cacheNote(url, content: content, modification: modification)
         externalBody = nil
         externalTitle = nil
         previewSource = nil
@@ -676,6 +692,17 @@ final class NotesModel: ObservableObject {
         loadingRelated = false
         relatedError = nil
         message = nil
+    }
+
+    private func cacheNote(_ url: URL, content: String, modification: Date?) {
+        let key = url.path
+        noteCache[key] = CachedNote(content: content, modification: modification)
+        noteCacheOrder.removeAll { $0 == key }
+        noteCacheOrder.append(key)
+        while noteCacheOrder.count > 10 {
+            let evicted = noteCacheOrder.removeFirst()
+            noteCache.removeValue(forKey: evicted)
+        }
     }
 
     func loadRelationships() {
@@ -777,6 +804,7 @@ final class NotesModel: ObservableObject {
             baseline = draft
             let updated = try FileManager.default.attributesOfItem(atPath: selected.path)
             savedModification = updated[.modificationDate] as? Date
+            cacheNote(selected, content: draft, modification: savedModification)
             // Successful saves are silent. Existing notices are user-dismissed;
             // localized presentation text is never used as save-state authority.
         } catch {

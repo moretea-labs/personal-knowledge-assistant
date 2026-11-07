@@ -1025,28 +1025,33 @@ struct NotesWindow: View {
         return Button {
             withAnimation(.easeOut(duration: 0.14)) { sidebarTab = tab }
         } label: {
-            HStack(spacing: 10) {
-                Image(systemName: symbol)
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 18, height: 22)
-                    .foregroundStyle(selected ? Color.primary : Color.secondary)
-                Text(title)
-                    .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 0)
-                if tab == .search && !model.hits.isEmpty {
-                    Text("\(model.hits.count)")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.tertiary)
+            VStack(spacing: 3) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: symbol)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .frame(width: 22, height: 18)
+                        .foregroundStyle(selected ? Color.primary : Color.secondary)
+                    if tab == .search && !model.hits.isEmpty {
+                        Circle()
+                            .fill(theme.linkColor)
+                            .frame(width: 5, height: 5)
+                            .offset(x: 2, y: -1)
+                    }
                 }
+                Text(title)
+                    .font(.system(size: 9.5, weight: selected ? .semibold : .medium))
+                    .foregroundStyle(selected ? Color.primary : Color.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
             }
-            .padding(.horizontal, 11)
-            .frame(height: 32)
+            .frame(maxWidth: .infinity)
+            .frame(height: 38)
             .background(selected ? Color.primary.opacity(colorScheme == .dark ? 0.13 : 0.065) : .clear,
                         in: RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(title)
         .accessibilityIdentifier("pks-sidebar-\(tab.rawValue.lowercased())")
     }
 
@@ -1297,6 +1302,17 @@ struct NotesWindow: View {
                 .help(language.text("Reveal Current File") + " (⌥F1)")
                 .accessibilityIdentifier("pks-reveal-current-file-button")
 
+                Button(action: openQuickPicker) {
+                    Image(systemName: "command")
+                        .font(.system(size: 13.5, weight: .medium))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(language.text("Quick Open a file in the current library") + " (⌘P)")
+                .accessibilityIdentifier("pks-sidebar-quick-open")
+
                 Button {
                     beginNewNote()
                 } label: {
@@ -1312,7 +1328,7 @@ struct NotesWindow: View {
             }
             .padding(.horizontal, 17)
             .frame(height: 48)
-            .padding(.top, 4)
+            .padding(.top, 1)
 
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
@@ -1349,44 +1365,16 @@ struct NotesWindow: View {
                         in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
             .padding(.top, 5)
-            .padding(.bottom, 17)
+            .padding(.bottom, 9)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(language.text("NAVIGATION"))
-                    .font(.system(size: 10, weight: .semibold))
-                    .tracking(0.75)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 11)
-                    .padding(.bottom, 3)
-
+            HStack(spacing: 4) {
                 navigationRow(.notes, symbol: "square.stack.3d.up", title: language.text("All Notes"))
                 navigationRow(.recent, symbol: "clock", title: language.text("Recent"))
                 navigationRow(.favorites, symbol: "star", title: language.text("Favorites"))
                 navigationRow(.search, symbol: "text.magnifyingglass", title: language.text("PKS Search"))
-
-                Button(action: openQuickPicker) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "command")
-                            .font(.system(size: 14, weight: .medium))
-                            .frame(width: 18, height: 22)
-                            .foregroundStyle(.secondary)
-                        Text(language.text("Quick Open"))
-                            .font(.system(size: 12.5, weight: .medium))
-                        Spacer()
-                        Text("⌘P")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 11)
-                    .frame(height: 32)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(language.text("Quick Open a file in the current library"))
-                .accessibilityIdentifier("pks-sidebar-quick-open")
             }
             .padding(.horizontal, 10)
-            .padding(.bottom, 19)
+            .padding(.bottom, 8)
 
             HStack(spacing: 6) {
                 Text(language.text(sidebarSectionTitleKey))
@@ -1520,6 +1508,8 @@ struct NotesWindow: View {
                     return .handled
                 }
             }
+            .frame(maxHeight: .infinity)
+            .layoutPriority(1)
         }
         .background(sidebarCanvas)
     }

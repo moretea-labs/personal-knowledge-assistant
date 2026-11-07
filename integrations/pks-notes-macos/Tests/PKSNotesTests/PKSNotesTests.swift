@@ -221,7 +221,7 @@ final class PKSNotesTests: XCTestCase {
     func testLargeMarkdownUsesLazySectionsWithoutBreakingDocumentReferences() {
         let section = "## Section\n\n" + String(repeating: "A normal paragraph with **bold** text.\n\n", count: 65)
         let source = "# Introduction\n\n" + String(repeating: section, count: 12)
-        XCTAssertGreaterThan(source.utf8.count, 24_000)
+        XCTAssertGreaterThan(source.utf8.count, 12_000)
 
         let parts = MarkdownPreviewParsing.prepare(source, match: nil)
         XCTAssertGreaterThan(parts.count, 10, "Large documents should render in lazy section-sized views.")
