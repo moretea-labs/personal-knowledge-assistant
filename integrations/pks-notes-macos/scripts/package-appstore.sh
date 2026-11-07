@@ -64,9 +64,10 @@ fi
 
 cd "$root"
 swift build -c release --arch arm64
+release_bin="$(swift build -c release --arch arm64 --show-bin-path)"
 
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$root/.build/arm64-apple-macosx/release/PKSNotes" "$app/Contents/MacOS/PKSNotes"
+cp "$release_bin/PKSNotes" "$app/Contents/MacOS/PKSNotes"
 cp "$root/Resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 cp "$info" "$app/Contents/Info.plist"
 cp "$profile" "$app/Contents/embedded.provisionprofile"
