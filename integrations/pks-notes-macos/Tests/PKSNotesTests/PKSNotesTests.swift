@@ -857,6 +857,27 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertNil(WorkspaceFiles.resolve(URL(string: "../other/私密.md")!, from: note, in: folder))
         XCTAssertNil(WorkspaceFiles.resolve(URL(string: "https://example.org")!, from: note, in: folder))
     }
+
+    func testLocalAttachmentImageMetadataInvalidatesDerivedCacheWhenFileChanges() throws {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+
+        let image = folder.appendingPathComponent("diagram.png")
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: image)
+        let first = try XCTUnwrap(LocalAttachmentImageMetadata.inspect(image))
+        XCTAssertEqual(first.byteCount, 4)
+
+        try Data([0x89, 0x50, 0x4E, 0x47, 0x00, 0x01]).write(to: image)
+        let second = try XCTUnwrap(LocalAttachmentImageMetadata.inspect(image))
+        XCTAssertEqual(second.byteCount, 6)
+        XCTAssertNotEqual(first.cacheKey, second.cacheKey)
+
+        let unsupported = folder.appendingPathComponent("diagram.txt")
+        try Data("text".utf8).write(to: unsupported)
+        XCTAssertNil(LocalAttachmentImageMetadata.inspect(unsupported))
+    }
     func testSearchResultSourceLocationsAreTypedAndNotGuessed() throws {
         func hit(uri: String, type: String) -> SearchHit {
             SearchHit(documentId: "doc", chunkId: nil, title: "Test", uri: uri,
