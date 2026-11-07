@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 import MarkdownUI
-import PDFKit
 
 @MainActor
 final class PKSNotesAppDelegate: NSObject, NSApplicationDelegate {
@@ -406,7 +405,7 @@ struct NotesWindow: View {
                     .accessibilityIdentifier("pks-favorite-toggle")
                 }
 
-                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
+                if (model.selected != nil && model.externalBody == nil) || model.previewPDF != nil {
                     Button {
                         showingBacklinks.toggle()
                         if showingBacklinks { model.loadRelationships() }
@@ -421,7 +420,9 @@ struct NotesWindow: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .help(language.text("Links and related notes"))
+                    .help(language.text(model.previewPDF == nil
+                                        ? "Links and related notes"
+                                        : "Linked notes for this PDF"))
                     .accessibilityIdentifier("pks-relationships-menu")
                     .popover(isPresented: $showingBacklinks, arrowEdge: .bottom) {
                         ScrollView {
@@ -438,28 +439,36 @@ struct NotesWindow: View {
 
                                 Divider()
 
-                                relationshipSectionTitle(language.text("Outgoing"))
-                                if model.outgoingLinks.isEmpty {
-                                    relationshipEmpty(language.text("No links from this note."))
-                                } else {
-                                    ForEach(Array(model.outgoingLinks.enumerated()), id: \.offset) { _, link in
-                                        relationshipButton(
-                                            title: link.label,
-                                            detail: link.target,
-                                            symbol: "arrow.up.right"
-                                        ) {
-                                            showingBacklinks = false
-                                            _ = model.openKnowledgeLink(link.target)
+                                if model.previewPDF == nil {
+                                    relationshipSectionTitle(language.text("Outgoing"))
+                                    if model.outgoingLinks.isEmpty {
+                                        relationshipEmpty(language.text("No links from this note."))
+                                    } else {
+                                        ForEach(Array(model.outgoingLinks.enumerated()), id: \.offset) { _, link in
+                                            relationshipButton(
+                                                title: link.label,
+                                                detail: link.target,
+                                                symbol: "arrow.up.right"
+                                            ) {
+                                                showingBacklinks = false
+                                                _ = model.openKnowledgeLink(link.target)
+                                            }
                                         }
                                     }
+                                    Divider().padding(.vertical, 4)
                                 }
 
-                                Divider().padding(.vertical, 4)
-                                relationshipSectionTitle(language.text("Backlinks"))
+                                relationshipSectionTitle(language.text(model.previewPDF == nil
+                                                                      ? "Backlinks"
+                                                                      : "Linked Notes"))
                                 if model.loadingBacklinks {
-                                    relationshipEmpty(language.text("Finding notes that link here…"))
+                                    relationshipEmpty(language.text(model.previewPDF == nil
+                                                                    ? "Finding notes that link here…"
+                                                                    : "Finding notes linked to this PDF…"))
                                 } else if model.backlinks.isEmpty {
-                                    relationshipEmpty(language.text("No backlinks in this workspace."))
+                                    relationshipEmpty(language.text(model.previewPDF == nil
+                                                                    ? "No backlinks in this workspace."
+                                                                    : "No notes link to this PDF yet."))
                                 } else {
                                     ForEach(model.backlinks) { backlink in
                                         relationshipButton(
@@ -475,23 +484,25 @@ struct NotesWindow: View {
                                     }
                                 }
 
-                                Divider().padding(.vertical, 4)
-                                relationshipSectionTitle(language.text("Related · PKS"))
-                                if model.loadingRelated {
-                                    relationshipEmpty(language.text("Finding related knowledge…"))
-                                } else if let error = model.relatedError {
-                                    relationshipEmpty(error)
-                                } else if model.relatedHits.isEmpty {
-                                    relationshipEmpty(language.text("No related PKS results."))
-                                } else {
-                                    ForEach(model.relatedHits.prefix(6)) { hit in
-                                        relationshipButton(
-                                            title: hit.title,
-                                            detail: language.text(hit.sourceLabel),
-                                            symbol: "sparkles"
-                                        ) {
-                                            showingBacklinks = false
-                                            model.openResult(hit)
+                                if model.previewPDF == nil {
+                                    Divider().padding(.vertical, 4)
+                                    relationshipSectionTitle(language.text("Related · PKS"))
+                                    if model.loadingRelated {
+                                        relationshipEmpty(language.text("Finding related knowledge…"))
+                                    } else if let error = model.relatedError {
+                                        relationshipEmpty(error)
+                                    } else if model.relatedHits.isEmpty {
+                                        relationshipEmpty(language.text("No related PKS results."))
+                                    } else {
+                                        ForEach(model.relatedHits.prefix(6)) { hit in
+                                            relationshipButton(
+                                                title: hit.title,
+                                                detail: language.text(hit.sourceLabel),
+                                                symbol: "sparkles"
+                                            ) {
+                                                showingBacklinks = false
+                                                model.openResult(hit)
+                                            }
                                         }
                                     }
                                 }
@@ -1683,7 +1694,11 @@ struct NotesWindow: View {
     @ViewBuilder
     private var reader: some View {
         if let url = model.previewPDF {
-            NativePDFPreview(url: url)
+            NativePDFPreview(
+                url: url,
+                root: model.root,
+                requestedPage: model.previewPDFPage
+            )
         } else if showingMindMap && model.selected != nil && model.externalBody == nil {
             MindMapCanvas(
                 source: $model.draft,
@@ -1798,64 +1813,4 @@ struct NotesWindow: View {
             })
     }
 
-}
-
-
-/// PDFKit is part of macOS; no PDF renderer, server or extra dependency is bundled.
-private struct NativePDFPreview: View {
-    @Environment(\.notesLanguage) private var language
-    let url: URL
-    @State private var document: PDFDocument?
-    @State private var attemptedURL: URL?
-
-    var body: some View {
-        Group {
-            if let document, attemptedURL == url {
-                PDFCanvas(document: document)
-            } else if attemptedURL == url {
-                VStack(spacing: 12) {
-                    Image(systemName: "doc.richtext")
-                        .font(.system(size: 27, weight: .ultraLight))
-                        .foregroundStyle(.tertiary)
-                    Text(language.text("Cannot preview this PDF"))
-                        .font(.title3.weight(.medium))
-                    Text(language.text("The original file may be unavailable or damaged."))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Button(language.text("Open with Default App")) {
-                        NSWorkspace.shared.open(url)
-                    }
-                    .padding(.top, 6)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ProgressView(language.text("Opening PDF…"))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .task(id: url) {
-            document = PDFDocument(url: url)
-            attemptedURL = url
-        }
-        .accessibilityIdentifier("pks-pdf-preview")
-    }
-}
-
-private struct PDFCanvas: NSViewRepresentable {
-    let document: PDFDocument
-
-    func makeNSView(context: Context) -> PDFView {
-        let view = PDFView()
-        view.displayMode = .singlePageContinuous
-        view.autoScales = true
-        view.backgroundColor = .textBackgroundColor
-        view.document = document
-        return view
-    }
-
-    func updateNSView(_ view: PDFView, context: Context) {
-        if view.document !== document {
-            view.document = document
-        }
-    }
 }

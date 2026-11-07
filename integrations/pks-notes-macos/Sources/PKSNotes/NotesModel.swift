@@ -170,6 +170,33 @@ enum WorkspaceFiles {
         return matches.count == 1 ? matches[0].standardizedFileURL : nil
     }
 
+    /// One local-link resolver for Markdown notes and other workspace files such as PDFs.
+    /// Markdown remains the link authority; fragments (for example #page=12) are navigation hints only.
+    static func resolveLinkedTarget(
+        _ rawTarget: String,
+        from note: URL,
+        in root: URL,
+        candidates: [URL]? = nil
+    ) -> URL? {
+        let value = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+
+        if let markdown = resolveKnowledgeTarget(
+            value,
+            from: note,
+            in: root,
+            candidates: candidates
+        ) {
+            return markdown
+        }
+
+        guard let link = URL(string: value),
+              link.scheme == nil || link.isFileURL,
+              let resolved = resolve(link, from: note, in: root),
+              FileManager.default.fileExists(atPath: resolved.path) else { return nil }
+        return resolved
+    }
+
     /// Deterministic collision-safe suggestion; O_EXCL remains the final writer guard.
     static func nextUntitledName(in folder: URL) -> String? {
         for index in 0..<10_000 {
@@ -249,7 +276,7 @@ enum WorkspaceBacklinks {
             var count = 0
             for line in content.components(separatedBy: .newlines) {
                 for link in MindMapOutline.links(in: line) {
-                    guard let resolved = WorkspaceFiles.resolveKnowledgeTarget(
+                    guard let resolved = WorkspaceFiles.resolveLinkedTarget(
                         link.target, from: source, in: root, candidates: candidates
                     ) else { continue }
                     if resolved.standardizedFileURL == target { count += 1 }
@@ -273,6 +300,7 @@ final class NotesModel: ObservableObject {
     @Published private(set) var loadingNote = false
     @Published private(set) var selected: URL?
     @Published private(set) var previewPDF: URL?
+    @Published private(set) var previewPDFPage: Int?
     @Published var draft: String = "" {
         didSet { scheduleAutoSave() }
     }
@@ -434,6 +462,7 @@ final class NotesModel: ObservableObject {
         refresh()
         selected = nil
         previewPDF = nil
+        previewPDFPage = nil
         externalTitle = nil
         externalBody = nil
         previewSource = nil
@@ -514,7 +543,11 @@ final class NotesModel: ObservableObject {
     }
 
     /// The one local-file dispatch path shared by the tree, Markdown links and search.
-    func openFile(_ url: URL, navigationDecision: UnsavedNoteDecision? = nil) {
+    func openFile(
+        _ url: URL,
+        navigationDecision: UnsavedNoteDecision? = nil,
+        pdfPage: Int? = nil
+    ) {
         guard let root, WorkspaceFiles.contains(url, in: root) else {
             message = AppLanguage.current.text("File is outside the selected workspace."); return
         }
@@ -527,18 +560,29 @@ final class NotesModel: ObservableObject {
         if ["md", "markdown"].contains(url.pathExtension.lowercased()) {
             openNote(url, navigationDecision: navigationDecision)
         } else if url.pathExtension.lowercased() == "pdf" {
-            if previewPDF == url { return }
+            if previewPDF == url {
+                if let pdfPage { previewPDFPage = pdfPage }
+                return
+            }
             guard confirmLeavingNote(decision: navigationDecision) else { return }
             cancelNoteLoad()
             previewTask?.cancel()
             selected = nil
             previewPDF = url
+            previewPDFPage = pdfPage
             baseline = ""
             draft = ""
             externalTitle = nil
             externalBody = nil
             previewSource = nil
             activeMatch = nil
+            backlinks = []
+            backlinkTask?.cancel()
+            loadingBacklinks = false
+            relatedHits = []
+            relatedTask?.cancel()
+            loadingRelated = false
+            relatedError = nil
             message = nil
         } else {
             // Do not replace the current note when handing a file to another app.
@@ -601,6 +645,7 @@ final class NotesModel: ObservableObject {
         guard requestedNote == url, loadIdentity == identity else { return }
         selected = url
         previewPDF = nil
+        previewPDFPage = nil
         baseline = content
         draft = content
         savedModification = modification
@@ -628,14 +673,17 @@ final class NotesModel: ObservableObject {
     }
 
     func loadRelationships() {
-        guard let selected else { return }
-        refreshBacklinks(for: selected)
-        loadRelatedNotes(for: selected)
+        if let selected {
+            refreshBacklinks(for: selected)
+            loadRelatedNotes(for: selected)
+        } else if let previewPDF {
+            refreshBacklinks(for: previewPDF)
+        }
     }
 
     func loadBacklinks() {
-        guard let selected else { return }
-        refreshBacklinks(for: selected)
+        guard let target = selected ?? previewPDF else { return }
+        refreshBacklinks(for: target)
     }
 
     private func loadRelatedNotes(for note: URL) {
@@ -692,7 +740,8 @@ final class NotesModel: ObservableObject {
             let found = WorkspaceBacklinks.find(target: note, root: root, files: snapshot)
             guard !Task.isCancelled, let self else { return }
             await MainActor.run {
-                guard self.selected == note, self.root == root else { return }
+                guard (self.selected == note || self.previewPDF == note),
+                      self.root == root else { return }
                 self.backlinks = found
                 self.loadingBacklinks = false
             }
@@ -843,11 +892,14 @@ final class NotesModel: ObservableObject {
             return true
         }
         guard let root, let selected,
-              let resolved = WorkspaceFiles.resolveKnowledgeTarget(value, from: selected, in: root) else {
+              let resolved = WorkspaceFiles.resolveLinkedTarget(value, from: selected, in: root) else {
             message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
             return false
         }
-        openFile(resolved)
+        let page = resolved.pathExtension.lowercased() == "pdf"
+            ? URL(string: value).flatMap(PDFPageReference.page(from:))
+            : nil
+        openFile(resolved, pdfPage: page)
         return true
     }
 
@@ -862,7 +914,10 @@ final class NotesModel: ObservableObject {
             }
         }
         guard FileManager.default.fileExists(atPath: resolved.path) else { return false }
-        openFile(resolved)
+        let page = resolved.pathExtension.lowercased() == "pdf"
+            ? PDFPageReference.page(from: url)
+            : nil
+        openFile(resolved, pdfPage: page)
         return true
     }
 

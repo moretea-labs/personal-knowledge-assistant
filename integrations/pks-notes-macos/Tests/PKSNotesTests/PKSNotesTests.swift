@@ -1216,3 +1216,96 @@ extension PKSNotesTests {
         XCTAssertTrue(fm.fileExists(atPath: parent.path))
     }
 }
+
+extension PKSNotesTests {
+    func testPDFReadingPositionIsPerDocumentAndClamped() throws {
+        let suite = "PKSNotesPDFPositionTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+        }
+
+        let first = URL(fileURLWithPath: "/tmp/a.pdf")
+        let second = URL(fileURLWithPath: "/tmp/b.pdf")
+
+        PDFReadingPositionStore.save(pageIndex: 7, for: first, defaults: defaults)
+        PDFReadingPositionStore.save(pageIndex: 2, for: second, defaults: defaults)
+
+        XCTAssertEqual(PDFReadingPositionStore.pageIndex(for: first, pageCount: 20, defaults: defaults), 7)
+        XCTAssertEqual(PDFReadingPositionStore.pageIndex(for: second, pageCount: 20, defaults: defaults), 2)
+        XCTAssertEqual(PDFReadingPositionStore.pageIndex(for: first, pageCount: 4, defaults: defaults), 3)
+        XCTAssertNil(PDFReadingPositionStore.pageIndex(for: first, pageCount: 0, defaults: defaults))
+    }
+
+    func testPDFPageReferenceIsPortableAndKeepsPageAnchor() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = root.appendingPathComponent("资料", isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let pdf = folder.appendingPathComponent("Study #1.pdf")
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+
+        let markdown = try XCTUnwrap(PDFPageReference.markdown(for: pdf, page: 7, root: root))
+        XCTAssertTrue(markdown.contains("Study #1.pdf · p. 7"))
+        XCTAssertTrue(markdown.contains("Study%20%231.pdf#page=7"))
+
+        let link = try XCTUnwrap(URL(string: "/%E8%B5%84%E6%96%99/Study%20%231.pdf#page=7"))
+        XCTAssertEqual(PDFPageReference.page(from: link), 7)
+        XCTAssertEqual(
+            WorkspaceFiles.resolve(link, from: root.appendingPathComponent("Note.md"), in: root),
+            pdf.standardizedFileURL
+        )
+    }
+
+    func testBacklinksTreatPDFPageLinksAsTheSameWorkspaceFile() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let pdf = root.appendingPathComponent("Book.pdf")
+        let note = root.appendingPathComponent("Reading.md")
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+        try "# Reading\n[Book · p. 3](/Book.pdf#page=3)\n[Again](/Book.pdf#page=9)".write(
+            to: note,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let found = WorkspaceBacklinks.find(target: pdf, root: root, files: WorkspaceFiles.tree(in: root))
+        XCTAssertEqual(found, [NoteBacklink(source: note.standardizedFileURL, count: 2)])
+    }
+
+    @MainActor
+    func testInternalPDFLinkOpensRequestedPageThroughSingleFileAuthority() async throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = root.appendingPathComponent("Note.md")
+        let pdf = root.appendingPathComponent("Book.pdf")
+        try "# Note".write(to: note, atomically: true, encoding: .utf8)
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+
+        let model = NotesModel()
+        model.openWorkspace(root)
+        model.openNote(note)
+        await waitForNote(model, note)
+
+        let link = try XCTUnwrap(URL(string: "/Book.pdf#page=7"))
+        XCTAssertTrue(model.openInternalLink(link))
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        XCTAssertEqual(model.previewPDFPage, 7)
+        XCTAssertNil(model.selected)
+    }
+}
