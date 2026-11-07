@@ -65,7 +65,31 @@ struct NoteItem: Identifiable, Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(url) }
 }
 
+struct WorkspaceFileStamp: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+    let size: Int64
+    let modificationSeconds: Int64
+    let modificationNanoseconds: Int64
+    let changeSeconds: Int64
+    let changeNanoseconds: Int64
+}
+
 enum WorkspaceFiles {
+    static func fileStamp(_ url: URL) -> WorkspaceFileStamp? {
+        var info = Darwin.stat()
+        guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { return nil }
+        return WorkspaceFileStamp(
+            device: UInt64(info.st_dev),
+            inode: UInt64(info.st_ino),
+            size: Int64(info.st_size),
+            modificationSeconds: Int64(info.st_mtimespec.tv_sec),
+            modificationNanoseconds: Int64(info.st_mtimespec.tv_nsec),
+            changeSeconds: Int64(info.st_ctimespec.tv_sec),
+            changeNanoseconds: Int64(info.st_ctimespec.tv_nsec)
+        )
+    }
+
     static func defaultVault() -> URL {
         let root = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/学习笔记管理", isDirectory: true)
@@ -437,10 +461,10 @@ final class NotesModel: ObservableObject {
 
     private struct CachedNote {
         let content: String
-        let modification: Date?
+        let stamp: WorkspaceFileStamp
     }
 
-    private var savedModification: Date?
+    private var savedFileStamp: WorkspaceFileStamp?
     private var autoSaveTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var noteLoadTask: Task<Void, Never>?
@@ -914,15 +938,16 @@ final class NotesModel: ObservableObject {
 
         // iCloud File Provider can block while hydrating files. Never read Markdown
         // on the main actor; only publish a successful, current request. A small
-        // modification-date-validated cache makes recently visited notes reopen
-        // without hydrating/decoding the same contents again.
+        // POSIX-stamp-validated cache avoids decoding unchanged contents and also
+        // detects atomic replacement / same-mtime external writes.
         let cached = noteCache[url.path]
         noteLoadTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
-                let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-                let modification = attrs[.modificationDate] as? Date
+                guard let stamp = WorkspaceFiles.fileStamp(url) else {
+                    throw CocoaError(.fileReadNoSuchFile)
+                }
                 let content: String
-                if let cached, cached.modification == modification {
+                if let cached, cached.stamp == stamp {
                     content = cached.content
                 } else {
                     content = try String(contentsOf: url, encoding: .utf8)
@@ -932,7 +957,7 @@ final class NotesModel: ObservableObject {
                     url,
                     identity: identity,
                     content: content,
-                    modification: modification,
+                    stamp: stamp,
                     preservePDFPreview: preservePDFPreview
                 )
             } catch {
@@ -944,7 +969,7 @@ final class NotesModel: ObservableObject {
     }
 
     private func finishOpeningNote(_ url: URL, identity: UUID, content: String,
-                                   modification: Date?, preservePDFPreview: Bool = false) {
+                                   stamp: WorkspaceFileStamp, preservePDFPreview: Bool = false) {
         guard requestedNote == url, loadIdentity == identity else { return }
         selected = url
         if !preservePDFPreview {
@@ -953,8 +978,8 @@ final class NotesModel: ObservableObject {
         }
         baseline = content
         draft = content
-        savedModification = modification
-        cacheNote(url, content: content, modification: modification)
+        savedFileStamp = stamp
+        cacheNote(url, content: content, stamp: stamp)
         externalBody = nil
         externalTitle = nil
         previewSource = nil
@@ -979,9 +1004,9 @@ final class NotesModel: ObservableObject {
         message = nil
     }
 
-    private func cacheNote(_ url: URL, content: String, modification: Date?) {
+    private func cacheNote(_ url: URL, content: String, stamp: WorkspaceFileStamp) {
         let key = url.path
-        noteCache[key] = CachedNote(content: content, modification: modification)
+        noteCache[key] = CachedNote(content: content, stamp: stamp)
         noteCacheOrder.removeAll { $0 == key }
         noteCacheOrder.append(key)
         while noteCacheOrder.count > 10 {
@@ -1096,19 +1121,20 @@ final class NotesModel: ObservableObject {
               WorkspaceFiles.contains(selected, in: root) else { return }
         defer { autoSavePending = false }
         do {
-            let attrs = try FileManager.default.attributesOfItem(atPath: selected.path)
-            let actual = attrs[.modificationDate] as? Date
-            // Avoid overwriting iCloud or other editor changes without review.
-            guard actual == savedModification,
-                  try String(contentsOf: selected, encoding: .utf8) == baseline else {
+            // POSIX ctime/inode/size/mtime together detect ordinary writes and atomic
+            // replacement without rereading the whole Markdown file on every autosave.
+            guard let actualStamp = WorkspaceFiles.fileStamp(selected),
+                  actualStamp == savedFileStamp else {
                 message = AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
                 return
             }
             try draft.write(to: selected, atomically: true, encoding: .utf8)
             baseline = draft
-            let updated = try FileManager.default.attributesOfItem(atPath: selected.path)
-            savedModification = updated[.modificationDate] as? Date
-            cacheNote(selected, content: draft, modification: savedModification)
+            guard let updatedStamp = WorkspaceFiles.fileStamp(selected) else {
+                throw CocoaError(.fileReadUnknown)
+            }
+            savedFileStamp = updatedStamp
+            cacheNote(selected, content: draft, stamp: updatedStamp)
             // Successful saves are silent. Existing notices are user-dismissed;
             // localized presentation text is never used as save-state authority.
         } catch {
@@ -1419,7 +1445,7 @@ final class NotesModel: ObservableObject {
                 previewPDF = nil
                 draft = ""
                 baseline = ""
-                savedModification = nil
+                savedFileStamp = nil
                 externalTitle = nil
                 externalBody = nil
                 previewSource = nil

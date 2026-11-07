@@ -1863,3 +1863,85 @@ extension PKSNotesTests {
         XCTAssertFalse(WorkspaceFiles.isDataless(source))
     }
 }
+
+
+extension PKSNotesTests {
+    @MainActor
+    func testSaveRejectsExternalReplacementEvenWhenMtimeIsRestored() async throws {
+        let defaults = UserDefaults.standard
+        let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let priorWorkspace { defaults.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = root.appendingPathComponent("Conflict.md")
+        try "# Original".write(to: note, atomically: true, encoding: .utf8)
+        let originalModification = try XCTUnwrap(
+            try fm.attributesOfItem(atPath: note.path)[.modificationDate] as? Date
+        )
+        let originalStamp = try XCTUnwrap(WorkspaceFiles.fileStamp(note))
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(note)
+        await waitForNote(model, note)
+        XCTAssertEqual(model.draft, "# Original")
+
+        model.draft = "# Mine"
+
+        // Simulate another editor replacing the file, then restoring the old mtime.
+        // The POSIX stamp must still change through inode/ctime and block our save.
+        try "# External".write(to: note, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.modificationDate: originalModification], ofItemAtPath: note.path)
+        let externalStamp = try XCTUnwrap(WorkspaceFiles.fileStamp(note))
+        XCTAssertNotEqual(externalStamp, originalStamp)
+
+        model.save()
+
+        XCTAssertTrue(model.isDirty)
+        XCTAssertNotNil(model.message)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "# External")
+    }
+
+    @MainActor
+    func testNormalSaveRefreshesFileStampAndReopenCache() async throws {
+        let defaults = UserDefaults.standard
+        let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let priorWorkspace { defaults.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let first = root.appendingPathComponent("First.md")
+        let second = root.appendingPathComponent("Second.md")
+        try "# First".write(to: first, atomically: true, encoding: .utf8)
+        try "# Second".write(to: second, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(first)
+        await waitForNote(model, first)
+
+        model.draft = "# First\nSaved"
+        model.save()
+        XCTAssertFalse(model.isDirty)
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "# First\nSaved")
+
+        model.openNote(second)
+        await waitForNote(model, second)
+        model.openNote(first)
+        await waitForNote(model, first)
+        XCTAssertEqual(model.draft, "# First\nSaved")
+    }
+}
