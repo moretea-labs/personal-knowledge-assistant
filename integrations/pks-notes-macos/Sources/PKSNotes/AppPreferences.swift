@@ -122,6 +122,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "No links from this note.": "此笔记没有链接到其他笔记。",
         "Finding notes that link here…": "正在查找链接到此处的笔记…",
         "No backlinks in this workspace.": "此工作区没有反向链接。",
+        "Cloud-only notes skipped: %d": "已跳过仅云端笔记：%d",
         "Finding related knowledge…": "正在查找相关知识…",
         "No related PKS results.": "没有相关 PKS 结果。",
         "Saving Markdown automatically…": "正在自动保存 Markdown…",

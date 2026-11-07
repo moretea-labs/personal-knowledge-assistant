@@ -14,6 +14,9 @@ struct MindMapActionAvailability: Equatable {
 }
 
 enum MindMapOutline {
+    private static let wikiLinkRegex = try! NSRegularExpression(pattern: #"\[\[([^\]\n]+)\]\]"#)
+    private static let markdownLinkRegex = try! NSRegularExpression(pattern: #"\[([^\]\n]+)\]\(([^)\n]+)\)"#)
+
     private struct EditContext {
         let parsed: [MindMapNode]
         let position: Int
@@ -251,11 +254,9 @@ struct MindMapLink: Equatable {
 
 extension MindMapOutline {
     static func links(in title: String) -> [MindMapLink] {
-        let patterns = [#"\[\[([^\]\n]+)\]\]"#, #"\[([^\]\n]+)\]\(([^)\n]+)\)"#]
         var links: [MindMapLink] = []
         let range = NSRange(title.startIndex..<title.endIndex, in: title)
-        for (index, pattern) in patterns.enumerated() {
-            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+        for (index, regex) in [wikiLinkRegex, markdownLinkRegex].enumerated() {
             for match in regex.matches(in: title, range: range) {
                 guard let labelRange = Range(match.range(at: 1), in: title) else { continue }
                 let raw = String(title[labelRange])

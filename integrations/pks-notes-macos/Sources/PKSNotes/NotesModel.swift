@@ -191,7 +191,8 @@ enum WorkspaceFiles {
         _ rawTarget: String,
         from note: URL,
         in root: URL,
-        candidates suppliedCandidates: [URL]? = nil
+        candidates suppliedCandidates: [URL]? = nil,
+        candidateBasenames suppliedCandidateBasenames: [String: [URL]]? = nil
     ) -> URL? {
         let trimmed = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -222,7 +223,7 @@ enum WorkspaceFiles {
         let candidates = suppliedCandidates ?? flatFiles(in: root)
             .filter(\.isMarkdown)
             .map { $0.url.standardizedFileURL }
-        let matches = candidates.filter {
+        let matches = suppliedCandidateBasenames?[wanted] ?? candidates.filter {
             $0.deletingPathExtension().lastPathComponent == wanted
         }
         return matches.count == 1 ? matches[0].standardizedFileURL : nil
@@ -234,7 +235,8 @@ enum WorkspaceFiles {
         _ rawTarget: String,
         from note: URL,
         in root: URL,
-        candidates: [URL]? = nil
+        candidates: [URL]? = nil,
+        candidateBasenames: [String: [URL]]? = nil
     ) -> URL? {
         let value = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
@@ -243,7 +245,8 @@ enum WorkspaceFiles {
             value,
             from: note,
             in: root,
-            candidates: candidates
+            candidates: candidates,
+            candidateBasenames: candidateBasenames
         ) {
             return markdown
         }
@@ -296,6 +299,12 @@ enum WorkspaceFiles {
         return nil
     }
 
+    static func isDataless(_ url: URL) -> Bool {
+        var info = Darwin.stat()
+        guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { return false }
+        return (info.st_flags & UInt32(SF_DATALESS)) != 0
+    }
+
     static func safeNewNoteName(_ name: String) -> String? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != ".", trimmed != "..",
@@ -314,6 +323,11 @@ struct NoteBacklink: Identifiable, Equatable {
     var title: String { source.deletingPathExtension().lastPathComponent }
 }
 
+struct BacklinkScanResult: Equatable {
+    let backlinks: [NoteBacklink]
+    let skippedDatalessFiles: Int
+}
+
 enum WorkspaceBacklinks {
     static func markdownFiles(_ items: [NoteItem]) -> [URL] {
         var result: [URL] = []
@@ -330,29 +344,44 @@ enum WorkspaceBacklinks {
         return result
     }
 
-    static func find(target: URL, root: URL, files: [NoteItem]) -> [NoteBacklink] {
+    static func scan(target: URL, root: URL, files: [NoteItem]) -> BacklinkScanResult {
         let target = target.standardizedFileURL
         let candidates = markdownFiles(files)
+        let candidateBasenames = Dictionary(grouping: candidates) {
+            $0.deletingPathExtension().lastPathComponent
+        }
         var result: [NoteBacklink] = []
+        var skippedDatalessFiles = 0
 
         for source in candidates where source != target {
+            if WorkspaceFiles.isDataless(source) {
+                skippedDatalessFiles += 1
+                continue
+            }
             guard let content = try? String(contentsOf: source, encoding: .utf8) else { continue }
             var count = 0
-            for line in content.components(separatedBy: .newlines) {
-                for link in MindMapOutline.links(in: line) {
-                    guard let resolved = WorkspaceFiles.resolveLinkedTarget(
-                        link.target, from: source, in: root, candidates: candidates
-                    ) else { continue }
-                    if resolved.standardizedFileURL == target { count += 1 }
-                }
+            for link in MindMapOutline.links(in: content) {
+                guard let resolved = WorkspaceFiles.resolveLinkedTarget(
+                    link.target,
+                    from: source,
+                    in: root,
+                    candidates: candidates,
+                    candidateBasenames: candidateBasenames
+                ) else { continue }
+                if resolved.standardizedFileURL == target { count += 1 }
             }
             if count > 0 { result.append(.init(source: source, count: count)) }
         }
 
-        return result.sorted {
+        let backlinks = result.sorted {
             if $0.count != $1.count { return $0.count > $1.count }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
+        return .init(backlinks: backlinks, skippedDatalessFiles: skippedDatalessFiles)
+    }
+
+    static func find(target: URL, root: URL, files: [NoteItem]) -> [NoteBacklink] {
+        scan(target: target, root: root, files: files).backlinks
     }
 }
 
@@ -394,6 +423,7 @@ final class NotesModel: ObservableObject {
     @Published private(set) var searchFailed = false
     @Published private(set) var backlinks: [NoteBacklink] = []
     @Published private(set) var loadingBacklinks = false
+    @Published private(set) var backlinkSkippedCloudFiles = 0
     @Published private(set) var relatedHits: [SearchHit] = []
     @Published private(set) var loadingRelated = false
     @Published private(set) var recentNotes: [URL] = []
@@ -940,6 +970,7 @@ final class NotesModel: ObservableObject {
         }
         backlinkTask?.cancel()
         backlinks = []
+        backlinkSkippedCloudFiles = 0
         loadingBacklinks = false
         relatedTask?.cancel()
         relatedHits = []
@@ -1030,6 +1061,7 @@ final class NotesModel: ObservableObject {
         guard let root else { return }
         backlinkTask?.cancel()
         backlinks = []
+        backlinkSkippedCloudFiles = 0
         loadingBacklinks = true
         backlinkTask = Task { [weak self] in
             guard let self else { return }
@@ -1041,13 +1073,14 @@ final class NotesModel: ObservableObject {
             }
             guard !Task.isCancelled, self.root == root else { return }
 
-            let found = await Task.detached(priority: .utility) {
-                WorkspaceBacklinks.find(target: note, root: root, files: snapshot)
+            let scan = await Task.detached(priority: .utility) {
+                WorkspaceBacklinks.scan(target: note, root: root, files: snapshot)
             }.value
             guard !Task.isCancelled,
                   (self.selected == note || self.previewPDF == note),
                   self.root == root else { return }
-            self.backlinks = found
+            self.backlinks = scan.backlinks
+            self.backlinkSkippedCloudFiles = scan.skippedDatalessFiles
             self.loadingBacklinks = false
         }
     }

@@ -1824,3 +1824,42 @@ extension PKSNotesTests {
         XCTAssertTrue(content.contains("> Important fact\n> Second line"))
     }
 }
+
+
+extension PKSNotesTests {
+    func testBacklinkScanResultAndBasenameLookupStayDerived() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let nested = root.appendingPathComponent("Nested", isDirectory: true)
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let current = root.appendingPathComponent("Current.md")
+        let target = nested.appendingPathComponent("Target.md")
+        let source = root.appendingPathComponent("Source.md")
+        try "# Current".write(to: current, atomically: true, encoding: .utf8)
+        try "# Target".write(to: target, atomically: true, encoding: .utf8)
+        try "[[Target]]\n[again](Nested/Target.md)".write(to: source, atomically: true, encoding: .utf8)
+
+        let tree = WorkspaceFiles.tree(in: root)
+        let candidates = WorkspaceBacklinks.markdownFiles(tree)
+        let basenames = Dictionary(grouping: candidates) {
+            $0.deletingPathExtension().lastPathComponent
+        }
+        XCTAssertEqual(
+            WorkspaceFiles.resolveKnowledgeTarget(
+                "Target",
+                from: current,
+                in: root,
+                candidates: candidates,
+                candidateBasenames: basenames
+            ),
+            target.standardizedFileURL
+        )
+
+        let scan = WorkspaceBacklinks.scan(target: target, root: root, files: tree)
+        XCTAssertEqual(scan.backlinks, [NoteBacklink(source: source.standardizedFileURL, count: 2)])
+        XCTAssertEqual(scan.skippedDatalessFiles, 0)
+        XCTAssertFalse(WorkspaceFiles.isDataless(source))
+    }
+}

@@ -264,3 +264,24 @@ extension MindMapOutlineTests {
         )
     }
 }
+
+
+extension MindMapOutlineTests {
+    func testLinkParserHandlesWholeMultilineDocumentInOnePass() {
+        let source = """
+        # Project
+        [[Alpha|A]]
+        prose
+        [Beta](Nested/Beta.md)
+        [[Gamma]]
+        """
+        XCTAssertEqual(
+            MindMapOutline.links(in: source),
+            [
+                .init(label: "A", target: "Alpha"),
+                .init(label: "Gamma", target: "Gamma"),
+                .init(label: "Beta", target: "Nested/Beta.md")
+            ]
+        )
+    }
+}

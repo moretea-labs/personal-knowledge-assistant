@@ -518,6 +518,12 @@ struct NotesWindow: View {
                                         }
                                     }
                                 }
+                                if model.backlinkSkippedCloudFiles > 0 {
+                                    relationshipEmpty(String(
+                                        format: language.text("Cloud-only notes skipped: %d"),
+                                        model.backlinkSkippedCloudFiles
+                                    ))
+                                }
 
                                 if model.previewPDF == nil {
                                     Divider().padding(.vertical, 4)
