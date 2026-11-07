@@ -219,8 +219,11 @@ enum PDFReadingPositionStore {
         for url: URL,
         defaults: UserDefaults = .standard
     ) {
+        let key = url.standardizedFileURL.path
+        let normalized = max(0, pageIndex)
         var values = defaults.dictionary(forKey: defaultsKey) ?? [:]
-        values[url.standardizedFileURL.path] = max(0, pageIndex)
+        if values[key] as? Int == normalized { return }
+        values[key] = normalized
         if values.count > maxEntries {
             let keep = values.keys.sorted().suffix(maxEntries)
             values = Dictionary(uniqueKeysWithValues: keep.compactMap { key in
@@ -517,25 +520,38 @@ final class PDFReaderController: ObservableObject {
         syncFromView()
     }
 
-    private func syncFromView() {
-        guard let view = pdfView else { return }
-        if let document, let page = view.currentPage {
-            currentPageIndex = max(0, document.index(for: page))
-            if let url = documentURL {
-                PDFReadingPositionStore.save(pageIndex: currentPageIndex, for: url)
-            }
+    private func syncPageFromView() {
+        guard let view = pdfView, let document, let page = view.currentPage else { return }
+        let pageIndex = max(0, document.index(for: page))
+        if currentPageIndex != pageIndex {
+            currentPageIndex = pageIndex
         }
-        scalePercent = max(10, Int((view.scaleFactor * 100).rounded()))
+        if let url = documentURL {
+            PDFReadingPositionStore.save(pageIndex: pageIndex, for: url)
+        }
+    }
+
+    private func syncScaleFromView() {
+        guard let view = pdfView else { return }
+        let percent = max(10, Int((view.scaleFactor * 100).rounded()))
+        if scalePercent != percent {
+            scalePercent = percent
+        }
+    }
+
+    private func syncFromView() {
+        syncPageFromView()
+        syncScaleFromView()
     }
 
     private func installViewObservers(for view: PDFView) {
         let center = NotificationCenter.default
         viewObservers = [
             center.addObserver(forName: .PDFViewPageChanged, object: view, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.syncFromView() }
+                Task { @MainActor in self?.syncPageFromView() }
             },
             center.addObserver(forName: .PDFViewScaleChanged, object: view, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.syncFromView() }
+                Task { @MainActor in self?.syncScaleFromView() }
             }
         ]
     }
