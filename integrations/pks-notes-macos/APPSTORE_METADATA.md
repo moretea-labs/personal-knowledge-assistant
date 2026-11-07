@@ -10,6 +10,10 @@ This file is the submission-copy authority for the first macOS App Store release
 - App price: Free
 - Pro model: one Non-Consumable In-App Purchase
 - Pro Product ID: `com.moretea.pks.notes.pro`
+- App Store Connect App ID: `6831932674`
+- App Store Connect IAP Apple ID: `6831933705`
+- App Store Connect SKU: `pks-notes-mac-2026`
+- First macOS version: `1.0 (1)`
 - Sign-in required: No
 
 ## Required external values before submission
@@ -22,7 +26,7 @@ These values must be real, public, and verified before creating the final submis
 - App Review contact email: **REQUIRED**
 - App Review contact phone in international format: **REQUIRED**
 - Copyright owner/year: **REQUIRED**
-- Final App Store Connect SKU: **REQUIRED before app record creation**
+- Final App Store Connect SKU: `pks-notes-mac-2026` — **VERIFIED**
 
 Do not invent placeholders in App Store Connect.
 
