@@ -11,6 +11,7 @@ struct MindMapCanvas: View {
     @State private var selectedID: Int?
     @State private var renameTitle = ""
     @State private var editingNodeID: Int?
+    @State private var editingCreatedNodeID: Int?
     @State private var interchangeError: String?
     @State private var branchDeleteCandidateID: Int?
     @State private var collapsed: Set<Int> = []
@@ -194,7 +195,7 @@ struct MindMapCanvas: View {
                 Image(systemName: "minus.magnifyingglass")
             }
             .help(language.text("Zoom out"))
-            Text("(Int(zoom * 100))%")
+            Text("\(Int((zoom * 100).rounded()))%")
                 .font(.caption.monospacedDigit())
                 .frame(width: 45)
             Button { zoom = clampedZoom(zoom + 0.15) } label: {
@@ -400,7 +401,7 @@ struct MindMapCanvas: View {
               let updated = MindMapOutline.addChild(in: source, parentID: id) else { return }
         source = updated
         collapsed.removeAll()
-        startEditingNode(id + 1, title: "New idea")
+        startEditingNode(id + 1, title: "New idea", created: true)
     }
 
     private func addSibling() {
@@ -416,7 +417,7 @@ struct MindMapCanvas: View {
         let isList = ["- ", "* ", "+ "].contains(where: { trimmedLine.hasPrefix($0) })
         source = updated
         collapsed.removeAll()
-        startEditingNode(isList ? siblingLine : id + 1, title: "New idea")
+        startEditingNode(isList ? siblingLine : id + 1, title: "New idea", created: true)
     }
 
     private func deleteSelectedLeaf() {
@@ -578,21 +579,33 @@ struct MindMapCanvas: View {
         startEditingNode(node.id, title: node.title)
     }
 
-    private func startEditingNode(_ id: Int, title: String) {
+    private func startEditingNode(_ id: Int, title: String, created: Bool = false) {
         selectedID = id
         renameTitle = title
         editingNodeID = id
+        editingCreatedNodeID = created ? id : nil
         canvasFocused = false
         titleEditorFocused = true
     }
 
     private func finishRename(save: Bool) {
         guard let id = editingNodeID else { return }
-        if save, let updated = MindMapOutline.rename(in: source, nodeID: id, to: renameTitle) {
+        if save {
+            // Invalid titles stay in the inline editor instead of silently
+            // committing the placeholder/original text.
+            guard let updated = MindMapOutline.rename(in: source, nodeID: id, to: renameTitle) else {
+                return
+            }
             source = updated
+        } else if editingCreatedNodeID == id,
+                  let updated = MindMapOutline.deleteLeaf(in: source, nodeID: id) {
+            // Add Child/Sibling inserts a safe leaf before inline naming. Cancel
+            // must restore the original Markdown rather than keep "New idea".
+            source = updated
+            selectedID = nodes.first?.id
         }
-        // Empty/invalid edits leave the original Markdown node unchanged.
         editingNodeID = nil
+        editingCreatedNodeID = nil
         titleEditorFocused = false
         canvasFocused = true
     }

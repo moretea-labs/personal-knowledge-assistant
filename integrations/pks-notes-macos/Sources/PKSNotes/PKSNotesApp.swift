@@ -192,7 +192,6 @@ struct NotesWindow: View {
     @State private var allOpenableFiles: [NoteItem] = []
     @State private var showingQuickOpen = false
     @State private var showingBacklinks = false
-    @State private var showingOutline = false
     @State private var quickOpenQuery = ""
     @State private var quickOpenIndex = 0
 
@@ -275,18 +274,23 @@ struct NotesWindow: View {
                     .accessibilityIdentifier("pks-mind-map-toggle")
                 }
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
-                    Button {
-                        showingOutline.toggle()
+                    Menu {
+                        ForEach(outlineHeadings) { heading in
+                            Button {
+                                jumpToOutlineHeading(heading)
+                            } label: {
+                                Label(heading.title, systemImage: "number")
+                            }
+                            .accessibilityIdentifier("pks-outline-heading-\(heading.id)")
+                        }
                     } label: {
                         toolbarSymbol("list.bullet.indent")
                     }
-                    .buttonStyle(.plain)
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
                     .disabled(outlineHeadings.isEmpty)
                     .help(language.text("Document Outline"))
                     .accessibilityIdentifier("pks-outline-menu")
-                    .popover(isPresented: $showingOutline, arrowEdge: .bottom) {
-                        outlinePopover
-                    }
 
                     Button {
                         model.toggleFavorite()
@@ -752,7 +756,7 @@ struct NotesWindow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier(tab == .notes ? "pks-sidebar-notes" : "pks-sidebar-search")
+        .accessibilityIdentifier("pks-sidebar-\(tab.rawValue.lowercased())")
     }
 
     private func fileTreeRow(_ row: NoteTreePresentation.Row) -> some View {
@@ -1364,61 +1368,7 @@ struct NotesWindow: View {
         }
     }
 
-    private var outlinePopover: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(language.text("Document Outline"))
-                        .font(.headline)
-                    Spacer()
-                    Text("\(outlineHeadings.count)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-
-                Divider()
-
-                if outlineHeadings.isEmpty {
-                    Text(language.text("No headings in this note."))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(14)
-                } else {
-                    ForEach(outlineHeadings) { heading in
-                        Button {
-                            jumpToOutlineHeading(heading)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "number")
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundStyle(.tertiary)
-                                    .frame(width: 14)
-                                Text(heading.title)
-                                    .font(.system(size: 12.5, weight: heading.level <= 2 ? .semibold : .regular))
-                                    .lineLimit(2)
-                                Spacer(minLength: 6)
-                                Text("H\(heading.level)")
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .padding(.leading, CGFloat(max(0, heading.level - 1)) * 10)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("pks-outline-heading-\(heading.id)")
-                    }
-                }
-            }
-        }
-        .frame(width: 320, height: min(430, CGFloat(94 + outlineHeadings.count * 38)))
-    }
-
     private func jumpToOutlineHeading(_ heading: MarkdownOutlineHeading) {
-        showingOutline = false
         showingMindMap = false
         mode = .edit
         Task { @MainActor in
