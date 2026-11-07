@@ -1332,12 +1332,18 @@ extension PKSNotesTests {
         model.openWorkspace(root)
         model.openFile(pdf, pdfPage: 4)
 
-        XCTAssertTrue(model.appendPDFReference(pdf: pdf, page: 4, to: note))
+        XCTAssertTrue(model.appendPDFReference(
+            pdf: pdf,
+            page: 4,
+            selectedText: "Important fact\nSecond line",
+            to: note
+        ))
         XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
         XCTAssertEqual(model.previewPDFPage, 4)
         XCTAssertNil(model.selected)
 
         let content = try String(contentsOf: note, encoding: .utf8)
         XCTAssertTrue(content.contains("[Book.pdf · p. 4](/Book.pdf#page=4)"))
+        XCTAssertTrue(content.contains("> Important fact\n> Second line"))
     }
 }

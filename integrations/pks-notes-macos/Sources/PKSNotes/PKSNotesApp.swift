@@ -275,6 +275,7 @@ private struct PreviewWarmupKey: Hashable {
 private struct PDFCaptureRequest: Equatable {
     let pdf: URL
     let page: Int
+    let selectedText: String?
 }
 
 struct NotesWindow: View {
@@ -768,8 +769,8 @@ struct NotesWindow: View {
         showingQuickOpen = true
     }
 
-    private func beginPDFCapture(pdf: URL, page: Int) {
-        pdfCaptureRequest = PDFCaptureRequest(pdf: pdf, page: page)
+    private func beginPDFCapture(pdf: URL, page: Int, selectedText: String?) {
+        pdfCaptureRequest = PDFCaptureRequest(pdf: pdf, page: page, selectedText: selectedText)
         quickOpenQuery = ""
         quickOpenIndex = 0
         showingQuickOpen = true
@@ -777,7 +778,12 @@ struct NotesWindow: View {
 
     private func openQuickMatch(_ item: NoteItem) {
         if let capture = pdfCaptureRequest {
-            if model.appendPDFReference(pdf: capture.pdf, page: capture.page, to: item.url) {
+            if model.appendPDFReference(
+                pdf: capture.pdf,
+                page: capture.page,
+                selectedText: capture.selectedText,
+                to: item.url
+            ) {
                 pdfCaptureRequest = nil
                 showingQuickOpen = false
             }
@@ -790,12 +796,17 @@ struct NotesWindow: View {
     private func createNoteFromPDFCapture() {
         guard let capture = pdfCaptureRequest,
               let root = model.root,
-              let reference = PDFPageReference.markdown(for: capture.pdf, page: capture.page, root: root)
+              let snippet = PDFPageReference.noteSnippet(
+                for: capture.pdf,
+                page: capture.page,
+                root: root,
+                selectedText: capture.selectedText
+              )
         else { return }
 
         pdfCaptureRequest = nil
         showingQuickOpen = false
-        guard let created = model.newNote(initialContent: "\(reference)\n") else { return }
+        guard let created = model.newNote(initialContent: "\(snippet)\n") else { return }
         pendingEditorFocus = created
         mode = .edit
     }
@@ -1772,7 +1783,9 @@ struct NotesWindow: View {
                 url: url,
                 root: model.root,
                 requestedPage: model.previewPDFPage,
-                onAddPageToNote: { page in beginPDFCapture(pdf: url, page: page) }
+                onAddPageToNote: { page, selectedText in
+                    beginPDFCapture(pdf: url, page: page, selectedText: selectedText)
+                }
             )
         } else if showingMindMap && model.selected != nil && model.externalBody == nil {
             MindMapCanvas(

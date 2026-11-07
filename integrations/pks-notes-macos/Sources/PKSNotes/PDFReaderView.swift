@@ -32,6 +32,24 @@ enum PDFPageReference {
             .replacingOccurrences(of: "]", with: "\\]")
         return "[\(label) · p. \(page)](/\(encoded)#page=\(page))"
     }
+
+    static func noteSnippet(
+        for url: URL,
+        page: Int,
+        root: URL,
+        selectedText: String? = nil
+    ) -> String? {
+        guard let reference = markdown(for: url, page: page, root: root) else { return nil }
+        guard let selectedText else { return reference }
+
+        let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return reference }
+        let quote = trimmed
+            .components(separatedBy: .newlines)
+            .map { "> \($0)" }
+            .joined(separator: "\n")
+        return "\(reference)\n\n\(quote)"
+    }
 }
 
 struct PDFOutlineEntry: Identifiable, Equatable {
@@ -162,6 +180,13 @@ final class PDFReaderController: ObservableObject {
         guard pdfView === view else { return }
         removeViewObservers()
         pdfView = nil
+    }
+
+    func selectedText() -> String? {
+        guard let text = pdfView?.currentSelection?.string?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else { return nil }
+        return text
     }
 
     func goPrevious() {
@@ -364,7 +389,7 @@ struct NativePDFPreview: View {
     let url: URL
     let root: URL?
     let requestedPage: Int?
-    let onAddPageToNote: (Int) -> Void
+    let onAddPageToNote: (Int, String?) -> Void
 
     @State private var document: PDFDocument?
     @State private var attemptedURL: URL?
@@ -477,7 +502,10 @@ struct NativePDFPreview: View {
             .accessibilityIdentifier("pks-pdf-next-page")
 
             Button {
-                onAddPageToNote(controller.currentPageIndex + 1)
+                onAddPageToNote(
+                    controller.currentPageIndex + 1,
+                    controller.selectedText()
+                )
             } label: {
                 Image(systemName: "note.text.badge.plus")
             }

@@ -781,12 +781,22 @@ final class NotesModel: ObservableObject {
     /// Appends a portable PDF page reference without replacing the target note.
     /// O_APPEND keeps this capture path additive even if another process writes the file.
     @discardableResult
-    func appendPDFReference(pdf: URL, page: Int, to note: URL) -> Bool {
+    func appendPDFReference(
+        pdf: URL,
+        page: Int,
+        selectedText: String? = nil,
+        to note: URL
+    ) -> Bool {
         guard let root,
               ["md", "markdown"].contains(note.pathExtension.lowercased()),
               WorkspaceFiles.contains(note, in: root),
               WorkspaceFiles.contains(pdf, in: root),
-              let reference = PDFPageReference.markdown(for: pdf, page: page, root: root)
+              let snippet = PDFPageReference.noteSnippet(
+                for: pdf,
+                page: page,
+                root: root,
+                selectedText: selectedText
+              )
         else {
             message = AppLanguage.current.text("Could not add PDF page to note.")
             return false
@@ -809,7 +819,7 @@ final class NotesModel: ObservableObject {
 
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
-            try handle.write(contentsOf: Data("\n\n\(reference)\n".utf8))
+            try handle.write(contentsOf: Data("\n\n\(snippet)\n".utf8))
             try handle.close()
             refresh()
             message = "\(AppLanguage.current.text("Added PDF page to note")): \(note.deletingPathExtension().lastPathComponent)"
