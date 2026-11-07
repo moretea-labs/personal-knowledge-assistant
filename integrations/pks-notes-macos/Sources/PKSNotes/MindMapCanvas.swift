@@ -225,7 +225,7 @@ struct MindMapCanvas: View {
     }
 
     @ViewBuilder
-    private func spatialCanvas(_ layout: MindMapLayoutSnapshot) -> some View {
+    private func spatialCanvas(_ layout: MindMapLayoutSnapshot, exporting: Bool = false) -> some View {
         let byID = Dictionary(uniqueKeysWithValues: layout.placements.map { ($0.id, $0) })
         // Build once per rendered map. Never reparse the full Markdown for each card.
         let allNodes = nodes
@@ -240,7 +240,7 @@ struct MindMapCanvas: View {
             }
 
             ForEach(layout.placements) { placement in
-                nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id))
+                nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id), exporting: exporting)
                     .frame(width: placement.size.width, height: placement.size.height)
                     .position(placement.center)
             }
@@ -271,21 +271,26 @@ struct MindMapCanvas: View {
     }
 
     @ViewBuilder
-    private func nodeCard(_ node: MindMapNode, hasChildren: Bool) -> some View {
+    private func nodeCard(_ node: MindMapNode, hasChildren: Bool, exporting: Bool = false) -> some View {
         HStack(spacing: 9) {
             if hasChildren {
-                Button {
-                    if !collapsed.insert(node.id).inserted { collapsed.remove(node.id) }
-                } label: {
-                    Image(systemName: collapsed.contains(node.id) ? "chevron.right" : "chevron.down")
+                if exporting {
+                    Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .semibold))
+                } else {
+                    Button {
+                        if !collapsed.insert(node.id).inserted { collapsed.remove(node.id) }
+                    } label: {
+                        Image(systemName: collapsed.contains(node.id) ? "chevron.right" : "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             } else {
                 Color.clear.frame(width: 10, height: 10)
             }
 
-            if editingNodeID == node.id {
+            if !exporting && editingNodeID == node.id {
                 TextField(language.text("Node title"), text: $renameTitle)
                     .textFieldStyle(.plain)
                     .font(.system(size: node.depth == 0 ? 16 : 14, weight: .medium))
@@ -321,7 +326,7 @@ struct MindMapCanvas: View {
             }
             Spacer(minLength: 0)
 
-            if let link = MindMapOutline.links(in: node.title).first {
+            if !exporting, let link = MindMapOutline.links(in: node.title).first {
                 Button {
                     openLink(link.target)
                 } label: {
@@ -336,7 +341,7 @@ struct MindMapCanvas: View {
         }
         .padding(.horizontal, 13)
         .background(
-            selectedID == node.id
+            !exporting && selectedID == node.id
                 ? Color.accentColor.opacity(0.16)
                 : (node.depth == 0 ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor)),
             in: RoundedRectangle(cornerRadius: node.depth == 0 ? 14 : 11)
@@ -344,12 +349,12 @@ struct MindMapCanvas: View {
         .overlay {
             RoundedRectangle(cornerRadius: node.depth == 0 ? 14 : 11)
                 .strokeBorder(
-                    dropTargetID == node.id
+                    !exporting && dropTargetID == node.id
                         ? Color.accentColor
-                        : (selectedID == node.id ? Color.accentColor.opacity(0.60) : Color.primary.opacity(0.08)),
+                        : (!exporting && selectedID == node.id ? Color.accentColor.opacity(0.60) : Color.primary.opacity(0.08)),
                     style: StrokeStyle(
-                        lineWidth: dropTargetID == node.id ? 2 : 1,
-                        dash: dropTargetID == node.id ? [5, 3] : []
+                        lineWidth: !exporting && dropTargetID == node.id ? 2 : 1,
+                        dash: !exporting && dropTargetID == node.id ? [5, 3] : []
                     )
                 )
                 .allowsHitTesting(false)
@@ -500,12 +505,14 @@ struct MindMapCanvas: View {
     /// Rendering uses the existing spatial layout and never modifies the source.
     private func exportPNG() {
         guard !nodes.isEmpty else { return }
-        let size = mapLayout.size
+        // Export the complete Markdown outline, independent of the user's collapsed viewport.
+        let layout = MindMapSpatialLayout.layout(nodes)
+        let size = layout.size
         guard size.width * size.height <= 20_000_000 else {
             interchangeError = language.text("This map is too large for a single PNG. Try PDF.")
             return
         }
-        let content = spatialCanvas(mapLayout)
+        let content = spatialCanvas(layout, exporting: true)
             .background(Color.white)
             .environment(\.colorScheme, .light)
         let renderer = ImageRenderer(content: content)
@@ -522,8 +529,9 @@ struct MindMapCanvas: View {
 
     private func exportPDF() {
         guard !nodes.isEmpty else { return }
-        let size = mapLayout.size
-        let content = spatialCanvas(mapLayout)
+        let layout = MindMapSpatialLayout.layout(nodes)
+        let size = layout.size
+        let content = spatialCanvas(layout, exporting: true)
             .background(Color.white)
             .environment(\.colorScheme, .light)
             .frame(width: size.width, height: size.height)
