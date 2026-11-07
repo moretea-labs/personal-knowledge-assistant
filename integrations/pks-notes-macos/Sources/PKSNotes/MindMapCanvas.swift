@@ -203,8 +203,8 @@ struct MindMapCanvas: View {
             .help(language.text("Zoom in"))
 
             Menu {
-                Button(language.text("Import MindNode v9 Package…")) { importMindNode() }
-                Button(language.text("Export MindNode v9 Using Template…")) { exportMindNode() }
+                Button(language.text("Import MindNode Package…")) { importMindNode() }
+                Button(language.text("Export MindNode Using Template…")) { exportMindNode() }
                     .disabled(nodes.isEmpty)
                 Button(language.text("Import OPML from MindNode…")) { importOPML() }
                 Button(language.text("Export OPML for MindNode…")) { exportOPML() }
@@ -217,7 +217,7 @@ struct MindMapCanvas: View {
             } label: {
                 Image(systemName: "square.and.arrow.up.on.square")
             }
-            .help(language.text("MindNode v9 package interchange, OPML, PNG and PDF export"))
+            .help(language.text("MindNode package interchange, OPML, PNG and PDF export"))
             .accessibilityIdentifier("pks-mind-map-interchange")
         }
         .padding(16)
@@ -428,22 +428,22 @@ struct MindMapCanvas: View {
 
     private func exportMindNode() {
         let sourcePanel = NSOpenPanel()
-        sourcePanel.title = "Choose a MindNode v9 Template"
-        sourcePanel.message = "A real MindNode v9 document is needed to preserve native package structure. The template will remain unchanged."
+        sourcePanel.title = language.text("Choose a MindNode Template")
+        sourcePanel.message = language.text("A real MindNode document is needed to preserve native package structure. Verified package versions 7 and 9 are supported; the template remains unchanged.")
         sourcePanel.canChooseDirectories = true
         sourcePanel.canChooseFiles = true
         sourcePanel.allowsMultipleSelection = false
         guard sourcePanel.runModal() == .OK, let template = sourcePanel.url else { return }
 
         let savePanel = NSSavePanel()
-        savePanel.title = "Export Native MindNode v9"
+        savePanel.title = language.text("Export Native MindNode")
         savePanel.directoryURL = template.deletingLastPathComponent()
         savePanel.nameFieldStringValue = "Mind Map.mindnode"
         savePanel.allowedContentTypes = [UTType(filenameExtension: "mindnode", conformingTo: .package) ?? .package]
         guard savePanel.runModal() == .OK, let destination = savePanel.url else { return }
         do {
             try MindNodePackage.exportOutline(source, usingTemplate: template, to: destination)
-            interchangeError = language.text("New MindNode v9 package exported. Check it in MindNode before relying on it; original template and Markdown were not changed.")
+            interchangeError = language.text("New MindNode package exported. The original template and Markdown were not changed.")
         } catch {
             interchangeError = error.localizedDescription
         }

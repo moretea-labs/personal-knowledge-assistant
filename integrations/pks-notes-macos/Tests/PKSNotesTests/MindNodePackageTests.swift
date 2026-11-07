@@ -39,6 +39,30 @@ final class MindNodePackageTests: XCTestCase {
                              as? [String: Any])?["version"] as? Int, 9)
     }
 
+    func testImportsVerifiedVersion7PackageTree() throws {
+        let (base, package) = try fixture(version: 7)
+        defer { try? FileManager.default.removeItem(at: base) }
+        XCTAssertEqual(try MindNodePackage.importOutline(from: package),
+                       "# Project & Roadmap\n- Feature <A>\n  - Grandchild\n")
+    }
+
+    func testUntitledStructuralNodesPromoteVisibleDescendants() throws {
+        let structural: [String: Any] = [
+            "subnodes": [
+                [
+                    "subnodes": [
+                        ["title": ["text": "<p>First visible topic</p>"], "subnodes": []],
+                        ["title": ["text": "<p>Second visible topic</p>"], "subnodes": []]
+                    ]
+                ]
+            ]
+        ]
+        let (base, package) = try fixture(node: structural)
+        defer { try? FileManager.default.removeItem(at: base) }
+        XCTAssertEqual(try MindNodePackage.importOutline(from: package),
+                       "# Mind Maps\n- First visible topic\n- Second visible topic\n")
+    }
+
     func testRejectsUnsupportedVersionAndMalformedNodeTree() throws {
         let (oldBase, old) = try fixture(version: 8)
         defer { try? FileManager.default.removeItem(at: oldBase) }
@@ -51,6 +75,19 @@ final class MindNodePackageTests: XCTestCase {
         let (invalidBase, invalid) = try fixture(node: malformed)
         defer { try? FileManager.default.removeItem(at: invalidBase) }
         XCTAssertThrowsError(try MindNodePackage.importOutline(from: invalid))
+    }
+
+    func testVerifiedVersion7TemplateExportRoundTripsAndPreservesVersion() throws {
+        let (base, template) = try fixture(version: 7)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let destination = base.appendingPathComponent("ExportV7.mindnode", isDirectory: true)
+        let markdown = "# Legacy Project\n- Topic\n  - Nested\n"
+        try MindNodePackage.exportOutline(markdown, usingTemplate: template, to: destination)
+        XCTAssertEqual(try MindNodePackage.importOutline(from: destination), markdown)
+
+        let data = try Data(contentsOf: destination.appendingPathComponent("contents.xml"))
+        XCTAssertEqual(try (PropertyListSerialization.propertyList(from: data, format: nil)
+                             as? [String: Any])?["version"] as? Int, 7)
     }
 
     func testNativeV9TemplateExportRoundTripsAndDoesNotModifySource() throws {
