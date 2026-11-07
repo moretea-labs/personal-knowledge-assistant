@@ -1291,6 +1291,45 @@ extension PKSNotesTests {
             target
         )
     }
+
+    @MainActor
+    func testKnowledgeLinkBasenameFallbackUsesOnDemandGlobalIndex() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = root.appendingPathComponent("Archive/Deep", isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let current = root.appendingPathComponent("Current.md")
+        let target = folder.appendingPathComponent("Target.md")
+        try "# Current\n[[Target]]".write(to: current, atomically: true, encoding: .utf8)
+        try "# Target".write(to: target, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<200 where model.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertFalse(model.globalFileIndexReady)
+        XCTAssertFalse(NoteTreePresentation.openableFiles(model.files).contains {
+            $0.url.standardizedFileURL == target.standardizedFileURL
+        })
+
+        model.openNote(current)
+        await waitForNote(model, current)
+        XCTAssertTrue(model.openKnowledgeLink("Target"))
+
+        for _ in 0..<400 {
+            if model.selected?.standardizedFileURL == target.standardizedFileURL,
+               !model.loadingNote {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(model.globalFileIndexReady)
+        XCTAssertEqual(model.selected?.standardizedFileURL, target.standardizedFileURL)
+        XCTAssertEqual(model.draft, "# Target")
+    }
 }
 
 

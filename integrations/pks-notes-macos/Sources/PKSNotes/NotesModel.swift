@@ -428,6 +428,7 @@ final class NotesModel: ObservableObject {
     private var loadedFolderPaths: Set<String> = []
     private var globalFileScanTask: Task<[NoteItem], Never>?
     private var globalFileScanGeneration: UInt64 = 0
+    private var knowledgeLinkTask: Task<Void, Never>?
     private var fileRefreshGeneration: UInt64 = 0
 
     var isDirty: Bool { selected != nil && draft != baseline }
@@ -1258,16 +1259,64 @@ final class NotesModel: ObservableObject {
     func openKnowledgeLink(_ target: String) -> Bool {
         let value = target.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return false }
+
+        knowledgeLinkTask?.cancel()
         if let external = URL(string: value),
            ["http", "https"].contains(external.scheme?.lowercased() ?? "") {
             openSourceLink(external)
             return true
         }
-        guard let root, let selected,
-              let resolved = WorkspaceFiles.resolveLinkedTarget(value, from: selected, in: root) else {
+        guard let root, let selected else {
             message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
             return false
         }
+
+        // Exact relative/root paths remain immediate. Basename fallback must only
+        // use a complete vault candidate set; a partially expanded sidebar can
+        // otherwise make an ambiguous basename look unique.
+        let candidates = globalFileIndexReady
+            ? globalFiles.filter(\.isMarkdown).map { $0.url.standardizedFileURL }
+            : []
+        if let resolved = WorkspaceFiles.resolveLinkedTarget(
+            value, from: selected, in: root, candidates: candidates
+        ) {
+            openResolvedKnowledgeLink(value, resolved: resolved)
+            return true
+        }
+
+        guard !globalFileIndexReady else {
+            message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
+            return false
+        }
+
+        let sourceNote = selected
+        message = AppLanguage.current.text("Scanning files…")
+        knowledgeLinkTask = Task { [weak self] in
+            guard let self else { return }
+            let allFiles = await self.completeWorkspaceFiles()
+            guard !Task.isCancelled,
+                  self.root == root,
+                  self.selected == sourceNote else { return }
+
+            let markdownCandidates = allFiles.filter(\.isMarkdown)
+                .map { $0.url.standardizedFileURL }
+            guard let resolved = WorkspaceFiles.resolveLinkedTarget(
+                value,
+                from: sourceNote,
+                in: root,
+                candidates: markdownCandidates
+            ) else {
+                self.message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
+                return
+            }
+
+            self.message = nil
+            self.openResolvedKnowledgeLink(value, resolved: resolved)
+        }
+        return true
+    }
+
+    private func openResolvedKnowledgeLink(_ value: String, resolved: URL) {
         let linkURL = URL(string: value)
         let anchor = resolved.pathExtension.lowercased() == "pdf"
             ? linkURL.flatMap(PDFPageReference.anchor(from:))
@@ -1276,7 +1325,6 @@ final class NotesModel: ObservableObject {
             ? anchor?.page ?? linkURL.flatMap(PDFPageReference.page(from:))
             : nil
         openFile(resolved, pdfPage: page, pdfAnchor: anchor)
-        return true
     }
 
     func openInternalLink(_ url: URL) -> Bool {
