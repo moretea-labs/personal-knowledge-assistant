@@ -311,6 +311,175 @@ final class PKSNotesTests: XCTestCase {
                        "Progressive loading should expose top-level folders before recursive scanning.")
     }
 
+    func testFlatVaultScanAndLoadedSubtreeReplacement() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let parent = root.appendingPathComponent("Parent", isDirectory: true)
+        let nested = parent.appendingPathComponent("Nested", isDirectory: true)
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let rootNote = root.appendingPathComponent("Root.md")
+        let parentNote = parent.appendingPathComponent("Parent.md")
+        let deepNote = nested.appendingPathComponent("Deep.md")
+        try "# Root".write(to: rootNote, atomically: true, encoding: .utf8)
+        try "# Parent".write(to: parentNote, atomically: true, encoding: .utf8)
+        try "# Deep".write(to: deepNote, atomically: true, encoding: .utf8)
+        try "hidden".write(
+            to: nested.appendingPathComponent(".hidden.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let flat = WorkspaceFiles.flatFiles(in: root)
+        XCTAssertEqual(Set(flat.map { $0.url.standardizedFileURL }), Set([
+            rootNote.standardizedFileURL,
+            parentNote.standardizedFileURL,
+            deepNote.standardizedFileURL
+        ]))
+        XCTAssertFalse(flat.contains(where: \.isFolder))
+
+        let shallowRoot = WorkspaceFiles.tree(in: root, recursive: false)
+        let parentChildren = WorkspaceFiles.tree(in: parent, recursive: false)
+        let withParent = WorkspaceFiles.replacingChildren(
+            in: shallowRoot,
+            folder: parent,
+            with: parentChildren
+        )
+        let loadedParent = try XCTUnwrap(withParent.first(where: { $0.url == parent }))
+        XCTAssertEqual(loadedParent.children?.map(\.name), ["Nested", "Parent"])
+        XCTAssertEqual(
+            loadedParent.children?.first(where: { $0.url == nested })?.children?.count,
+            0,
+            "Loading Parent must not recursively load Nested."
+        )
+
+        let nestedChildren = WorkspaceFiles.tree(in: nested, recursive: false)
+        let withNested = WorkspaceFiles.replacingChildren(
+            in: withParent,
+            folder: nested,
+            with: nestedChildren
+        )
+        let reloadedParent = try XCTUnwrap(withNested.first(where: { $0.url == parent }))
+        let loadedNested = try XCTUnwrap(reloadedParent.children?.first(where: { $0.url == nested }))
+        XCTAssertEqual(loadedNested.children?.map(\.name), ["Deep"])
+    }
+
+    @MainActor
+    func testWorkspaceRefreshAndFolderExpansionAreLazy() async throws {
+        let defaults = UserDefaults.standard
+        let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let priorWorkspace { defaults.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let parent = root.appendingPathComponent("Parent", isDirectory: true)
+        let nested = parent.appendingPathComponent("Nested", isDirectory: true)
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let rootNote = root.appendingPathComponent("Root.md")
+        let parentNote = parent.appendingPathComponent("Parent.md")
+        let deepNote = nested.appendingPathComponent("Deep.md")
+        try "# Root".write(to: rootNote, atomically: true, encoding: .utf8)
+        try "# Parent".write(to: parentNote, atomically: true, encoding: .utf8)
+        try "# Deep".write(to: deepNote, atomically: true, encoding: .utf8)
+
+        func item(_ url: URL, in items: [NoteItem]) -> NoteItem? {
+            for candidate in items {
+                if candidate.url.standardizedFileURL == url.standardizedFileURL { return candidate }
+                if let children = candidate.children, let found = item(url, in: children) {
+                    return found
+                }
+            }
+            return nil
+        }
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<200 where model.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertFalse(model.loadingFiles)
+        XCTAssertFalse(model.globalFileIndexReady)
+        XCTAssertTrue(model.globalFiles.isEmpty)
+        XCTAssertEqual(item(parent, in: model.files)?.children?.count, 0)
+        XCTAssertNil(item(deepNote, in: model.files))
+
+        model.loadExpandedFolders([parent.path])
+        for _ in 0..<200 {
+            if item(parentNote, in: model.files) != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertNotNil(item(parentNote, in: model.files))
+        XCTAssertEqual(item(nested, in: model.files)?.children?.count, 0)
+        XCTAssertNil(item(deepNote, in: model.files))
+
+        model.loadExpandedFolders([parent.path, nested.path])
+        for _ in 0..<200 {
+            if item(deepNote, in: model.files) != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertNotNil(item(deepNote, in: model.files))
+        XCTAssertFalse(model.globalFileIndexReady)
+    }
+
+    @MainActor
+    func testGlobalVaultIndexAndBacklinksAreOnDemandAndComplete() async throws {
+        let defaults = UserDefaults.standard
+        let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let priorWorkspace { defaults.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let deepFolder = root.appendingPathComponent("Archive/Deep", isDirectory: true)
+        try fm.createDirectory(at: deepFolder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let target = root.appendingPathComponent("Target.md")
+        let deep = deepFolder.appendingPathComponent("Source.md")
+        try "# Target".write(to: target, atomically: true, encoding: .utf8)
+        try "[Target](/Target.md)".write(to: deep, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<200 where model.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertFalse(model.globalFileIndexReady)
+        XCTAssertFalse(NoteTreePresentation.openableFiles(model.files).contains { $0.url == deep })
+
+        model.prepareGlobalFileIndex()
+        for _ in 0..<300 where !model.globalFileIndexReady {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(model.globalFileIndexReady)
+        XCTAssertTrue(model.globalFiles.contains { $0.url.standardizedFileURL == deep.standardizedFileURL })
+
+        // A new model proves backlinks themselves can trigger the complete scan
+        // even when the sidebar still contains only shallow root entries.
+        let backlinkModel = NotesModel()
+        XCTAssertTrue(backlinkModel.openWorkspace(root))
+        for _ in 0..<200 where backlinkModel.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertFalse(backlinkModel.globalFileIndexReady)
+        backlinkModel.openNote(target)
+        await waitForNote(backlinkModel, target)
+        backlinkModel.loadBacklinks()
+        for _ in 0..<400 where backlinkModel.loadingBacklinks {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(backlinkModel.globalFileIndexReady)
+        XCTAssertEqual(backlinkModel.backlinks.map { $0.source.standardizedFileURL }, [deep.standardizedFileURL])
+    }
+
     @MainActor
     func testRestoringLastNoteRequiresExistingFileInSameWorkspace() async throws {
         let defaults = UserDefaults.standard

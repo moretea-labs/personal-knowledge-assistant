@@ -670,10 +670,18 @@ struct NotesWindow: View {
         }
         .onReceive(model.$files) { files in
             visibleTreeRows = NoteTreePresentation.visibleRows(files, expandedPaths: expandedFolderPaths)
+            if !model.globalFileIndexReady {
+                quickOpenEntries = NoteTreePresentation.quickOpenEntries(files)
+            }
+            model.loadExpandedFolders(expandedFolderPaths)
+        }
+        .onReceive(model.$globalFiles) { files in
+            guard model.globalFileIndexReady else { return }
             quickOpenEntries = NoteTreePresentation.quickOpenEntries(files)
         }
         .onChange(of: expandedFolderPaths) { _, expanded in
             visibleTreeRows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expanded)
+            model.loadExpandedFolders(expanded)
         }
         .onChange(of: model.root) { _, _ in
             expandedFolderPaths.removeAll()
@@ -834,6 +842,7 @@ struct NotesWindow: View {
         pdfCaptureCommentary = ""
         quickOpenQuery = ""
         quickOpenIndex = 0
+        model.prepareGlobalFileIndex()
         showingQuickOpen = true
     }
 
@@ -852,6 +861,7 @@ struct NotesWindow: View {
         pdfCaptureCommentary = ""
         quickOpenQuery = ""
         quickOpenIndex = 0
+        model.prepareGlobalFileIndex()
         showingQuickOpen = true
     }
 
@@ -1027,18 +1037,26 @@ struct NotesWindow: View {
                 .opacity(0.45)
                 .padding(.horizontal, 20)
             if matches.isEmpty {
-                Text(language.text(
-                    pdfCaptureRequest != nil
-                        ? (quickOpenQuery.isEmpty
-                           ? "Choose a Markdown note for this PDF page."
-                           : "No Markdown notes match your search.")
-                        : (quickOpenQuery.isEmpty
-                           ? "Type a name to find a note in your library."
-                           : "No files match your search.")
-                ))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 10) {
+                    if model.indexingFiles {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(language.text("Scanning files…"))
+                    } else {
+                        Text(language.text(
+                            pdfCaptureRequest != nil
+                                ? (quickOpenQuery.isEmpty
+                                   ? "Choose a Markdown note for this PDF page."
+                                   : "No Markdown notes match your search.")
+                                : (quickOpenQuery.isEmpty
+                                   ? "Type a name to find a note in your library."
+                                   : "No files match your search.")
+                        ))
+                    }
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 2) {

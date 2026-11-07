@@ -91,13 +91,18 @@ enum WorkspaceFiles {
         return true
     }
 
+    private static var scanCancelled: Bool {
+        withUnsafeCurrentTask { $0?.isCancelled ?? false }
+    }
+
     static func tree(in root: URL, recursive: Bool = true) -> [NoteItem] {
         let fm = FileManager.default
         // File Provider can block on contentsOfDirectory(at:includingPropertiesForKeys:).
         // Plain names plus lstat are enough to classify entries without hydrating iCloud files.
-        guard let names = try? fm.contentsOfDirectory(atPath: root.path) else { return [] }
+        guard !scanCancelled,
+              let names = try? fm.contentsOfDirectory(atPath: root.path) else { return [] }
         return names.compactMap { name -> NoteItem? in
-            guard !name.hasPrefix(".") else { return nil }
+            guard !scanCancelled, !name.hasPrefix(".") else { return nil }
             let url = root.appendingPathComponent(name)
             var info = Darwin.stat()
             guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { return nil }
@@ -111,6 +116,57 @@ enum WorkspaceFiles {
         }.sorted { a, b in
             if a.isFolder != b.isFolder { return a.isFolder }
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }
+    }
+
+    /// Flat, transient full-vault files for on-demand Quick Open/backlinks.
+    /// This avoids building and sorting a complete nested tree.
+    static func flatFiles(in root: URL) -> [NoteItem] {
+        let fm = FileManager.default
+        var pending = [root]
+        var result: [NoteItem] = []
+
+        while let folder = pending.popLast() {
+            guard !scanCancelled else { break }
+            guard let names = try? fm.contentsOfDirectory(atPath: folder.path) else { continue }
+            for name in names {
+                guard !scanCancelled else { return result }
+                guard !name.hasPrefix(".") else { continue }
+
+                let url = folder.appendingPathComponent(name)
+                var info = Darwin.stat()
+                guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { continue }
+                let kind = info.st_mode & mode_t(S_IFMT)
+                if kind == mode_t(S_IFLNK) { continue }
+                if kind == mode_t(S_IFDIR) {
+                    pending.append(url)
+                } else if kind == mode_t(S_IFREG) {
+                    result.append(NoteItem(url: url, children: nil))
+                }
+            }
+        }
+        return result
+    }
+
+    /// Replace one loaded folder while preserving every other loaded subtree.
+    static func replacingChildren(
+        in items: [NoteItem],
+        folder: URL,
+        with children: [NoteItem]
+    ) -> [NoteItem] {
+        let target = folder.standardizedFileURL.path
+        return items.map { item in
+            let itemPath = item.url.standardizedFileURL.path
+            if itemPath == target, item.isFolder {
+                return NoteItem(url: item.url, children: children)
+            }
+            guard target.hasPrefix(itemPath + "/"), let current = item.children else {
+                return item
+            }
+            return NoteItem(
+                url: item.url,
+                children: replacingChildren(in: current, folder: folder, with: children)
+            )
         }
     }
 
@@ -163,7 +219,9 @@ enum WorkspaceFiles {
 
         guard !decoded.contains("/") else { return nil }
         let wanted = URL(fileURLWithPath: decoded).deletingPathExtension().lastPathComponent
-        let candidates = suppliedCandidates ?? WorkspaceBacklinks.markdownFiles(tree(in: root))
+        let candidates = suppliedCandidates ?? flatFiles(in: root)
+            .filter(\.isMarkdown)
+            .map { $0.url.standardizedFileURL }
         let matches = candidates.filter {
             $0.deletingPathExtension().lastPathComponent == wanted
         }
@@ -303,6 +361,9 @@ final class NotesModel: ObservableObject {
     @Published private(set) var root: URL?
     @Published private(set) var files: [NoteItem] = []
     @Published private(set) var loadingFiles = false
+    @Published private(set) var globalFiles: [NoteItem] = []
+    @Published private(set) var indexingFiles = false
+    @Published private(set) var globalFileIndexReady = false
     @Published private(set) var loadingNote = false
     @Published private(set) var selected: URL?
     @Published private(set) var previewPDF: URL?
@@ -362,6 +423,11 @@ final class NotesModel: ObservableObject {
     private var backlinkTask: Task<Void, Never>?
     private var relatedTask: Task<Void, Never>?
     private var fileRefreshTask: Task<Void, Never>?
+    private var folderLoadTask: Task<Void, Never>?
+    private var pendingFolderPaths: Set<String> = []
+    private var loadedFolderPaths: Set<String> = []
+    private var globalFileScanTask: Task<[NoteItem], Never>?
+    private var globalFileScanGeneration: UInt64 = 0
     private var fileRefreshGeneration: UInt64 = 0
 
     var isDirty: Bool { selected != nil && draft != baseline }
@@ -527,30 +593,130 @@ final class NotesModel: ObservableObject {
     func refresh() {
         guard let root else { return }
         fileRefreshTask?.cancel()
+        folderLoadTask?.cancel()
+        globalFileScanTask?.cancel()
+        folderLoadTask = nil
+        globalFileScanTask = nil
+        pendingFolderPaths.removeAll()
+        loadedFolderPaths.removeAll()
+        globalFiles = []
+        globalFileIndexReady = false
+        indexingFiles = false
+
         fileRefreshGeneration &+= 1
         let generation = fileRefreshGeneration
-        let showProgressiveTopLevel = files.isEmpty
         loadingFiles = true
 
+        // The sidebar only needs the current directory. Descendants are loaded
+        // after disclosure, so a collapsed vault never pays recursive I/O.
         fileRefreshTask = Task.detached(priority: .userInitiated) { [weak self] in
-            if showProgressiveTopLevel {
-                let shallow = WorkspaceFiles.tree(in: root, recursive: false)
-                guard !Task.isCancelled else { return }
-                await self?.publishFiles(shallow, root: root, generation: generation, complete: false)
-            }
-
-            let scanned = WorkspaceFiles.tree(in: root)
+            let shallow = WorkspaceFiles.tree(in: root, recursive: false)
             guard !Task.isCancelled else { return }
-            await self?.publishFiles(scanned, root: root, generation: generation, complete: true)
+            await self?.publishFiles(shallow, root: root, generation: generation)
         }
     }
 
-    private func publishFiles(_ scanned: [NoteItem], root: URL, generation: UInt64, complete: Bool) {
+    private func publishFiles(_ scanned: [NoteItem], root: URL, generation: UInt64) {
         guard self.root == root, fileRefreshGeneration == generation else { return }
         files = scanned
-        if complete {
-            loadingFiles = false
-            fileRefreshTask = nil
+        loadingFiles = false
+        fileRefreshTask = nil
+        startPendingFolderLoad()
+    }
+
+    func loadExpandedFolders(_ paths: Set<String>) {
+        guard let root else { return }
+        let rootPath = root.standardizedFileURL.path
+        let candidates = paths.compactMap { path -> String? in
+            let normalized = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+            guard normalized.hasPrefix(rootPath + "/"),
+                  !loadedFolderPaths.contains(normalized) else { return nil }
+            return normalized
+        }
+        pendingFolderPaths.formUnion(candidates)
+        startPendingFolderLoad()
+    }
+
+    private func startPendingFolderLoad() {
+        guard folderLoadTask == nil, !loadingFiles, let root,
+              !pendingFolderPaths.isEmpty else { return }
+
+        let rootPath = root.standardizedFileURL.path
+        let targets = pendingFolderPaths
+            .filter { $0.hasPrefix(rootPath + "/") && !loadedFolderPaths.contains($0) }
+            .sorted {
+                $0.split(separator: "/").count < $1.split(separator: "/").count
+            }
+        guard !targets.isEmpty else {
+            pendingFolderPaths.removeAll()
+            return
+        }
+        pendingFolderPaths.subtract(targets)
+
+        let generation = fileRefreshGeneration
+        folderLoadTask = Task { [weak self] in
+            let loader = Task.detached(priority: .userInitiated) {
+                targets.map { path -> (URL, [NoteItem]) in
+                    let folder = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+                    return (folder, WorkspaceFiles.tree(in: folder, recursive: false))
+                }
+            }
+            let loaded = await withTaskCancellationHandler {
+                await loader.value
+            } onCancel: {
+                loader.cancel()
+            }
+
+            guard !Task.isCancelled, let self, self.root == root,
+                  self.fileRefreshGeneration == generation else { return }
+            var updated = self.files
+            for (folder, children) in loaded {
+                updated = WorkspaceFiles.replacingChildren(
+                    in: updated,
+                    folder: folder,
+                    with: children
+                )
+                self.loadedFolderPaths.insert(folder.path)
+            }
+            self.files = updated
+            self.folderLoadTask = nil
+            self.startPendingFolderLoad()
+        }
+    }
+
+    private func completeWorkspaceFiles() async -> [NoteItem] {
+        guard let root else { return [] }
+        if globalFileIndexReady { return globalFiles }
+
+        let generation = fileRefreshGeneration
+        let scan: Task<[NoteItem], Never>
+        if let current = globalFileScanTask, globalFileScanGeneration == generation {
+            scan = current
+        } else {
+            indexingFiles = true
+            let task = Task.detached(priority: .utility) {
+                WorkspaceFiles.flatFiles(in: root)
+            }
+            globalFileScanTask = task
+            globalFileScanGeneration = generation
+            scan = task
+        }
+
+        let scanned = await scan.value
+        guard self.root == root, fileRefreshGeneration == generation else { return [] }
+        globalFileIndexReady = true
+        globalFiles = scanned
+        indexingFiles = false
+        if globalFileScanGeneration == generation {
+            globalFileScanTask = nil
+        }
+        return scanned
+    }
+
+    func prepareGlobalFileIndex() {
+        guard root != nil, !globalFileIndexReady else { return }
+        Task { [weak self] in
+            _ = await self?.completeWorkspaceFiles()
         }
     }
 
@@ -864,16 +1030,24 @@ final class NotesModel: ObservableObject {
         backlinkTask?.cancel()
         backlinks = []
         loadingBacklinks = true
-        let snapshot = suppliedFiles ?? files
-        backlinkTask = Task.detached(priority: .utility) { [weak self] in
-            let found = WorkspaceBacklinks.find(target: note, root: root, files: snapshot)
-            guard !Task.isCancelled, let self else { return }
-            await MainActor.run {
-                guard (self.selected == note || self.previewPDF == note),
-                      self.root == root else { return }
-                self.backlinks = found
-                self.loadingBacklinks = false
+        backlinkTask = Task { [weak self] in
+            guard let self else { return }
+            let snapshot: [NoteItem]
+            if let suppliedFiles {
+                snapshot = suppliedFiles
+            } else {
+                snapshot = await self.completeWorkspaceFiles()
             }
+            guard !Task.isCancelled, self.root == root else { return }
+
+            let found = await Task.detached(priority: .utility) {
+                WorkspaceBacklinks.find(target: note, root: root, files: snapshot)
+            }.value
+            guard !Task.isCancelled,
+                  (self.selected == note || self.previewPDF == note),
+                  self.root == root else { return }
+            self.backlinks = found
+            self.loadingBacklinks = false
         }
     }
 

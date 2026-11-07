@@ -188,6 +188,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Show in Finder": "在 Finder 中显示",
         "Current library folder": "当前资料库文件夹",
         "Loading local Markdown…": "正在加载本地 Markdown…",
+        "Scanning files…": "正在扫描文件…",
         "Open with Default App": "使用默认应用打开",
         "Copy File Path": "复制文件路径",
         "Rename…": "重命名…",
