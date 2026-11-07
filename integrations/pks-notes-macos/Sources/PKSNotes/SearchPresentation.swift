@@ -54,9 +54,9 @@ struct MarkdownSection: Identifiable {
     let markdown: String
 
     static func sections(in source: String) -> [MarkdownSection] {
-        let lines = source.components(separatedBy: "\n")
+        let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
         var result: [MarkdownSection] = []
-        var currentLines: [String] = []
+        var currentLines: [Substring] = []
         var currentHeading: String?
         var fence: Character?
 

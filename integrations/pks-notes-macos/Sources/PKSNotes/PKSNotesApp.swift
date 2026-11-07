@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 import MarkdownUI
-import PDFKit
 
 @MainActor
 final class PKSNotesAppDelegate: NSObject, NSApplicationDelegate {
@@ -330,10 +329,23 @@ enum ReadingMode: String, CaseIterable {
     }
 }
 
-private struct PreviewWarmupKey: Hashable {
+private struct OutlineWarmupKey: Hashable {
     let identity: String
-    let source: String
+    let revision: UInt64
     let enabled: Bool
+}
+
+private struct RelationshipWarmupKey: Hashable {
+    let identity: String
+    let revision: UInt64
+    let enabled: Bool
+}
+
+private struct PDFCaptureRequest: Equatable {
+    let pdf: URL
+    let page: Int
+    let selectedText: String?
+    let anchor: PDFSourceAnchor?
 }
 
 struct NotesWindow: View {
@@ -343,25 +355,38 @@ struct NotesWindow: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var mode: ReadingMode = .read
     @State private var showingMindMap = false
+    @State private var mindMapSelectionLine: Int?
+    @State private var modeBeforeMindMap: ReadingMode = .read
     @AppStorage("PKSNotesReadingTheme") private var themeID = NotesTheme.system.rawValue
     @AppStorage("PKSNotesFontAdjustment") private var fontAdjustment = 0.0
     @AppStorage("PKSNotesLineAdjustment") private var lineAdjustment = 0.0
     @AppStorage("PKSNotesWidthAdjustment") private var widthAdjustment = 0.0
     @State private var previewCache: MarkdownPreviewSnapshot?
+    @State private var outlineHeadings: [MarkdownOutlineHeading] = []
+    @State private var outgoingLinks: [MindMapLink] = []
     @State private var visibleTreeRows: [NoteTreePresentation.Row] = []
-    @State private var allOpenableFiles: [NoteItem] = []
+    @State private var quickOpenEntries: [NoteTreePresentation.QuickOpenEntry] = []
     @State private var showingQuickOpen = false
     @State private var showingBacklinks = false
     @State private var showingProUpsell = false
     @State private var quickOpenQuery = ""
     @State private var quickOpenIndex = 0
+    @State private var pdfCaptureRequest: PDFCaptureRequest?
+    @State private var pdfCaptureCommentary = ""
 
     private var quickOpenMatches: [NoteItem] {
-        NoteTreePresentation.quickOpen(allOpenableFiles, query: quickOpenQuery)
+        let matches = NoteTreePresentation.quickOpen(quickOpenEntries, query: quickOpenQuery)
+        guard pdfCaptureRequest != nil else { return matches }
+        return matches.filter {
+            !$0.isFolder && ["md", "markdown"].contains($0.url.pathExtension.lowercased())
+        }
     }
 
-    private var outlineHeadings: [MarkdownOutlineHeading] {
-        MarkdownOutline.headings(in: model.draft)
+    private var pdfCapturePreviewText: String? {
+        guard let text = pdfCaptureRequest?.selectedText?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else { return nil }
+        return text
     }
 
     private var sidebarSectionTitleKey: String {
@@ -380,11 +405,11 @@ struct NotesWindow: View {
             get: { showingMindMap },
             set: { requested in
                 guard requested else {
-                    showingMindMap = false
+                    setMindMapVisible(false)
                     return
                 }
                 if ProAccess.allows(.mindMap, unlocked: purchases.unlocked) {
-                    showingMindMap = true
+                    setMindMapVisible(true)
                 } else {
                     showingProUpsell = true
                 }
@@ -407,6 +432,7 @@ struct NotesWindow: View {
     @FocusState private var searchFieldFocused: Bool
     @FocusState private var treeFocused: Bool
     @FocusState private var quickOpenFocused: Bool
+    @FocusState private var pdfCaptureCommentaryFocused: Bool
     @FocusState private var editorFocused: Bool
 
     var body: some View {
@@ -483,7 +509,7 @@ struct NotesWindow: View {
                     .accessibilityIdentifier("pks-favorite-toggle")
                 }
 
-                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
+                if (model.selected != nil && model.externalBody == nil) || model.previewPDF != nil {
                     Button {
                         if ProAccess.allows(.relationships, unlocked: purchases.unlocked) {
                             showingBacklinks.toggle()
@@ -494,6 +520,10 @@ struct NotesWindow: View {
                     } label: {
                         HStack(spacing: 4) {
                             toolbarSymbol("link")
+                            if model.previewPDF != nil {
+                                Text(language.text("Linked Notes"))
+                                    .font(.caption.weight(.medium))
+                            }
                             if !model.backlinks.isEmpty {
                                 Text("\(model.backlinks.count)")
                                     .font(.caption2.monospacedDigit())
@@ -502,7 +532,9 @@ struct NotesWindow: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .help(language.text("Links and related notes"))
+                    .help(language.text(model.previewPDF == nil
+                                        ? "Links and related notes"
+                                        : "Linked notes for this PDF"))
                     .accessibilityIdentifier("pks-relationships-menu")
                     .popover(isPresented: $showingBacklinks, arrowEdge: .bottom) {
                         ScrollView {
@@ -519,28 +551,36 @@ struct NotesWindow: View {
 
                                 Divider()
 
-                                relationshipSectionTitle(language.text("Outgoing"))
-                                if model.outgoingLinks.isEmpty {
-                                    relationshipEmpty(language.text("No links from this note."))
-                                } else {
-                                    ForEach(Array(model.outgoingLinks.enumerated()), id: \.offset) { _, link in
-                                        relationshipButton(
-                                            title: link.label,
-                                            detail: link.target,
-                                            symbol: "arrow.up.right"
-                                        ) {
-                                            showingBacklinks = false
-                                            _ = model.openKnowledgeLink(link.target)
+                                if model.previewPDF == nil {
+                                    relationshipSectionTitle(language.text("Outgoing"))
+                                    if outgoingLinks.isEmpty {
+                                        relationshipEmpty(language.text("No links from this note."))
+                                    } else {
+                                        ForEach(Array(outgoingLinks.enumerated()), id: \.offset) { _, link in
+                                            relationshipButton(
+                                                title: link.label,
+                                                detail: link.target,
+                                                symbol: "arrow.up.right"
+                                            ) {
+                                                showingBacklinks = false
+                                                _ = model.openKnowledgeLink(link.target)
+                                            }
                                         }
                                     }
+                                    Divider().padding(.vertical, 4)
                                 }
 
-                                Divider().padding(.vertical, 4)
-                                relationshipSectionTitle(language.text("Backlinks"))
+                                relationshipSectionTitle(language.text(model.previewPDF == nil
+                                                                      ? "Backlinks"
+                                                                      : "Linked Notes"))
                                 if model.loadingBacklinks {
-                                    relationshipEmpty(language.text("Finding notes that link here…"))
+                                    relationshipEmpty(language.text(model.previewPDF == nil
+                                                                    ? "Finding notes that link here…"
+                                                                    : "Finding notes linked to this PDF…"))
                                 } else if model.backlinks.isEmpty {
-                                    relationshipEmpty(language.text("No backlinks in this workspace."))
+                                    relationshipEmpty(language.text(model.previewPDF == nil
+                                                                    ? "No backlinks in this workspace."
+                                                                    : "No notes link to this PDF yet."))
                                 } else {
                                     ForEach(model.backlinks) { backlink in
                                         relationshipButton(
@@ -555,24 +595,31 @@ struct NotesWindow: View {
                                         }
                                     }
                                 }
+                                if model.backlinkSkippedCloudFiles > 0 {
+                                    relationshipEmpty(String(
+                                        format: language.text("Cloud-only notes skipped: %d"),
+                                        model.backlinkSkippedCloudFiles
+                                    ))
+                                }
 
-                                Divider().padding(.vertical, 4)
-                                relationshipSectionTitle(language.text("Related · PKS"))
-                                if model.loadingRelated {
-                                    relationshipEmpty(language.text("Finding related knowledge…"))
-                                } else if let error = model.relatedError {
-                                    relationshipEmpty(language.text(error))
-                                } else if model.relatedHits.isEmpty {
-                                    relationshipEmpty(language.text("No related PKS results."))
-                                } else {
-                                    ForEach(model.relatedHits.prefix(6)) { hit in
-                                        relationshipButton(
-                                            title: hit.title,
-                                            detail: language.text(hit.sourceLabel),
-                                            symbol: "sparkles"
-                                        ) {
-                                            showingBacklinks = false
-                                            model.openResult(hit)
+                                if model.previewPDF == nil {
+                                    Divider().padding(.vertical, 4)
+                                    relationshipSectionTitle(language.text("Related · PKS"))
+                                    if model.loadingRelated {
+                                        relationshipEmpty(language.text("Finding related knowledge…"))
+                                    } else if let error = model.relatedError {
+                                        relationshipEmpty(language.text(error))
+                                    } else if model.relatedHits.isEmpty {
+                                        relationshipEmpty(language.text("No related PKS results."))
+                                    } else {
+                                        ForEach(model.relatedHits.prefix(6)) { hit in
+                                            relationshipButton(
+                                                title: hit.title,
+                                                detail: language.text(hit.sourceLabel),
+                                                symbol: "sparkles"
+                                            ) {
+                                                showingBacklinks = false
+                                                model.openResult(hit)
                                         }
                                     }
                                 }
@@ -621,6 +668,7 @@ struct NotesWindow: View {
                 .help(language.text("File actions and workspace options"))
             }
         }
+        }
         .sheet(isPresented: $showingProUpsell) {
             ProSettingsView()
                 .environmentObject(purchases)
@@ -649,36 +697,72 @@ struct NotesWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.paste)) { _ in
             handlePaste()
         }
-        .task(id: PreviewWarmupKey(
+        .task(id: OutlineWarmupKey(
             identity: model.selected?.path ?? "",
-            source: model.body,
-            enabled: mode == .edit && model.selected != nil && !model.loadingNote
+            revision: model.draftRevision,
+            enabled: model.selected != nil && model.externalBody == nil && model.previewPDF == nil
         )) {
-            guard mode == .edit, !model.loadingNote, model.externalBody == nil,
-                  let identity = model.selected?.path else { return }
-            let input = model.draft
-            guard previewCache?.matches(identity: identity, source: input, matchID: nil) != true
-            else { return }
-            // Idle-only parse in the background; no preview view is mounted or laid out.
-            do { try await Task.sleep(for: .milliseconds(520)) }
-            catch { return }
-            guard !Task.isCancelled else { return }
-            let parser = Task.detached(priority: .utility) {
-                MarkdownPreviewParsing.prepare(input, match: nil)
+            guard model.externalBody == nil, model.previewPDF == nil,
+                  let identity = model.selected?.path else {
+                outlineHeadings = []
+                return
             }
-            defer { parser.cancel() }
-            let sections = await parser.value
+            let input = model.draft
+            let revision = model.draftRevision
+            // Keep typing responsive. Large notes make a full heading pass
+            // measurably expensive, so require a longer idle window before doing
+            // this derived outline work.
+            let bytes = input.utf8.count
+            let delay: Duration = bytes >= 5_000_000 ? .milliseconds(1_200)
+                : bytes >= 1_000_000 ? .milliseconds(700)
+                : bytes >= 250_000 ? .milliseconds(320)
+                : .milliseconds(140)
+            do { try await Task.sleep(for: delay) }
+            catch { return }
+            let scanner = Task.detached(priority: .utility) {
+                MarkdownOutline.headings(in: input)
+            }
+            defer { scanner.cancel() }
+            let headings = await scanner.value
             guard !Task.isCancelled, model.selected?.path == identity,
-                  model.draft == input, mode == .edit else { return }
-            previewCache = MarkdownPreviewSnapshot(identity: identity, source: input,
-                                                    matchID: nil, sections: sections)
+                  model.draftRevision == revision else { return }
+            outlineHeadings = headings
+        }
+        .task(id: RelationshipWarmupKey(
+            identity: showingBacklinks && model.previewPDF == nil ? (model.selected?.path ?? "") : "",
+            revision: showingBacklinks && model.previewPDF == nil ? model.draftRevision : 0,
+            enabled: showingBacklinks && model.previewPDF == nil && model.selected != nil
+        )) {
+            guard showingBacklinks, model.previewPDF == nil, model.externalBody == nil,
+                  let identity = model.selected?.path else {
+                outgoingLinks = []
+                return
+            }
+            let input = model.draft
+            let revision = model.draftRevision
+            let scanner = Task.detached(priority: .utility) {
+                MindMapOutline.knowledgeLinks(in: input)
+            }
+            defer { scanner.cancel() }
+            let links = await scanner.value
+            guard !Task.isCancelled, showingBacklinks, model.previewPDF == nil,
+                  model.selected?.path == identity, model.draftRevision == revision else { return }
+            outgoingLinks = links
         }
         .onReceive(model.$files) { files in
             visibleTreeRows = NoteTreePresentation.visibleRows(files, expandedPaths: expandedFolderPaths)
-            allOpenableFiles = NoteTreePresentation.openableFiles(files)
+            if !model.globalFileIndexReady {
+                quickOpenEntries = NoteTreePresentation.quickOpenEntries(files)
+            }
+            model.loadExpandedFolders(expandedFolderPaths)
+        }
+        .onReceive(model.$globalFiles) { files in
+            guard model.globalFileIndexReady else { return }
+            quickOpenEntries = NoteTreePresentation.quickOpenEntries(files)
         }
         .onChange(of: expandedFolderPaths) { _, expanded in
             visibleTreeRows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expanded)
+            model.loadExpandedFolders(expanded)
         }
         .onChange(of: model.root) { _, _ in
             expandedFolderPaths.removeAll()
@@ -691,6 +775,7 @@ struct NotesWindow: View {
             }
         }
         .onChange(of: model.selected) { _, note in
+            mindMapSelectionLine = nil
             let openAsMap = note != nil && note == pendingMindMapOpen
             showingMindMap = openAsMap && ProAccess.allows(.mindMap, unlocked: purchases.unlocked)
             if openAsMap {
@@ -698,6 +783,7 @@ struct NotesWindow: View {
                 mode = .read
             }
             showingBacklinks = false
+            outgoingLinks = []
             if let note, let root = model.root {
                 expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: note, in: root))
                 treeCursorPath = note.path
@@ -837,25 +923,170 @@ struct NotesWindow: View {
     }
 
     private func openQuickPicker() {
+        pdfCaptureRequest = nil
+        pdfCaptureCommentary = ""
         quickOpenQuery = ""
         quickOpenIndex = 0
+        model.prepareGlobalFileIndex()
         showingQuickOpen = true
     }
 
-    private func openQuickMatch(_ item: NoteItem) {
+    private func beginPDFCapture(
+        pdf: URL,
+        page: Int,
+        selectedText: String?,
+        anchor: PDFSourceAnchor?
+    ) {
+        pdfCaptureRequest = PDFCaptureRequest(
+            pdf: pdf,
+            page: page,
+            selectedText: selectedText,
+            anchor: anchor
+        )
+        pdfCaptureCommentary = ""
+        quickOpenQuery = ""
+        quickOpenIndex = 0
+        model.prepareGlobalFileIndex()
+        showingQuickOpen = true
+    }
+
+    private func closeQuickPicker() {
         showingQuickOpen = false
+        pdfCaptureRequest = nil
+        pdfCaptureCommentary = ""
+    }
+
+    private func savePDFCapture(to studyNote: URL) {
+        guard let capture = pdfCaptureRequest else { return }
+        guard model.appendPDFReference(
+            pdf: capture.pdf,
+            page: capture.page,
+            commentary: pdfCaptureCommentary,
+            selectedText: capture.selectedText,
+            anchor: capture.anchor,
+            to: studyNote
+        ) else { return }
+
+        closeQuickPicker()
+        pendingEditorFocus = studyNote
+        model.openStudyNote(studyNote)
+        if model.selected == studyNote {
+            pendingEditorFocus = nil
+            mode = .edit
+            Task { @MainActor in editorFocused = true }
+        }
+    }
+
+    private func openQuickMatch(_ item: NoteItem) {
+        if pdfCaptureRequest != nil {
+            savePDFCapture(to: item.url)
+            return
+        }
+        closeQuickPicker()
         model.openFile(item.url)
+    }
+
+    private func createNoteFromPDFCapture() {
+        guard let capture = pdfCaptureRequest,
+              let root = model.root,
+              let snippet = PDFPageReference.noteSnippet(
+                for: capture.pdf,
+                page: capture.page,
+                root: root,
+                commentary: pdfCaptureCommentary,
+                selectedText: capture.selectedText,
+                anchor: capture.anchor
+              )
+        else { return }
+
+        let sourceTitle = capture.pdf.deletingPathExtension().lastPathComponent
+        guard let filename = WorkspaceFiles.nextAvailableNoteName(
+            basedOn: "\(sourceTitle) · p.\(capture.page)",
+            in: root
+        ) else { return }
+
+        guard let created = model.newNote(
+            named: filename,
+            initialContent: "\(snippet)\n",
+            preservePDFPreview: true
+        ) else { return }
+        closeQuickPicker()
+        pendingEditorFocus = created
+        mode = .edit
     }
 
     private var quickOpenSheet: some View {
         let matches = quickOpenMatches
+        let selectedPreview = pdfCapturePreviewText
         return VStack(alignment: .leading, spacing: 0) {
+            if let capture = pdfCaptureRequest {
+                HStack(spacing: 10) {
+                    Label(
+                        "\(language.text("Add PDF page to note")) · \(capture.page)",
+                        systemImage: "note.text.badge.plus"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    if let studyNote = model.selected, model.externalBody == nil {
+                        Button(language.text("Add to Study Note")) {
+                            savePDFCapture(to: studyNote)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .help(studyNote.deletingPathExtension().lastPathComponent)
+                        .accessibilityIdentifier("pks-pdf-capture-current-note")
+                    }
+                    Button(language.text("New note from this page")) {
+                        createNoteFromPDFCapture()
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("pks-pdf-capture-new-note")
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, selectedPreview == nil ? 8 : 6)
+
+                if let selectedPreview {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "quote.opening")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 2)
+                        Text(selectedPreview)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(language.text("Selected PDF text"))
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 10)
+                }
+
+                TextField(
+                    language.text("Your note…"),
+                    text: $pdfCaptureCommentary,
+                    axis: .vertical
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 14))
+                .lineLimit(2...4)
+                .focused($pdfCaptureCommentaryFocused)
+                .accessibilityLabel(language.text("Your note"))
+                .accessibilityIdentifier("pks-pdf-capture-commentary")
+                .padding(.horizontal, 20)
+                .padding(.bottom, 10)
+            }
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
                     .frame(width: NotesGeometry.treeIconWidth)
                     .foregroundStyle(.secondary)
-                TextField(language.text("Search files…"), text: $quickOpenQuery)
+                TextField(
+                    language.text(pdfCaptureRequest == nil ? "Search files…" : "Search Markdown notes…"),
+                    text: $quickOpenQuery
+                )
                     .textFieldStyle(.plain)
                     .font(.system(size: 17))
                     .focused($quickOpenFocused)
@@ -873,7 +1104,7 @@ struct NotesWindow: View {
                     }
                     .accessibilityIdentifier("pks-quick-open-input")
                 Button {
-                    showingQuickOpen = false
+                    closeQuickPicker()
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 12, weight: .medium))
@@ -883,6 +1114,7 @@ struct NotesWindow: View {
                 .foregroundStyle(.secondary)
                 .keyboardShortcut(.cancelAction)
                 .help(language.text("Cancel (Esc)"))
+                .accessibilityIdentifier("pks-quick-open-cancel")
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 20)
@@ -890,11 +1122,26 @@ struct NotesWindow: View {
                 .opacity(0.45)
                 .padding(.horizontal, 20)
             if matches.isEmpty {
-                Text(language.text(quickOpenQuery.isEmpty ? "Type a name to find a note in your library."
-                     : "No files match your search."))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 10) {
+                    if model.indexingFiles {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(language.text("Scanning files…"))
+                    } else {
+                        Text(language.text(
+                            pdfCaptureRequest != nil
+                                ? (quickOpenQuery.isEmpty
+                                   ? "Choose a Markdown note for this PDF page."
+                                   : "No Markdown notes match your search.")
+                                : (quickOpenQuery.isEmpty
+                                   ? "Type a name to find a note in your library."
+                                   : "No files match your search.")
+                        ))
+                    }
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 2) {
@@ -943,11 +1190,24 @@ struct NotesWindow: View {
                 }
             }
         }
-        .frame(width: 560, height: matches.isEmpty ? 176 : min(470, max(238, CGFloat(matches.count) * 54 + 83)))
+        .frame(
+            width: 560,
+            height: min(
+                620,
+                (matches.isEmpty ? 176 : min(470, max(238, CGFloat(matches.count) * 54 + 83)))
+                    + (pdfCaptureRequest == nil ? 0 : (selectedPreview == nil ? 104 : 148))
+            )
+        )
         .background(Color(nsColor: .windowBackgroundColor))
         .animation(.easeOut(duration: 0.16), value: matches.isEmpty)
         .onChange(of: quickOpenQuery) { _, _ in quickOpenIndex = 0 }
-        .onAppear { quickOpenFocused = true }
+        .onAppear {
+            if pdfCaptureRequest != nil {
+                pdfCaptureCommentaryFocused = true
+            } else {
+                quickOpenFocused = true
+            }
+        }
     }
 
     /// Bear/Panda-inspired quiet navigation tint. Editorial content retains its own
@@ -963,28 +1223,33 @@ struct NotesWindow: View {
         return Button {
             withAnimation(.easeOut(duration: 0.14)) { sidebarTab = tab }
         } label: {
-            HStack(spacing: 10) {
-                Image(systemName: symbol)
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 18, height: 22)
-                    .foregroundStyle(selected ? Color.primary : Color.secondary)
-                Text(title)
-                    .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 0)
-                if tab == .search && !model.hits.isEmpty {
-                    Text("\(model.hits.count)")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.tertiary)
+            VStack(spacing: 3) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: symbol)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .frame(width: 22, height: 18)
+                        .foregroundStyle(selected ? Color.primary : Color.secondary)
+                    if tab == .search && !model.hits.isEmpty {
+                        Circle()
+                            .fill(theme.linkColor)
+                            .frame(width: 5, height: 5)
+                            .offset(x: 2, y: -1)
+                    }
                 }
+                Text(title)
+                    .font(.system(size: 9.5, weight: selected ? .semibold : .medium))
+                    .foregroundStyle(selected ? Color.primary : Color.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
             }
-            .padding(.horizontal, 11)
-            .frame(height: 32)
+            .frame(maxWidth: .infinity)
+            .frame(height: 38)
             .background(selected ? Color.primary.opacity(colorScheme == .dark ? 0.13 : 0.065) : .clear,
                         in: RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(title)
         .accessibilityIdentifier("pks-sidebar-\(tab.rawValue.lowercased())")
     }
 
@@ -1034,6 +1299,21 @@ struct NotesWindow: View {
                                     .frame(height: NotesGeometry.treeRowHeight)
                                     .padding(.leading, NotesGeometry.treeTextGap)
                                     .contentShape(Rectangle())
+                                    .draggable(row.item.url)
+                                    .dropDestination(for: URL.self) { urls, _ in
+                                        guard let source = urls.first?.standardizedFileURL,
+                                              model.canManage(source),
+                                              source != row.item.url else { return false }
+                                        let moved = model.moveItem(source, to: row.item.url)
+                                        if moved != nil {
+                                            expandedFolderPaths.insert(row.item.url.path)
+                                            fileDropTargetPath = nil
+                                            return true
+                                        }
+                                        return false
+                                    } isTargeted: { targeted in
+                                        fileDropTargetPath = targeted ? row.id : nil
+                                    }
                                     .onTapGesture(count: 2) {
                                         treeCursorPath = row.id
                                         treeFocused = true
@@ -1045,22 +1325,22 @@ struct NotesWindow: View {
                                     })
                                     .help(language.text("Double-click to expand or collapse"))
                             } else {
-                                Button {
-                                    treeCursorPath = row.id
-                                    treeFocused = true
-                                    model.openFile(row.item.url)
-                                } label: {
-                                    Text(row.item.name)
-                                        .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
-                                        .foregroundStyle(.primary)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .lineLimit(1)
-                                        .frame(height: NotesGeometry.treeRowHeight)
-                                        .padding(.leading, NotesGeometry.treeTextGap)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityIdentifier("pks-note-\(row.item.name)")
+                                Text(row.item.name)
+                                    .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
+                                    .foregroundStyle(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .lineLimit(1)
+                                    .frame(height: NotesGeometry.treeRowHeight)
+                                    .padding(.leading, NotesGeometry.treeTextGap)
+                                    .contentShape(Rectangle())
+                                    .draggable(row.item.url)
+                                    .simultaneousGesture(TapGesture(count: 1).onEnded {
+                                        treeCursorPath = row.id
+                                        treeFocused = true
+                                        model.openFile(row.item.url)
+                                    })
+                                    .accessibilityAddTraits(.isButton)
+                                    .accessibilityIdentifier("pks-note-\(row.item.name)")
                             }
                         }
                         .padding(.leading, CGFloat(row.depth) * NotesGeometry.treeIndent)
@@ -1076,23 +1356,6 @@ struct NotesWindow: View {
                                     .stroke(theme.linkColor.opacity(0.75), lineWidth: 1.5)
                                     .allowsHitTesting(false)
                             }
-                        }
-                        .draggable(row.item.url)
-                        .dropDestination(for: URL.self) { urls, _ in
-                            guard row.item.isFolder,
-                                  let source = urls.first?.standardizedFileURL,
-                                  model.canManage(source),
-                                  source != row.item.url else { return false }
-                            let moved = model.moveItem(source, to: row.item.url)
-                            if moved != nil {
-                                expandedFolderPaths.insert(row.item.url.path)
-                                fileDropTargetPath = nil
-                                return true
-                            }
-                            return false
-                        } isTargeted: { targeted in
-                            guard row.item.isFolder else { return }
-                            fileDropTargetPath = targeted ? row.id : nil
                         }
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
@@ -1237,6 +1500,17 @@ struct NotesWindow: View {
                 .help(language.text("Reveal Current File") + " (⌥F1)")
                 .accessibilityIdentifier("pks-reveal-current-file-button")
 
+                Button(action: openQuickPicker) {
+                    Image(systemName: "command")
+                        .font(.system(size: 13.5, weight: .medium))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(language.text("Quick Open a file in the current library") + " (⌘P)")
+                .accessibilityIdentifier("pks-sidebar-quick-open")
+
                 Button {
                     beginNewNote()
                 } label: {
@@ -1252,7 +1526,7 @@ struct NotesWindow: View {
             }
             .padding(.horizontal, 17)
             .frame(height: 48)
-            .padding(.top, 4)
+            .padding(.top, 1)
 
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
@@ -1289,44 +1563,16 @@ struct NotesWindow: View {
                         in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
             .padding(.top, 5)
-            .padding(.bottom, 17)
+            .padding(.bottom, 9)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(language.text("NAVIGATION"))
-                    .font(.system(size: 10, weight: .semibold))
-                    .tracking(0.75)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 11)
-                    .padding(.bottom, 3)
-
+            HStack(spacing: 4) {
                 navigationRow(.notes, symbol: "square.stack.3d.up", title: language.text("All Notes"))
                 navigationRow(.recent, symbol: "clock", title: language.text("Recent"))
                 navigationRow(.favorites, symbol: "star", title: language.text("Favorites"))
                 navigationRow(.search, symbol: "text.magnifyingglass", title: language.text("PKS Search"))
-
-                Button(action: openQuickPicker) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "command")
-                            .font(.system(size: 14, weight: .medium))
-                            .frame(width: 18, height: 22)
-                            .foregroundStyle(.secondary)
-                        Text(language.text("Quick Open"))
-                            .font(.system(size: 12.5, weight: .medium))
-                        Spacer()
-                        Text("⌘P")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 11)
-                    .frame(height: 32)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(language.text("Quick Open a file in the current library"))
-                .accessibilityIdentifier("pks-sidebar-quick-open")
             }
             .padding(.horizontal, 10)
-            .padding(.bottom, 19)
+            .padding(.bottom, 8)
 
             HStack(spacing: 6) {
                 Text(language.text(sidebarSectionTitleKey))
@@ -1460,6 +1706,8 @@ struct NotesWindow: View {
                     return .handled
                 }
             }
+            .frame(maxHeight: .infinity)
+            .layoutPriority(1)
         }
         .background(sidebarCanvas)
     }
@@ -1776,8 +2024,25 @@ struct NotesWindow: View {
             }
         }
         .background(theme.canvas)
-        .navigationTitle(model.selected?.deletingPathExtension().lastPathComponent
-                         ?? model.previewPDF?.lastPathComponent
+        .overlay(alignment: .topTrailing) {
+            if let opening = model.openingNoteName, model.selected != nil {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.mini)
+                    Text("\(language.text("Opening note…")) \(opening)")
+                        .font(.caption)
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(.regularMaterial, in: Capsule())
+                .padding(10)
+                .allowsHitTesting(false)
+                .accessibilityIdentifier("pks-opening-note-indicator")
+            }
+        }
+        .navigationTitle(model.previewPDF?.lastPathComponent
+                         ?? model.selected?.deletingPathExtension().lastPathComponent
                          ?? model.previewSource?.title
                          ?? language.text("PKS Notes"))
     }
@@ -1785,13 +2050,26 @@ struct NotesWindow: View {
     @ViewBuilder
     private var reader: some View {
         if let url = model.previewPDF {
-            NativePDFPreview(url: url)
+            if let note = model.selected, model.externalBody == nil {
+                HSplitView {
+                    pdfReader(url)
+                        .frame(minWidth: 330)
+                    studyNotePane(note)
+                        .frame(minWidth: 280, idealWidth: 400)
+                }
+                .accessibilityIdentifier("pks-study-workspace")
+            } else {
+                pdfReader(url)
+            }
         } else if showingMindMap
                     && ProAccess.allows(.mindMap, unlocked: purchases.unlocked)
                     && model.selected != nil && model.externalBody == nil {
             MindMapCanvas(
                 source: $model.draft,
+                selectedID: $mindMapSelectionLine,
+                revision: model.draftRevision,
                 openLink: { target in _ = model.openKnowledgeLink(target) },
+                revealSource: { line in revealMarkdownLine(line) },
                 importOutline: { markdown, name in
                     // Import into a new note rather than overwriting the active note.
                     guard model.newNote(named: name, initialContent: markdown) != nil else {
@@ -1813,6 +2091,67 @@ struct NotesWindow: View {
                     .frame(minWidth: 270)
             }
         }
+    }
+
+    private func pdfReader(_ url: URL) -> some View {
+        NativePDFPreview(
+            url: url,
+            root: model.root,
+            requestedPage: model.previewPDFPage,
+            requestedAnchor: model.previewPDFAnchor,
+            onAddPageToNote: { page, selectedText, anchor in
+                beginPDFCapture(
+                    pdf: url,
+                    page: page,
+                    selectedText: selectedText,
+                    anchor: anchor
+                )
+            }
+        )
+    }
+
+    private func studyNotePane(_ note: URL) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "note.text")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(note.deletingPathExtension().lastPathComponent)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Text(language.text("Study Note"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                if model.autoSavePending {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .accessibilityLabel(language.text("Save"))
+                }
+                Button {
+                    model.closePDFPreview()
+                    mode = .edit
+                    Task { @MainActor in editorFocused = true }
+                } label: {
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .help(language.text("Open note only"))
+                .accessibilityLabel(language.text("Open note only"))
+                .accessibilityIdentifier("pks-study-note-only")
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 38)
+            .background(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
+
+            Divider()
+            editor
+        }
+        .background(theme.canvas)
+        .accessibilityIdentifier("pks-study-note-pane")
     }
 
     private var editor: some View {
@@ -1844,8 +2183,48 @@ struct NotesWindow: View {
             .onAppear { resetNativeEditorUndoBaseline() }
     }
 
+    private func setMindMapVisible(_ visible: Bool) {
+        guard visible != showingMindMap else { return }
+        if visible {
+            modeBeforeMindMap = mode
+            if let textView = MarkdownNativeCommand.activeTextView()
+                ?? markdownTextView(in: NSApp.keyWindow?.contentView) {
+                mindMapSelectionLine = MindMapOutline.nodeID(
+                    atUTF16Offset: textView.selectedRange().location,
+                    in: model.draft
+                )
+            } else if mindMapSelectionLine == nil {
+                mindMapSelectionLine = MindMapOutline.nodes(in: model.draft).first?.id
+            }
+            showingMindMap = true
+        } else if let line = mindMapSelectionLine {
+            revealMarkdownLine(line)
+        } else {
+            showingMindMap = false
+            mode = modeBeforeMindMap
+        }
+    }
+
+    private func revealMarkdownLine(_ line: Int) {
+        guard model.selected != nil,
+              let range = MindMapOutline.sourceLineRange(in: model.draft, nodeID: line) else { return }
+        mindMapSelectionLine = line
+        showingMindMap = false
+        mode = .edit
+        Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(60))
+            guard let textView = MarkdownNativeCommand.activeTextView()
+                    ?? markdownTextView(in: NSApp.keyWindow?.contentView) else { return }
+            NSApp.keyWindow?.makeFirstResponder(textView)
+            textView.setSelectedRange(range)
+            textView.scrollRangeToVisible(range)
+        }
+    }
+
     private var renderedNote: some View {
-        MarkdownPreviewPane(source: model.body, live: mode == .split,
+        MarkdownPreviewPane(source: model.body, revision: model.bodyRevision,
+                            live: mode == .split,
                             identity: model.selected?.path ?? model.previewSource?.documentId ?? "",
                             theme: theme,
                             fontAdjustment: fontAdjustment,
@@ -1861,64 +2240,4 @@ struct NotesWindow: View {
             })
     }
 
-}
-
-
-/// PDFKit is part of macOS; no PDF renderer, server or extra dependency is bundled.
-private struct NativePDFPreview: View {
-    @Environment(\.notesLanguage) private var language
-    let url: URL
-    @State private var document: PDFDocument?
-    @State private var attemptedURL: URL?
-
-    var body: some View {
-        Group {
-            if let document, attemptedURL == url {
-                PDFCanvas(document: document)
-            } else if attemptedURL == url {
-                VStack(spacing: 12) {
-                    Image(systemName: "doc.richtext")
-                        .font(.system(size: 27, weight: .ultraLight))
-                        .foregroundStyle(.tertiary)
-                    Text(language.text("Cannot preview this PDF"))
-                        .font(.title3.weight(.medium))
-                    Text(language.text("The original file may be unavailable or damaged."))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Button(language.text("Open with Default App")) {
-                        NSWorkspace.shared.open(url)
-                    }
-                    .padding(.top, 6)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ProgressView(language.text("Opening PDF…"))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .task(id: url) {
-            document = PDFDocument(url: url)
-            attemptedURL = url
-        }
-        .accessibilityIdentifier("pks-pdf-preview")
-    }
-}
-
-private struct PDFCanvas: NSViewRepresentable {
-    let document: PDFDocument
-
-    func makeNSView(context: Context) -> PDFView {
-        let view = PDFView()
-        view.displayMode = .singlePageContinuous
-        view.autoScales = true
-        view.backgroundColor = .textBackgroundColor
-        view.document = document
-        return view
-    }
-
-    func updateNSView(_ view: PDFView, context: Context) {
-        if view.document !== document {
-            view.document = document
-        }
-    }
 }

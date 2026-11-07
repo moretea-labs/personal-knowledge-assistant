@@ -115,6 +115,32 @@ extension MindMapOutlineTests {
         XCTAssertNil(MindMapOutline.shiftListSubtree(in: "# Root\n- Parent\nparagraph\n- Next", nodeID: 1, deeper: true))
         XCTAssertNil(MindMapOutline.shiftListSubtree(in: "# Root\n- Root item", nodeID: 1, deeper: false))
     }
+
+    func testActionAvailabilityMatchesCanonicalMutations() {
+        let source = "# Root\n- First\n- Second\n  - Child\n- With prose\n  details"
+
+        for nodeID in [0, 1, 2, 3, 4] {
+            let availability = MindMapOutline.actionAvailability(in: source, nodeID: nodeID)
+            XCTAssertEqual(
+                availability.canPromote,
+                MindMapOutline.shiftListSubtree(in: source, nodeID: nodeID, deeper: false) != nil
+            )
+            XCTAssertEqual(
+                availability.canDemote,
+                MindMapOutline.shiftListSubtree(in: source, nodeID: nodeID, deeper: true) != nil
+            )
+            XCTAssertEqual(
+                availability.canDeleteLeaf,
+                MindMapOutline.deleteLeaf(in: source, nodeID: nodeID) != nil
+            )
+        }
+
+        XCTAssertEqual(
+            MindMapOutline.actionAvailability(in: source, nodeID: 3),
+            .init(canPromote: true, canDemote: false, canDeleteLeaf: true)
+        )
+        XCTAssertFalse(MindMapOutline.actionAvailability(in: source, nodeID: 4).canDeleteLeaf)
+    }
 }
 
 
@@ -202,5 +228,60 @@ extension MindMapOutlineTests {
         let roots = layout.placements.filter { $0.parentID == nil }
         XCTAssertEqual(roots.map(\.node.title), ["One", "Two"])
         XCTAssertLessThan(roots[0].center.y, roots[1].center.y)
+    }
+}
+
+
+extension MindMapOutlineTests {
+    func testSourceLineRangeUsesUTF16AndExactMarkdownLine() {
+        let source = "# 根节点\n- Alpha 😀\n  - Child\nParagraph"
+        XCTAssertEqual(
+            MindMapOutline.sourceLineRange(in: source, nodeID: 1),
+            NSRange(location: 6, length: 10)
+        )
+        XCTAssertEqual(
+            MindMapOutline.sourceLineRange(in: source, nodeID: 2),
+            NSRange(location: 17, length: 9)
+        )
+        XCTAssertNil(MindMapOutline.sourceLineRange(in: source, nodeID: 3))
+    }
+
+    func testCaretResolvesToNearestPrecedingMindMapNode() {
+        let source = "# Root\nIntro paragraph\n- Topic\n  supporting prose\n  - Child"
+        let ns = source as NSString
+        XCTAssertEqual(MindMapOutline.nodeID(atUTF16Offset: 0, in: source), 0)
+        XCTAssertEqual(
+            MindMapOutline.nodeID(atUTF16Offset: ns.range(of: "Intro").location, in: source),
+            0
+        )
+        XCTAssertEqual(
+            MindMapOutline.nodeID(atUTF16Offset: ns.range(of: "supporting").location, in: source),
+            2
+        )
+        XCTAssertEqual(
+            MindMapOutline.nodeID(atUTF16Offset: ns.range(of: "Child").location, in: source),
+            4
+        )
+    }
+}
+
+
+extension MindMapOutlineTests {
+    func testLinkParserHandlesWholeMultilineDocumentInOnePass() {
+        let source = """
+        # Project
+        [[Alpha|A]]
+        prose
+        [Beta](Nested/Beta.md)
+        [[Gamma]]
+        """
+        XCTAssertEqual(
+            MindMapOutline.links(in: source),
+            [
+                .init(label: "A", target: "Alpha"),
+                .init(label: "Gamma", target: "Gamma"),
+                .init(label: "Beta", target: "Nested/Beta.md")
+            ]
+        )
     }
 }

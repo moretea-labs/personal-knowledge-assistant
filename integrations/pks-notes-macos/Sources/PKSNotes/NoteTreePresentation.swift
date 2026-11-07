@@ -33,6 +33,35 @@ enum NoteTreePresentation {
         return result
     }
 
+    struct QuickOpenEntry: Identifiable {
+        let item: NoteItem
+        let foldedName: String
+        let foldedFolder: String
+        var id: String { item.id }
+    }
+
+    /// Normalize and alphabetize once when the filesystem tree changes instead of
+    /// folding and sorting the full match set on every Quick Open keystroke.
+    static func quickOpenEntries(_ items: [NoteItem]) -> [QuickOpenEntry] {
+        openableFiles(items).enumerated()
+            .map { order, item in
+                (
+                    order,
+                    QuickOpenEntry(
+                        item: item,
+                        foldedName: fold(item.name),
+                        foldedFolder: fold(item.url.deletingLastPathComponent().path)
+                    )
+                )
+            }
+            .sorted { lhs, rhs in
+                let comparison = lhs.1.item.name.localizedStandardCompare(rhs.1.item.name)
+                if comparison != .orderedSame { return comparison == .orderedAscending }
+                return lhs.0 < rhs.0
+            }
+            .map(\.1)
+    }
+
     /// Show a note's folder path relative to its selected workspace.
     /// This makes identically named notes in import/backup folders distinguishable.
     static func quickOpenFolder(for url: URL, in root: URL?) -> String {
@@ -49,30 +78,43 @@ enum NoteTreePresentation {
 
     /// Case/diacritic-insensitive native file matching, without another search index.
     /// Name prefix matches precede name substring, then parent-folder path matches.
-    static func quickOpen(_ files: [NoteItem], query: String, limit: Int = 24) -> [NoteItem] {
-        let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    static func quickOpen(_ entries: [QuickOpenEntry], query: String, limit: Int = 24) -> [NoteItem] {
+        let search = fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !search.isEmpty, limit > 0 else { return [] }
-        func score(_ item: NoteItem) -> Int? {
-            let name = item.name.folding(options: [.caseInsensitive, .diacriticInsensitive],
-                                         locale: .current)
-            if name == search { return 0 }
-            if name.hasPrefix(search) { return 1 }
-            if name.contains(search) { return 2 }
-            let folder = item.url.deletingLastPathComponent().path
-                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            return folder.contains(search) ? 3 : nil
+
+        // Entries are already alphabetized. Keep at most the requested number
+        // of candidates per rank while scanning once, then concatenate ranks.
+        var ranked = Array(repeating: [NoteItem](), count: 4)
+        for entry in entries {
+            let rank: Int?
+            if entry.foldedName == search { rank = 0 }
+            else if entry.foldedName.hasPrefix(search) { rank = 1 }
+            else if entry.foldedName.contains(search) { rank = 2 }
+            else if entry.foldedFolder.contains(search) { rank = 3 }
+            else { rank = nil }
+
+            if let rank, ranked[rank].count < limit {
+                ranked[rank].append(entry.item)
+            }
         }
-        return files.compactMap { item -> (item: NoteItem, rank: Int)? in
-            guard let rank = score(item) else { return nil }
-            return (item, rank)
+
+        var result: [NoteItem] = []
+        result.reserveCapacity(limit)
+        for bucket in ranked {
+            for item in bucket {
+                result.append(item)
+                if result.count == limit { return result }
+            }
         }
-        .sorted {
-            if $0.rank != $1.rank { return $0.rank < $1.rank }
-            return $0.item.name.localizedStandardCompare($1.item.name) == .orderedAscending
-        }
-        .prefix(limit)
-        .map(\.item)
+        return result
+    }
+
+    static func quickOpen(_ files: [NoteItem], query: String, limit: Int = 24) -> [NoteItem] {
+        quickOpen(quickOpenEntries(files), query: query, limit: limit)
+    }
+
+    private static func fold(_ value: String) -> String {
+        value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
 
     enum Direction {

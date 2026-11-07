@@ -7,7 +7,90 @@ struct MindMapNode: Equatable, Identifiable {
     let title: String
 }
 
+struct MindMapActionAvailability: Equatable {
+    let canPromote: Bool
+    let canDemote: Bool
+    let canDeleteLeaf: Bool
+}
+
 enum MindMapOutline {
+    private static let wikiLinkRegex = try! NSRegularExpression(pattern: #"\[\[([^\]\n]+)\]\]"#)
+    private static let markdownLinkRegex = try! NSRegularExpression(pattern: #"\[([^\]\n]+)\]\(([^)\n]+)\)"#)
+
+    private struct EditContext {
+        let parsed: [MindMapNode]
+        let position: Int
+        let node: MindMapNode
+        let lines: [String]
+    }
+
+    private static func editContext(in source: String, nodeID: Int) -> EditContext? {
+        let parsed = nodes(in: source)
+        guard let position = parsed.firstIndex(where: { $0.id == nodeID }) else { return nil }
+        let lines = source.components(separatedBy: "\n")
+        guard lines.indices.contains(nodeID) else { return nil }
+        return EditContext(parsed: parsed, position: position, node: parsed[position], lines: lines)
+    }
+
+    private static func isListLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) })
+    }
+
+    private static func shiftSubtreeEndLine(_ context: EditContext) -> Int {
+        guard context.position + 1 < context.parsed.count else { return context.lines.count }
+        for candidate in context.parsed[(context.position + 1)...] where candidate.depth <= context.node.depth {
+            return candidate.id
+        }
+        return context.lines.count
+    }
+
+    private static func canShiftListSubtree(_ context: EditContext, deeper: Bool) -> Bool {
+        let nodeID = context.node.id
+        guard isListLine(context.lines[nodeID]) else { return false }
+        let endLine = shiftSubtreeEndLine(context)
+        for index in nodeID..<endLine {
+            let trimmed = context.lines[index].trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty && !isListLine(context.lines[index]) { return false }
+        }
+
+        if deeper {
+            guard context.position > 0 else { return false }
+            var previousStructural: MindMapNode?
+            for candidate in context.parsed[..<context.position].reversed() where candidate.depth <= context.node.depth {
+                previousStructural = candidate
+                break
+            }
+            return previousStructural?.depth == context.node.depth
+        }
+
+        return context.lines[nodeID].prefix(while: { $0 == " " }).count >= 2
+    }
+
+    private static func canDeleteLeaf(_ context: EditContext) -> Bool {
+        if context.position + 1 < context.parsed.count,
+           context.parsed[context.position + 1].depth > context.node.depth {
+            return false
+        }
+        let nodeID = context.node.id
+        guard isListLine(context.lines[nodeID]) else { return false }
+        let nextNode = context.position + 1 < context.parsed.count
+            ? context.parsed[context.position + 1].id
+            : context.lines.count
+        return !context.lines[(nodeID + 1)..<nextNode]
+            .contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+    }
+
+    static func actionAvailability(in source: String, nodeID: Int) -> MindMapActionAvailability {
+        guard let context = editContext(in: source, nodeID: nodeID) else {
+            return .init(canPromote: false, canDemote: false, canDeleteLeaf: false)
+        }
+        return .init(
+            canPromote: canShiftListSubtree(context, deeper: false),
+            canDemote: canShiftListSubtree(context, deeper: true),
+            canDeleteLeaf: canDeleteLeaf(context)
+        )
+    }
     static func nodes(in markdown: String) -> [MindMapNode] {
         var result: [MindMapNode] = []
         var headingDepth = 0
@@ -35,6 +118,33 @@ enum MindMapOutline {
             }
         }
         return result
+    }
+
+    /// Node IDs are canonical Markdown line indexes. Convert them to native UTF-16
+    /// ranges only at the editor boundary so Mind Map never owns a second position model.
+    static func sourceLineRange(in markdown: String, nodeID: Int) -> NSRange? {
+        guard nodeID >= 0 else { return nil }
+        let lines = markdown.components(separatedBy: "\n")
+        guard lines.indices.contains(nodeID),
+              nodes(in: markdown).contains(where: { $0.id == nodeID }) else { return nil }
+
+        var location = 0
+        for index in 0..<nodeID {
+            location += (lines[index] as NSString).length + 1
+        }
+        return NSRange(location: location, length: (lines[nodeID] as NSString).length)
+    }
+
+    /// Resolve an editor caret/selection position to the nearest preceding outline node.
+    /// Prose below a heading/list item therefore stays associated with its structural parent.
+    static func nodeID(atUTF16Offset offset: Int, in markdown: String) -> Int? {
+        let length = (markdown as NSString).length
+        let clamped = min(max(0, offset), length)
+        let prefix = (markdown as NSString).substring(to: clamped)
+        let lineIndex = prefix.reduce(into: 0) { count, character in
+            if character == "\n" { count += 1 }
+        }
+        return nodes(in: markdown).last(where: { $0.id <= lineIndex })?.id
     }
 }
 
@@ -81,21 +191,9 @@ extension MindMapOutline {
 
     /// Delete a leaf only: never silently discard child nodes or prose attached to a heading.
     static func deleteLeaf(in source: String, nodeID: Int) -> String? {
-        let parsed = nodes(in: source)
-        guard let position = parsed.firstIndex(where: { $0.id == nodeID }) else { return nil }
-        let node = parsed[position]
-        if position + 1 < parsed.count && parsed[position + 1].depth > node.depth { return nil }
-        var lines = source.components(separatedBy: "\n")
-        guard lines.indices.contains(nodeID) else { return nil }
-        // Only list items can be removed without potentially orphaning prose/sections.
-        let trimmed = lines[nodeID].trimmingCharacters(in: .whitespaces)
-        guard ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) else { return nil }
-        // A Markdown list item can own paragraphs, task details, or fenced code
-        // even without parsed child nodes. Do not orphan that content.
-        let nextNode = position + 1 < parsed.count ? parsed[position + 1].id : lines.count
-        guard !lines[(nodeID + 1)..<nextNode]
-            .contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-        else { return nil }
+        guard let context = editContext(in: source, nodeID: nodeID),
+              canDeleteLeaf(context) else { return nil }
+        var lines = context.lines
         lines.remove(at: nodeID)
         return lines.joined(separator: "\n")
     }
@@ -156,11 +254,9 @@ struct MindMapLink: Equatable {
 
 extension MindMapOutline {
     static func links(in title: String) -> [MindMapLink] {
-        let patterns = [#"\[\[([^\]\n]+)\]\]"#, #"\[([^\]\n]+)\]\(([^)\n]+)\)"#]
         var links: [MindMapLink] = []
         let range = NSRange(title.startIndex..<title.endIndex, in: title)
-        for (index, pattern) in patterns.enumerated() {
-            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+        for (index, regex) in [wikiLinkRegex, markdownLinkRegex].enumerated() {
             for match in regex.matches(in: title, range: range) {
                 guard let labelRange = Range(match.range(at: 1), in: title) else { continue }
                 let raw = String(title[labelRange])
@@ -183,45 +279,10 @@ extension MindMapOutline {
     /// Reparent a pure Markdown list subtree by one indentation level.
     /// Conservatively rejects prose/code inside the subtree to avoid corrupting Markdown.
     static func shiftListSubtree(in source: String, nodeID: Int, deeper: Bool) -> String? {
-        let parsed = nodes(in: source)
-        guard let position = parsed.firstIndex(where: { $0.id == nodeID }) else { return nil }
-        let node = parsed[position]
-        var lines = source.components(separatedBy: "\n")
-        guard lines.indices.contains(nodeID) else { return nil }
-
-        func isListLine(_ line: String) -> Bool {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            return ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) })
-        }
-        guard isListLine(lines[nodeID]) else { return nil }
-
-        let endLine: Int = {
-            guard position + 1 < parsed.count else { return lines.count }
-            for candidate in parsed[(position + 1)...] where candidate.depth <= node.depth {
-                return candidate.id
-            }
-            return lines.count
-        }()
-
-        for index in nodeID..<endLine {
-            let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
-            if !trimmed.isEmpty && !isListLine(lines[index]) { return nil }
-        }
-
-        if deeper {
-            var previousStructural: MindMapNode?
-            if position > 0 {
-                for candidate in parsed[..<position].reversed() where candidate.depth <= node.depth {
-                    previousStructural = candidate
-                    break
-                }
-            }
-            guard previousStructural?.depth == node.depth else { return nil }
-        } else {
-            let indent = lines[nodeID].prefix(while: { $0 == " " }).count
-            guard indent >= 2 else { return nil }
-        }
-
+        guard let context = editContext(in: source, nodeID: nodeID),
+              canShiftListSubtree(context, deeper: deeper) else { return nil }
+        var lines = context.lines
+        let endLine = shiftSubtreeEndLine(context)
         let delta = deeper ? 2 : -2
         for index in nodeID..<endLine where !lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
             let currentIndent = lines[index].prefix(while: { $0 == " " }).count

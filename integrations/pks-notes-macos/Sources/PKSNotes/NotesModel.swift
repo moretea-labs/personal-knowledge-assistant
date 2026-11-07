@@ -65,7 +65,31 @@ struct NoteItem: Identifiable, Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(url) }
 }
 
+struct WorkspaceFileStamp: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+    let size: Int64
+    let modificationSeconds: Int64
+    let modificationNanoseconds: Int64
+    let changeSeconds: Int64
+    let changeNanoseconds: Int64
+}
+
 enum WorkspaceFiles {
+    static func fileStamp(_ url: URL) -> WorkspaceFileStamp? {
+        var info = Darwin.stat()
+        guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { return nil }
+        return WorkspaceFileStamp(
+            device: UInt64(info.st_dev),
+            inode: UInt64(info.st_ino),
+            size: Int64(info.st_size),
+            modificationSeconds: Int64(info.st_mtimespec.tv_sec),
+            modificationNanoseconds: Int64(info.st_mtimespec.tv_nsec),
+            changeSeconds: Int64(info.st_ctimespec.tv_sec),
+            changeNanoseconds: Int64(info.st_ctimespec.tv_nsec)
+        )
+    }
+
     static func defaultVault() -> URL {
         let root = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/学习笔记管理", isDirectory: true)
@@ -91,26 +115,120 @@ enum WorkspaceFiles {
         return true
     }
 
-    static func tree(in root: URL) -> [NoteItem] {
-        let fm = FileManager.default
-        // File Provider can block on contentsOfDirectory(at:includingPropertiesForKeys:).
-        // Plain names plus lstat are enough to classify entries without hydrating iCloud files.
-        guard let names = try? fm.contentsOfDirectory(atPath: root.path) else { return [] }
-        return names.compactMap { name -> NoteItem? in
-            guard !name.hasPrefix(".") else { return nil }
-            let url = root.appendingPathComponent(name)
-            var info = Darwin.stat()
-            guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { return nil }
-            let kind = info.st_mode & mode_t(S_IFMT)
-            if kind == mode_t(S_IFLNK) { return nil }
-            if kind == mode_t(S_IFDIR) {
-                let children = tree(in: url)
-                return NoteItem(url: url, children: children)
+    private static var scanCancelled: Bool {
+        withUnsafeCurrentTask { $0?.isCancelled ?? false }
+    }
+
+    private enum DirectoryEntryKind {
+        case directory
+        case regular
+    }
+
+    private struct DirectoryEntry {
+        let url: URL
+        let kind: DirectoryEntryKind
+    }
+
+    /// POSIX directory enumeration avoids one lstat syscall per normal APFS/
+    /// File Provider entry. d_type is authoritative when available; unusual
+    /// filesystems fall back to lstat only for DT_UNKNOWN.
+    private static func directoryEntries(in folder: URL) -> [DirectoryEntry] {
+        guard !scanCancelled, let directory = Darwin.opendir(folder.path) else { return [] }
+        defer { Darwin.closedir(directory) }
+
+        var result: [DirectoryEntry] = []
+        while !scanCancelled, let entry = Darwin.readdir(directory) {
+            let length = Int(entry.pointee.d_namlen)
+            guard length > 0 else { continue }
+            let name = withUnsafePointer(to: &entry.pointee.d_name) { pointer in
+                pointer.withMemoryRebound(to: CChar.self, capacity: length + 1) {
+                    String(cString: $0)
+                }
             }
-            return kind == mode_t(S_IFREG) ? NoteItem(url: url, children: nil) : nil
+            guard name != ".", name != "..", !name.hasPrefix(".") else { continue }
+
+            let url = folder.appendingPathComponent(name)
+            switch Int32(entry.pointee.d_type) {
+            case DT_DIR:
+                result.append(.init(url: url, kind: .directory))
+            case DT_REG:
+                result.append(.init(url: url, kind: .regular))
+            case DT_LNK:
+                continue
+            case DT_UNKNOWN:
+                var info = Darwin.stat()
+                guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { continue }
+                switch info.st_mode & mode_t(S_IFMT) {
+                case mode_t(S_IFDIR):
+                    result.append(.init(url: url, kind: .directory))
+                case mode_t(S_IFREG):
+                    result.append(.init(url: url, kind: .regular))
+                default:
+                    continue
+                }
+            default:
+                continue
+            }
+        }
+        return result
+    }
+
+    static func tree(in root: URL, recursive: Bool = true) -> [NoteItem] {
+        directoryEntries(in: root).compactMap { entry -> NoteItem? in
+            guard !scanCancelled else { return nil }
+            switch entry.kind {
+            case .directory:
+                let children = recursive ? tree(in: entry.url, recursive: true) : []
+                return NoteItem(url: entry.url, children: children)
+            case .regular:
+                return NoteItem(url: entry.url, children: nil)
+            }
         }.sorted { a, b in
             if a.isFolder != b.isFolder { return a.isFolder }
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }
+    }
+
+    /// Flat, transient full-vault files for on-demand Quick Open/backlinks.
+    /// This avoids building and sorting a complete nested tree.
+    static func flatFiles(in root: URL) -> [NoteItem] {
+        var pending = [root]
+        var result: [NoteItem] = []
+
+        while let folder = pending.popLast() {
+            guard !scanCancelled else { break }
+            for entry in directoryEntries(in: folder) {
+                guard !scanCancelled else { return result }
+                switch entry.kind {
+                case .directory:
+                    pending.append(entry.url)
+                case .regular:
+                    result.append(NoteItem(url: entry.url, children: nil))
+                }
+            }
+        }
+        return result
+    }
+
+    /// Replace one loaded folder while preserving every other loaded subtree.
+    static func replacingChildren(
+        in items: [NoteItem],
+        folder: URL,
+        with children: [NoteItem]
+    ) -> [NoteItem] {
+        let target = folder.standardizedFileURL.path
+        return items.map { item in
+            let itemPath = item.url.standardizedFileURL.path
+            if itemPath == target, item.isFolder {
+                return NoteItem(url: item.url, children: children)
+            }
+            guard target.hasPrefix(itemPath + "/"), let current = item.children else {
+                return item
+            }
+            return NoteItem(
+                url: item.url,
+                children: replacingChildren(in: current, folder: folder, with: children)
+            )
         }
     }
 
@@ -135,7 +253,8 @@ enum WorkspaceFiles {
         _ rawTarget: String,
         from note: URL,
         in root: URL,
-        candidates suppliedCandidates: [URL]? = nil
+        candidates suppliedCandidates: [URL]? = nil,
+        candidateBasenames suppliedCandidateBasenames: [String: [URL]]? = nil
     ) -> URL? {
         let trimmed = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -163,23 +282,60 @@ enum WorkspaceFiles {
 
         guard !decoded.contains("/") else { return nil }
         let wanted = URL(fileURLWithPath: decoded).deletingPathExtension().lastPathComponent
-        let candidates = suppliedCandidates ?? WorkspaceBacklinks.markdownFiles(tree(in: root))
-        let matches = candidates.filter {
+        let candidates = suppliedCandidates ?? flatFiles(in: root)
+            .filter(\.isMarkdown)
+            .map { $0.url.standardizedFileURL }
+        let matches = suppliedCandidateBasenames?[wanted] ?? candidates.filter {
             $0.deletingPathExtension().lastPathComponent == wanted
         }
         return matches.count == 1 ? matches[0].standardizedFileURL : nil
     }
 
+    /// One local-link resolver for Markdown notes and other workspace files such as PDFs.
+    /// Markdown remains the link authority; fragments (for example #page=12) are navigation hints only.
+    static func resolveLinkedTarget(
+        _ rawTarget: String,
+        from note: URL,
+        in root: URL,
+        candidates: [URL]? = nil,
+        candidateBasenames: [String: [URL]]? = nil
+    ) -> URL? {
+        let value = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+
+        if let markdown = resolveKnowledgeTarget(
+            value,
+            from: note,
+            in: root,
+            candidates: candidates,
+            candidateBasenames: candidateBasenames
+        ) {
+            return markdown
+        }
+
+        guard let link = URL(string: value),
+              link.scheme == nil || link.isFileURL,
+              let resolved = resolve(link, from: note, in: root),
+              FileManager.default.fileExists(atPath: resolved.path) else { return nil }
+        return resolved
+    }
+
     /// Deterministic collision-safe suggestion; O_EXCL remains the final writer guard.
-    static func nextUntitledName(in folder: URL) -> String? {
+    static func nextAvailableNoteName(basedOn name: String, in folder: URL) -> String? {
+        guard let normalized = safeNewNoteName(name) else { return nil }
+        let stem = String(normalized.dropLast(3))
         for index in 0..<10_000 {
-            let base = index == 0 ? "Untitled" : "Untitled \(index + 1)"
+            let base = index == 0 ? stem : "\(stem) \(index + 1)"
             let filename = base + ".md"
             if !FileManager.default.fileExists(atPath: folder.appendingPathComponent(filename).path) {
                 return filename
             }
         }
         return nil
+    }
+
+    static func nextUntitledName(in folder: URL) -> String? {
+        nextAvailableNoteName(basedOn: "Untitled", in: folder)
     }
 
     static func storePastedPNG(_ data: Data, for note: URL, in root: URL, stem: String = "pasted-image") -> String? {
@@ -205,6 +361,12 @@ enum WorkspaceFiles {
         return nil
     }
 
+    static func isDataless(_ url: URL) -> Bool {
+        var info = Darwin.stat()
+        guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { return false }
+        return (info.st_flags & UInt32(SF_DATALESS)) != 0
+    }
+
     static func safeNewNoteName(_ name: String) -> String? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != ".", trimmed != "..",
@@ -223,6 +385,11 @@ struct NoteBacklink: Identifiable, Equatable {
     var title: String { source.deletingPathExtension().lastPathComponent }
 }
 
+struct BacklinkScanResult: Equatable {
+    let backlinks: [NoteBacklink]
+    let skippedDatalessFiles: Int
+}
+
 enum WorkspaceBacklinks {
     static func markdownFiles(_ items: [NoteItem]) -> [URL] {
         var result: [URL] = []
@@ -239,29 +406,44 @@ enum WorkspaceBacklinks {
         return result
     }
 
-    static func find(target: URL, root: URL, files: [NoteItem]) -> [NoteBacklink] {
+    static func scan(target: URL, root: URL, files: [NoteItem]) -> BacklinkScanResult {
         let target = target.standardizedFileURL
         let candidates = markdownFiles(files)
+        let candidateBasenames = Dictionary(grouping: candidates) {
+            $0.deletingPathExtension().lastPathComponent
+        }
         var result: [NoteBacklink] = []
+        var skippedDatalessFiles = 0
 
         for source in candidates where source != target {
+            if WorkspaceFiles.isDataless(source) {
+                skippedDatalessFiles += 1
+                continue
+            }
             guard let content = try? String(contentsOf: source, encoding: .utf8) else { continue }
             var count = 0
-            for line in content.components(separatedBy: .newlines) {
-                for link in MindMapOutline.links(in: line) {
-                    guard let resolved = WorkspaceFiles.resolveKnowledgeTarget(
-                        link.target, from: source, in: root, candidates: candidates
-                    ) else { continue }
-                    if resolved.standardizedFileURL == target { count += 1 }
-                }
+            for link in MindMapOutline.links(in: content) {
+                guard let resolved = WorkspaceFiles.resolveLinkedTarget(
+                    link.target,
+                    from: source,
+                    in: root,
+                    candidates: candidates,
+                    candidateBasenames: candidateBasenames
+                ) else { continue }
+                if resolved.standardizedFileURL == target { count += 1 }
             }
             if count > 0 { result.append(.init(source: source, count: count)) }
         }
 
-        return result.sorted {
+        let backlinks = result.sorted {
             if $0.count != $1.count { return $0.count > $1.count }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
+        return .init(backlinks: backlinks, skippedDatalessFiles: skippedDatalessFiles)
+    }
+
+    static func find(target: URL, root: URL, files: [NoteItem]) -> [NoteBacklink] {
+        scan(target: target, root: root, files: files).backlinks
     }
 }
 
@@ -270,16 +452,27 @@ final class NotesModel: ObservableObject {
     @Published private(set) var root: URL?
     @Published private(set) var files: [NoteItem] = []
     @Published private(set) var loadingFiles = false
+    @Published private(set) var globalFiles: [NoteItem] = []
+    @Published private(set) var indexingFiles = false
+    @Published private(set) var globalFileIndexReady = false
     @Published private(set) var loadingNote = false
     @Published private(set) var selected: URL?
     @Published private(set) var previewPDF: URL?
+    @Published private(set) var previewPDFPage: Int?
+    @Published private(set) var previewPDFAnchor: PDFSourceAnchor?
     @Published var draft: String = "" {
-        didSet { scheduleAutoSave() }
+        didSet {
+            draftRevision &+= 1
+            bodyRevision &+= 1
+            scheduleAutoSave()
+        }
     }
     @Published private(set) var autoSavePending = false
     @Published private(set) var baseline: String = ""
     @Published private(set) var externalTitle: String?
-    @Published private(set) var externalBody: String?
+    @Published private(set) var externalBody: String? {
+        didSet { bodyRevision &+= 1 }
+    }
     @Published private(set) var previewSource: SearchHit?
     @Published private(set) var activeMatch: SearchHit?
     @Published private(set) var matchJumpSequence = 0
@@ -292,27 +485,52 @@ final class NotesModel: ObservableObject {
     @Published private(set) var searchFailed = false
     @Published private(set) var backlinks: [NoteBacklink] = []
     @Published private(set) var loadingBacklinks = false
+    @Published private(set) var backlinkSkippedCloudFiles = 0
     @Published private(set) var relatedHits: [SearchHit] = []
     @Published private(set) var loadingRelated = false
     @Published private(set) var recentNotes: [URL] = []
     @Published private(set) var favoriteNotes: [URL] = []
     @Published private(set) var relatedError: String?
-    private var savedModification: Date?
+
+    // Lightweight render identities. They change with content mutations but never
+    // become content authorities; views can invalidate derived work in O(1).
+    private(set) var draftRevision: UInt64 = 0
+    private(set) var bodyRevision: UInt64 = 0
+
+    private struct CachedNote {
+        let content: String
+        let stamp: WorkspaceFileStamp
+    }
+
+    private var savedFileStamp: WorkspaceFileStamp?
     private var autoSaveTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var noteLoadTask: Task<Void, Never>?
     private var requestedNote: URL?
     private var loadIdentity: UUID?
     private var pendingMatch: SearchHit?
+    private var noteCache: [String: CachedNote] = [:]
+    private var noteCacheOrder: [String] = []
     private var securityScopedFolder: URL?
     private var backlinkTask: Task<Void, Never>?
     private var relatedTask: Task<Void, Never>?
+    private var fileRefreshTask: Task<Void, Never>?
+    private var folderLoadTask: Task<Void, Never>?
+    private var pendingFolderPaths: Set<String> = []
+    private var loadedFolderPaths: Set<String> = []
+    private var globalFileScanTask: Task<[NoteItem], Never>?
+    private var globalFileScanGeneration: UInt64 = 0
+    private var knowledgeLinkTask: Task<Void, Never>?
+    private var fileRefreshGeneration: UInt64 = 0
 
     var isDirty: Bool { selected != nil && draft != baseline }
     var title: String { externalTitle ?? previewPDF?.lastPathComponent ?? selected?.lastPathComponent ?? "Select a note" }
     var body: String { externalBody ?? draft }
+    var openingNoteName: String? {
+        guard loadingNote, let requestedNote else { return nil }
+        return requestedNote.deletingPathExtension().lastPathComponent
+    }
     var groupedHits: [SearchResultGroup] { SearchResultGroup.group(hits) }
-    var outgoingLinks: [MindMapLink] { MindMapOutline.knowledgeLinks(in: draft) }
     var selectedIsFavorite: Bool {
         guard let selected else { return false }
         return favoriteNotes.contains(selected.standardizedFileURL)
@@ -337,17 +555,23 @@ final class NotesModel: ObservableObject {
     /// The Markdown file remains the only writer/authority; the task only schedules save().
     private func scheduleAutoSave() {
         autoSaveTask?.cancel()
-        guard !loadingNote, isDirty, let note = selected else {
+        guard !loadingNote, let note = selected else {
             autoSavePending = false
             return
         }
         autoSavePending = true
-        let snapshot = draft
+        let revision = draftRevision
         autoSaveTask = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(650)) }
             catch { return }
             guard !Task.isCancelled, let self,
-                  self.selected == note, self.draft == snapshot, self.isDirty else { return }
+                  self.selected == note, self.draftRevision == revision else { return }
+            // Exact draft/baseline comparison is intentionally deferred until
+            // typing has gone idle, avoiding an O(document-size) comparison per key.
+            guard self.isDirty else {
+                self.autoSavePending = false
+                return
+            }
             self.save()
         }
     }
@@ -434,6 +658,8 @@ final class NotesModel: ObservableObject {
         refresh()
         selected = nil
         previewPDF = nil
+        previewPDFPage = nil
+        previewPDFAnchor = nil
         externalTitle = nil
         externalBody = nil
         previewSource = nil
@@ -459,15 +685,131 @@ final class NotesModel: ObservableObject {
 
     func refresh() {
         guard let root else { return }
+        fileRefreshTask?.cancel()
+        folderLoadTask?.cancel()
+        globalFileScanTask?.cancel()
+        folderLoadTask = nil
+        globalFileScanTask = nil
+        pendingFolderPaths.removeAll()
+        loadedFolderPaths.removeAll()
+        globalFiles = []
+        globalFileIndexReady = false
+        indexingFiles = false
+
+        fileRefreshGeneration &+= 1
+        let generation = fileRefreshGeneration
         loadingFiles = true
-        Task.detached(priority: .userInitiated) { [weak self] in
-            let scanned = WorkspaceFiles.tree(in: root)
-            guard let model = self else { return }
-            await MainActor.run {
-                guard model.root == root else { return }
-                model.files = scanned
-                model.loadingFiles = false
+
+        // The sidebar only needs the current directory. Descendants are loaded
+        // after disclosure, so a collapsed vault never pays recursive I/O.
+        fileRefreshTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let shallow = WorkspaceFiles.tree(in: root, recursive: false)
+            guard !Task.isCancelled else { return }
+            await self?.publishFiles(shallow, root: root, generation: generation)
+        }
+    }
+
+    private func publishFiles(_ scanned: [NoteItem], root: URL, generation: UInt64) {
+        guard self.root == root, fileRefreshGeneration == generation else { return }
+        files = scanned
+        loadingFiles = false
+        fileRefreshTask = nil
+        startPendingFolderLoad()
+    }
+
+    func loadExpandedFolders(_ paths: Set<String>) {
+        guard let root else { return }
+        let rootPath = root.standardizedFileURL.path
+        let candidates = paths.compactMap { path -> String? in
+            let normalized = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+            guard normalized.hasPrefix(rootPath + "/"),
+                  !loadedFolderPaths.contains(normalized) else { return nil }
+            return normalized
+        }
+        pendingFolderPaths.formUnion(candidates)
+        startPendingFolderLoad()
+    }
+
+    private func startPendingFolderLoad() {
+        guard folderLoadTask == nil, !loadingFiles, let root,
+              !pendingFolderPaths.isEmpty else { return }
+
+        let rootPath = root.standardizedFileURL.path
+        let targets = pendingFolderPaths
+            .filter { $0.hasPrefix(rootPath + "/") && !loadedFolderPaths.contains($0) }
+            .sorted {
+                $0.split(separator: "/").count < $1.split(separator: "/").count
             }
+        guard !targets.isEmpty else {
+            pendingFolderPaths.removeAll()
+            return
+        }
+        pendingFolderPaths.subtract(targets)
+
+        let generation = fileRefreshGeneration
+        folderLoadTask = Task { [weak self] in
+            let loader = Task.detached(priority: .userInitiated) {
+                targets.map { path -> (URL, [NoteItem]) in
+                    let folder = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+                    return (folder, WorkspaceFiles.tree(in: folder, recursive: false))
+                }
+            }
+            let loaded = await withTaskCancellationHandler {
+                await loader.value
+            } onCancel: {
+                loader.cancel()
+            }
+
+            guard !Task.isCancelled, let self, self.root == root,
+                  self.fileRefreshGeneration == generation else { return }
+            var updated = self.files
+            for (folder, children) in loaded {
+                updated = WorkspaceFiles.replacingChildren(
+                    in: updated,
+                    folder: folder,
+                    with: children
+                )
+                self.loadedFolderPaths.insert(folder.path)
+            }
+            self.files = updated
+            self.folderLoadTask = nil
+            self.startPendingFolderLoad()
+        }
+    }
+
+    private func completeWorkspaceFiles() async -> [NoteItem] {
+        guard let root else { return [] }
+        if globalFileIndexReady { return globalFiles }
+
+        let generation = fileRefreshGeneration
+        let scan: Task<[NoteItem], Never>
+        if let current = globalFileScanTask, globalFileScanGeneration == generation {
+            scan = current
+        } else {
+            indexingFiles = true
+            let task = Task.detached(priority: .utility) {
+                WorkspaceFiles.flatFiles(in: root)
+            }
+            globalFileScanTask = task
+            globalFileScanGeneration = generation
+            scan = task
+        }
+
+        let scanned = await scan.value
+        guard self.root == root, fileRefreshGeneration == generation else { return [] }
+        globalFileIndexReady = true
+        globalFiles = scanned
+        indexingFiles = false
+        if globalFileScanGeneration == generation {
+            globalFileScanTask = nil
+        }
+        return scanned
+    }
+
+    func prepareGlobalFileIndex() {
+        guard root != nil, !globalFileIndexReady else { return }
+        Task { [weak self] in
+            _ = await self?.completeWorkspaceFiles()
         }
     }
 
@@ -514,7 +856,12 @@ final class NotesModel: ObservableObject {
     }
 
     /// The one local-file dispatch path shared by the tree, Markdown links and search.
-    func openFile(_ url: URL, navigationDecision: UnsavedNoteDecision? = nil) {
+    func openFile(
+        _ url: URL,
+        navigationDecision: UnsavedNoteDecision? = nil,
+        pdfPage: Int? = nil,
+        pdfAnchor: PDFSourceAnchor? = nil
+    ) {
         guard let root, WorkspaceFiles.contains(url, in: root) else {
             message = AppLanguage.current.text("File is outside the selected workspace."); return
         }
@@ -525,20 +872,45 @@ final class NotesModel: ObservableObject {
         }
 
         if ["md", "markdown"].contains(url.pathExtension.lowercased()) {
-            openNote(url, navigationDecision: navigationDecision)
+            // openFile already proved workspace containment and regular-file type.
+            // Do not repeat the full symlink/lstat chain on the main actor.
+            openValidatedNote(url, navigationDecision: navigationDecision, preservePDFPreview: false)
         } else if url.pathExtension.lowercased() == "pdf" {
-            if previewPDF == url { return }
-            guard confirmLeavingNote(decision: navigationDecision) else { return }
+            if previewPDF == url {
+                if let pdfAnchor {
+                    previewPDFAnchor = pdfAnchor
+                    previewPDFPage = pdfAnchor.page
+                } else if let pdfPage {
+                    previewPDFAnchor = nil
+                    previewPDFPage = pdfPage
+                }
+                return
+            }
+            let preservesActiveNote = navigationDecision == nil && selected != nil && externalBody == nil
+            if !preservesActiveNote {
+                guard confirmLeavingNote(decision: navigationDecision) else { return }
+            }
             cancelNoteLoad()
             previewTask?.cancel()
-            selected = nil
+            if !preservesActiveNote {
+                selected = nil
+                baseline = ""
+                draft = ""
+            }
             previewPDF = url
-            baseline = ""
-            draft = ""
+            previewPDFAnchor = pdfAnchor
+            previewPDFPage = pdfAnchor?.page ?? pdfPage
             externalTitle = nil
             externalBody = nil
             previewSource = nil
             activeMatch = nil
+            backlinks = []
+            backlinkTask?.cancel()
+            loadingBacklinks = false
+            relatedHits = []
+            relatedTask?.cancel()
+            loadingRelated = false
+            relatedError = nil
             message = nil
         } else {
             // Do not replace the current note when handing a file to another app.
@@ -547,17 +919,41 @@ final class NotesModel: ObservableObject {
     }
 
     func openNote(_ url: URL, navigationDecision: UnsavedNoteDecision? = nil) {
-        if requestedNote == url { return }
-        if selected == url {
-            cancelNoteLoad() // A re-selection wins over another pending file load.
-            return
-        }
         guard let root, WorkspaceFiles.contains(url, in: root),
               ["md", "markdown"].contains(url.pathExtension.lowercased()) else {
             message = AppLanguage.current.text("Only Markdown files inside the selected workspace can be edited."); return
         }
+        openValidatedNote(url, navigationDecision: navigationDecision, preservePDFPreview: false)
+    }
+
+    /// Loads one Markdown note beside the active PDF while keeping the canonical
+    /// selected/draft/baseline/save session as the only editable document authority.
+    func openStudyNote(_ url: URL, navigationDecision: UnsavedNoteDecision? = nil) {
+        guard previewPDF != nil else {
+            openNote(url, navigationDecision: navigationDecision)
+            return
+        }
+        guard let root, WorkspaceFiles.contains(url, in: root),
+              ["md", "markdown"].contains(url.pathExtension.lowercased()) else {
+            message = AppLanguage.current.text("Only Markdown files inside the selected workspace can be edited.")
+            return
+        }
+        openValidatedNote(url, navigationDecision: navigationDecision, preservePDFPreview: true)
+    }
+
+    private func openValidatedNote(
+        _ url: URL,
+        navigationDecision: UnsavedNoteDecision?,
+        preservePDFPreview: Bool
+    ) {
+        if requestedNote == url { return }
+        if selected == url {
+            cancelNoteLoad() // A re-selection wins over another pending file load.
+            if !preservePDFPreview, previewPDF != nil { closePDFPreview() }
+            return
+        }
         guard confirmLeavingNote(decision: navigationDecision) else { return }
-        loadNote(url)
+        loadNote(url, preservePDFPreview: preservePDFPreview)
     }
 
     private func cancelNoteLoad() {
@@ -569,7 +965,7 @@ final class NotesModel: ObservableObject {
         loadingNote = false
     }
 
-    private func loadNote(_ url: URL) {
+    private func loadNote(_ url: URL, preservePDFPreview: Bool = false) {
         cancelNoteLoad()
         previewTask?.cancel()
         requestedNote = url
@@ -579,15 +975,29 @@ final class NotesModel: ObservableObject {
         message = nil
 
         // iCloud File Provider can block while hydrating files. Never read Markdown
-        // on the main actor; only publish a successful, current request.
+        // on the main actor; only publish a successful, current request. A small
+        // POSIX-stamp-validated cache avoids decoding unchanged contents and also
+        // detects atomic replacement / same-mtime external writes.
+        let cached = noteCache[url.path]
         noteLoadTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
-                let content = try String(contentsOf: url, encoding: .utf8)
-                let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-                let modification = attrs[.modificationDate] as? Date
+                guard let stamp = WorkspaceFiles.fileStamp(url) else {
+                    throw CocoaError(.fileReadNoSuchFile)
+                }
+                let content: String
+                if let cached, cached.stamp == stamp {
+                    content = cached.content
+                } else {
+                    content = try String(contentsOf: url, encoding: .utf8)
+                }
                 guard !Task.isCancelled else { return }
-                await self?.finishOpeningNote(url, identity: identity,
-                                              content: content, modification: modification)
+                await self?.finishOpeningNote(
+                    url,
+                    identity: identity,
+                    content: content,
+                    stamp: stamp,
+                    preservePDFPreview: preservePDFPreview
+                )
             } catch {
                 guard !Task.isCancelled else { return }
                 await self?.failOpeningNote(url, identity: identity,
@@ -597,13 +1007,17 @@ final class NotesModel: ObservableObject {
     }
 
     private func finishOpeningNote(_ url: URL, identity: UUID, content: String,
-                                   modification: Date?) {
+                                   stamp: WorkspaceFileStamp, preservePDFPreview: Bool = false) {
         guard requestedNote == url, loadIdentity == identity else { return }
         selected = url
-        previewPDF = nil
+        if !preservePDFPreview {
+            previewPDF = nil
+            previewPDFPage = nil
+        }
         baseline = content
         draft = content
-        savedModification = modification
+        savedFileStamp = stamp
+        cacheNote(url, content: content, stamp: stamp)
         externalBody = nil
         externalTitle = nil
         previewSource = nil
@@ -619,6 +1033,7 @@ final class NotesModel: ObservableObject {
         }
         backlinkTask?.cancel()
         backlinks = []
+        backlinkSkippedCloudFiles = 0
         loadingBacklinks = false
         relatedTask?.cancel()
         relatedHits = []
@@ -627,15 +1042,38 @@ final class NotesModel: ObservableObject {
         message = nil
     }
 
+    private func cacheNote(_ url: URL, content: String, stamp: WorkspaceFileStamp) {
+        let key = url.path
+        noteCache[key] = CachedNote(content: content, stamp: stamp)
+        noteCacheOrder.removeAll { $0 == key }
+        noteCacheOrder.append(key)
+        while noteCacheOrder.count > 10 {
+            let evicted = noteCacheOrder.removeFirst()
+            noteCache.removeValue(forKey: evicted)
+        }
+    }
+
+    func closePDFPreview() {
+        previewPDF = nil
+        previewPDFPage = nil
+        previewPDFAnchor = nil
+        backlinkTask?.cancel()
+        backlinks = []
+        loadingBacklinks = false
+    }
+
     func loadRelationships() {
-        guard let selected else { return }
-        refreshBacklinks(for: selected)
-        loadRelatedNotes(for: selected)
+        if let previewPDF {
+            refreshBacklinks(for: previewPDF)
+        } else if let selected {
+            refreshBacklinks(for: selected)
+            loadRelatedNotes(for: selected)
+        }
     }
 
     func loadBacklinks() {
-        guard let selected else { return }
-        refreshBacklinks(for: selected)
+        guard let target = previewPDF ?? selected else { return }
+        refreshBacklinks(for: target)
     }
 
     private func loadRelatedNotes(for note: URL) {
@@ -686,16 +1124,27 @@ final class NotesModel: ObservableObject {
         guard let root else { return }
         backlinkTask?.cancel()
         backlinks = []
+        backlinkSkippedCloudFiles = 0
         loadingBacklinks = true
-        let snapshot = suppliedFiles ?? files
-        backlinkTask = Task.detached(priority: .utility) { [weak self] in
-            let found = WorkspaceBacklinks.find(target: note, root: root, files: snapshot)
-            guard !Task.isCancelled, let self else { return }
-            await MainActor.run {
-                guard self.selected == note, self.root == root else { return }
-                self.backlinks = found
-                self.loadingBacklinks = false
+        backlinkTask = Task { [weak self] in
+            guard let self else { return }
+            let snapshot: [NoteItem]
+            if let suppliedFiles {
+                snapshot = suppliedFiles
+            } else {
+                snapshot = await self.completeWorkspaceFiles()
             }
+            guard !Task.isCancelled, self.root == root else { return }
+
+            let scan = await Task.detached(priority: .utility) {
+                WorkspaceBacklinks.scan(target: note, root: root, files: snapshot)
+            }.value
+            guard !Task.isCancelled,
+                  (self.selected == note || self.previewPDF == note),
+                  self.root == root else { return }
+            self.backlinks = scan.backlinks
+            self.backlinkSkippedCloudFiles = scan.skippedDatalessFiles
+            self.loadingBacklinks = false
         }
     }
 
@@ -710,22 +1159,91 @@ final class NotesModel: ObservableObject {
               WorkspaceFiles.contains(selected, in: root) else { return }
         defer { autoSavePending = false }
         do {
-            let attrs = try FileManager.default.attributesOfItem(atPath: selected.path)
-            let actual = attrs[.modificationDate] as? Date
-            // Avoid overwriting iCloud or other editor changes without review.
-            guard actual == savedModification,
-                  try String(contentsOf: selected, encoding: .utf8) == baseline else {
+            // POSIX ctime/inode/size/mtime together detect ordinary writes and atomic
+            // replacement without rereading the whole Markdown file on every autosave.
+            guard let actualStamp = WorkspaceFiles.fileStamp(selected),
+                  actualStamp == savedFileStamp else {
                 message = AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
                 return
             }
             try draft.write(to: selected, atomically: true, encoding: .utf8)
             baseline = draft
-            let updated = try FileManager.default.attributesOfItem(atPath: selected.path)
-            savedModification = updated[.modificationDate] as? Date
+            guard let updatedStamp = WorkspaceFiles.fileStamp(selected) else {
+                throw CocoaError(.fileReadUnknown)
+            }
+            savedFileStamp = updatedStamp
+            cacheNote(selected, content: draft, stamp: updatedStamp)
             // Successful saves are silent. Existing notices are user-dismissed;
             // localized presentation text is never used as save-state authority.
         } catch {
             message = "\(AppLanguage.current.text("Save failed")): \(error.localizedDescription)"
+        }
+    }
+
+    /// Appends a portable PDF page reference without replacing the target note.
+    /// O_APPEND keeps this capture path additive even if another process writes the file.
+    @discardableResult
+    func appendPDFReference(
+        pdf: URL,
+        page: Int,
+        commentary: String? = nil,
+        selectedText: String? = nil,
+        anchor: PDFSourceAnchor? = nil,
+        to note: URL
+    ) -> Bool {
+        guard let root,
+              ["md", "markdown"].contains(note.pathExtension.lowercased()),
+              WorkspaceFiles.contains(note, in: root),
+              WorkspaceFiles.contains(pdf, in: root),
+              let snippet = PDFPageReference.noteSnippet(
+                for: pdf,
+                page: page,
+                root: root,
+                commentary: commentary,
+                selectedText: selectedText,
+                anchor: anchor
+              )
+        else {
+            message = AppLanguage.current.text("Could not add PDF page to note.")
+            return false
+        }
+
+        var info = Darwin.stat()
+        guard note.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+            message = AppLanguage.current.text("The original file is no longer available.")
+            return false
+        }
+
+        if selected?.standardizedFileURL == note.standardizedFileURL {
+            draft += "\n\n\(snippet)\n"
+            save()
+            guard !isDirty else { return false }
+            // Content changed, but the filesystem tree did not. Avoid a full recursive
+            // workspace rescan on the study-capture hot path.
+            message = "\(AppLanguage.current.text("Added PDF page to note")): \(note.deletingPathExtension().lastPathComponent)"
+            return true
+        }
+
+        let descriptor = note.path.withCString {
+            Darwin.open($0, O_WRONLY | O_APPEND)
+        }
+        guard descriptor >= 0 else {
+            message = AppLanguage.current.text("Could not add PDF page to note.")
+            return false
+        }
+
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        do {
+            try handle.write(contentsOf: Data("\n\n\(snippet)\n".utf8))
+            try handle.close()
+            // Appending to an existing note does not alter file-tree shape.
+            message = "\(AppLanguage.current.text("Added PDF page to note")): \(note.deletingPathExtension().lastPathComponent)"
+            return true
+        } catch {
+            try? handle.close()
+            message = "\(AppLanguage.current.text("Could not add PDF page to note.")) \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -734,7 +1252,8 @@ final class NotesModel: ObservableObject {
     @discardableResult
     func newNote(named name: String? = nil, in parentFolder: URL? = nil,
                  navigationDecision: UnsavedNoteDecision? = nil,
-                 initialContent: String? = nil) -> URL? {
+                 initialContent: String? = nil,
+                 preservePDFPreview: Bool = false) -> URL? {
         guard let root else {
             message = AppLanguage.current.text("Choose a notes folder before creating a note."); return nil
         }
@@ -778,7 +1297,7 @@ final class NotesModel: ObservableObject {
             try handle.write(contentsOf: Data(content.utf8))
             try handle.close()
             refresh()
-            loadNote(url)
+            loadNote(url, preservePDFPreview: preservePDFPreview)
             return url
         } catch {
             try? handle.close()
@@ -837,18 +1356,72 @@ final class NotesModel: ObservableObject {
     func openKnowledgeLink(_ target: String) -> Bool {
         let value = target.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return false }
+
+        knowledgeLinkTask?.cancel()
         if let external = URL(string: value),
            ["http", "https"].contains(external.scheme?.lowercased() ?? "") {
             openSourceLink(external)
             return true
         }
-        guard let root, let selected,
-              let resolved = WorkspaceFiles.resolveKnowledgeTarget(value, from: selected, in: root) else {
+        guard let root, let selected else {
             message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
             return false
         }
-        openFile(resolved)
+
+        // Exact relative/root paths remain immediate. Basename fallback must only
+        // use a complete vault candidate set; a partially expanded sidebar can
+        // otherwise make an ambiguous basename look unique.
+        let candidates = globalFileIndexReady
+            ? globalFiles.filter(\.isMarkdown).map { $0.url.standardizedFileURL }
+            : []
+        if let resolved = WorkspaceFiles.resolveLinkedTarget(
+            value, from: selected, in: root, candidates: candidates
+        ) {
+            openResolvedKnowledgeLink(value, resolved: resolved)
+            return true
+        }
+
+        guard !globalFileIndexReady else {
+            message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
+            return false
+        }
+
+        let sourceNote = selected
+        message = AppLanguage.current.text("Scanning files…")
+        knowledgeLinkTask = Task { [weak self] in
+            guard let self else { return }
+            let allFiles = await self.completeWorkspaceFiles()
+            guard !Task.isCancelled,
+                  self.root == root,
+                  self.selected == sourceNote else { return }
+
+            let markdownCandidates = allFiles.filter(\.isMarkdown)
+                .map { $0.url.standardizedFileURL }
+            guard let resolved = WorkspaceFiles.resolveLinkedTarget(
+                value,
+                from: sourceNote,
+                in: root,
+                candidates: markdownCandidates
+            ) else {
+                self.message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
+                return
+            }
+
+            self.message = nil
+            self.openResolvedKnowledgeLink(value, resolved: resolved)
+        }
         return true
+    }
+
+    private func openResolvedKnowledgeLink(_ value: String, resolved: URL) {
+        let linkURL = URL(string: value)
+        let anchor = resolved.pathExtension.lowercased() == "pdf"
+            ? linkURL.flatMap(PDFPageReference.anchor(from:))
+            : nil
+        let page = resolved.pathExtension.lowercased() == "pdf"
+            ? anchor?.page ?? linkURL.flatMap(PDFPageReference.page(from:))
+            : nil
+        openFile(resolved, pdfPage: page, pdfAnchor: anchor)
     }
 
     func openInternalLink(_ url: URL) -> Bool {
@@ -862,7 +1435,13 @@ final class NotesModel: ObservableObject {
             }
         }
         guard FileManager.default.fileExists(atPath: resolved.path) else { return false }
-        openFile(resolved)
+        let anchor = resolved.pathExtension.lowercased() == "pdf"
+            ? PDFPageReference.anchor(from: url)
+            : nil
+        let page = resolved.pathExtension.lowercased() == "pdf"
+            ? anchor?.page ?? PDFPageReference.page(from: url)
+            : nil
+        openFile(resolved, pdfPage: page, pdfAnchor: anchor)
         return true
     }
 
@@ -904,7 +1483,7 @@ final class NotesModel: ObservableObject {
                 previewPDF = nil
                 draft = ""
                 baseline = ""
-                savedModification = nil
+                savedFileStamp = nil
                 externalTitle = nil
                 externalBody = nil
                 previewSource = nil
@@ -1171,7 +1750,7 @@ final class NotesModel: ObservableObject {
         cancelNoteLoad()
         previewTask?.cancel()
         let sourceNote = selected
-        let sourceDraft = draft
+        let sourceDraftRevision = draftRevision
         let sourceRoot = root
         previewTask = Task {
             do {
@@ -1187,7 +1766,7 @@ final class NotesModel: ObservableObject {
                 // Discard means the old draft may still be dirty until this preview
                 // commits. Only reject a stale response if context changed since launch.
                 guard !Task.isCancelled, selected == sourceNote,
-                      draft == sourceDraft, root == sourceRoot else { return }
+                      draftRevision == sourceDraftRevision, root == sourceRoot else { return }
                 selected = nil
                 previewPDF = nil
                 externalTitle = hit.title + " · read-only PKS result"

@@ -11,9 +11,12 @@ struct MarkdownOutlineHeading: Identifiable, Equatable {
 enum MarkdownHeadingScanner {
     /// Shared ATX-heading scanner used by preview sectioning and the clickable outline.
     /// Fenced code is ignored so a single syntax rule owns heading recognition.
-    static func heading(in line: String, fence: inout Character?) -> (level: Int, title: String)? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("~~~") {
+    static func heading<S: StringProtocol>(
+        in line: S,
+        fence: inout Character?
+    ) -> (level: Int, title: String)? {
+        let trimmed = line.drop { $0 == " " || $0 == "\t" }
+        if trimmed.starts(with: "~~~") {
             if fence == nil { fence = "~" }
             else if fence == "~" { fence = nil }
             return nil
@@ -40,7 +43,7 @@ enum MarkdownHeadingScanner {
 
 enum MarkdownOutline {
     static func headings(in source: String) -> [MarkdownOutlineHeading] {
-        let lines = source.components(separatedBy: "\n")
+        let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
         var fence: Character?
         var headings: [MarkdownOutlineHeading] = []
         var utf16Offset = 0
