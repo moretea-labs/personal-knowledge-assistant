@@ -115,6 +115,32 @@ extension MindMapOutlineTests {
         XCTAssertNil(MindMapOutline.shiftListSubtree(in: "# Root\n- Parent\nparagraph\n- Next", nodeID: 1, deeper: true))
         XCTAssertNil(MindMapOutline.shiftListSubtree(in: "# Root\n- Root item", nodeID: 1, deeper: false))
     }
+
+    func testActionAvailabilityMatchesCanonicalMutations() {
+        let source = "# Root\n- First\n- Second\n  - Child\n- With prose\n  details"
+
+        for nodeID in [0, 1, 2, 3, 4] {
+            let availability = MindMapOutline.actionAvailability(in: source, nodeID: nodeID)
+            XCTAssertEqual(
+                availability.canPromote,
+                MindMapOutline.shiftListSubtree(in: source, nodeID: nodeID, deeper: false) != nil
+            )
+            XCTAssertEqual(
+                availability.canDemote,
+                MindMapOutline.shiftListSubtree(in: source, nodeID: nodeID, deeper: true) != nil
+            )
+            XCTAssertEqual(
+                availability.canDeleteLeaf,
+                MindMapOutline.deleteLeaf(in: source, nodeID: nodeID) != nil
+            )
+        }
+
+        XCTAssertEqual(
+            MindMapOutline.actionAvailability(in: source, nodeID: 3),
+            .init(canPromote: true, canDemote: false, canDeleteLeaf: true)
+        )
+        XCTAssertFalse(MindMapOutline.actionAvailability(in: source, nodeID: 4).canDeleteLeaf)
+    }
 }
 
 

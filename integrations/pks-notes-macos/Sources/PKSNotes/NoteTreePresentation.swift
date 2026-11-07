@@ -40,16 +40,26 @@ enum NoteTreePresentation {
         var id: String { item.id }
     }
 
-    /// Normalize file names/folders once when the filesystem tree changes instead of
-    /// repeating Unicode case/diacritic folding on every Quick Open keystroke.
+    /// Normalize and alphabetize once when the filesystem tree changes instead of
+    /// folding and sorting the full match set on every Quick Open keystroke.
     static func quickOpenEntries(_ items: [NoteItem]) -> [QuickOpenEntry] {
-        openableFiles(items).map { item in
-            QuickOpenEntry(
-                item: item,
-                foldedName: fold(item.name),
-                foldedFolder: fold(item.url.deletingLastPathComponent().path)
-            )
-        }
+        openableFiles(items).enumerated()
+            .map { order, item in
+                (
+                    order,
+                    QuickOpenEntry(
+                        item: item,
+                        foldedName: fold(item.name),
+                        foldedFolder: fold(item.url.deletingLastPathComponent().path)
+                    )
+                )
+            }
+            .sorted { lhs, rhs in
+                let comparison = lhs.1.item.name.localizedStandardCompare(rhs.1.item.name)
+                if comparison != .orderedSame { return comparison == .orderedAscending }
+                return lhs.0 < rhs.0
+            }
+            .map(\.1)
     }
 
     /// Show a note's folder path relative to its selected workspace.
@@ -72,22 +82,31 @@ enum NoteTreePresentation {
         let search = fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !search.isEmpty, limit > 0 else { return [] }
 
-        return entries.compactMap { entry -> (item: NoteItem, rank: Int)? in
+        // Entries are already alphabetized. Keep at most the requested number
+        // of candidates per rank while scanning once, then concatenate ranks.
+        var ranked = Array(repeating: [NoteItem](), count: 4)
+        for entry in entries {
             let rank: Int?
             if entry.foldedName == search { rank = 0 }
             else if entry.foldedName.hasPrefix(search) { rank = 1 }
             else if entry.foldedName.contains(search) { rank = 2 }
             else if entry.foldedFolder.contains(search) { rank = 3 }
             else { rank = nil }
-            guard let rank else { return nil }
-            return (entry.item, rank)
+
+            if let rank, ranked[rank].count < limit {
+                ranked[rank].append(entry.item)
+            }
         }
-        .sorted {
-            if $0.rank != $1.rank { return $0.rank < $1.rank }
-            return $0.item.name.localizedStandardCompare($1.item.name) == .orderedAscending
+
+        var result: [NoteItem] = []
+        result.reserveCapacity(limit)
+        for bucket in ranked {
+            for item in bucket {
+                result.append(item)
+                if result.count == limit { return result }
+            }
         }
-        .prefix(limit)
-        .map(\.item)
+        return result
     }
 
     static func quickOpen(_ files: [NoteItem], query: String, limit: Int = 24) -> [NoteItem] {

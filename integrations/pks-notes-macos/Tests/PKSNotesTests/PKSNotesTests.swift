@@ -383,6 +383,24 @@ final class PKSNotesTests: XCTestCase {
                        [nested, top], "Compatibility overload must retain ranking.")
     }
 
+    func testQuickOpenPreSortsOnceAndKeepsQueryResultsBounded() {
+        let root = URL(fileURLWithPath: "/tmp/pks-quickopen-large")
+        let files = (0..<1_000).reversed().map { index in
+            NoteItem(
+                url: root.appendingPathComponent(String(format: "Note %04d.md", index)),
+                children: nil
+            )
+        }
+        let entries = NoteTreePresentation.quickOpenEntries(files)
+        XCTAssertEqual(entries.first?.item.name, "Note 0000")
+        XCTAssertEqual(entries.last?.item.name, "Note 0999")
+
+        let matches = NoteTreePresentation.quickOpen(entries, query: "note", limit: 24)
+        XCTAssertEqual(matches.count, 24)
+        XCTAssertEqual(matches.first?.name, "Note 0000")
+        XCTAssertEqual(matches.last?.name, "Note 0023")
+    }
+
     func testFolderExpansionShowsOnlyVisibleDescendants() {
         let root = URL(fileURLWithPath: "/tmp/pks-ui-test")
         let parent = root.appendingPathComponent("Projects", isDirectory: true)
@@ -1548,7 +1566,7 @@ extension PKSNotesTests {
     }
 
     @MainActor
-    func testPDFPageCanAppendToMarkdownNoteWithoutLeavingPDF() throws {
+    func testPDFPageCanAppendToMarkdownNoteWithoutLeavingPDF() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")
         defer {
@@ -1568,6 +1586,10 @@ extension PKSNotesTests {
 
         let model = NotesModel()
         model.openWorkspace(root)
+        for _ in 0..<100 where model.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertFalse(model.loadingFiles)
         model.openFile(pdf, pdfPage: 4)
 
         let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Important fact\nSecond line"))
@@ -1584,6 +1606,7 @@ extension PKSNotesTests {
             anchor: anchor,
             to: note
         ))
+        XCTAssertFalse(model.loadingFiles, "Appending to an existing note must not rescan the workspace tree.")
         XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
         XCTAssertEqual(model.previewPDFPage, 4)
         XCTAssertNil(model.selected)

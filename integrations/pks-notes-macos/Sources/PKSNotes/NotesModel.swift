@@ -947,7 +947,8 @@ final class NotesModel: ObservableObject {
             draft += "\n\n\(snippet)\n"
             save()
             guard !isDirty else { return false }
-            refresh()
+            // Content changed, but the filesystem tree did not. Avoid a full recursive
+            // workspace rescan on the study-capture hot path.
             message = "\(AppLanguage.current.text("Added PDF page to note")): \(note.deletingPathExtension().lastPathComponent)"
             return true
         }
@@ -964,7 +965,7 @@ final class NotesModel: ObservableObject {
         do {
             try handle.write(contentsOf: Data("\n\n\(snippet)\n".utf8))
             try handle.close()
-            refresh()
+            // Appending to an existing note does not alter file-tree shape.
             message = "\(AppLanguage.current.text("Added PDF page to note")): \(note.deletingPathExtension().lastPathComponent)"
             return true
         } catch {

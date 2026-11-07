@@ -155,16 +155,12 @@ struct MindMapCanvas: View {
             let input = source
             let sourceRevision = revision
             let availability = await Task.detached(priority: .utility) {
-                (
-                    MindMapOutline.shiftListSubtree(in: input, nodeID: selectedID, deeper: false) != nil,
-                    MindMapOutline.shiftListSubtree(in: input, nodeID: selectedID, deeper: true) != nil,
-                    MindMapOutline.deleteLeaf(in: input, nodeID: selectedID) != nil
-                )
+                MindMapOutline.actionAvailability(in: input, nodeID: selectedID)
             }.value
             guard !Task.isCancelled, revision == sourceRevision, self.selectedID == selectedID else { return }
-            canPromote = availability.0
-            canDemote = availability.1
-            canDeleteLeaf = availability.2
+            canPromote = availability.canPromote
+            canDemote = availability.canDemote
+            canDeleteLeaf = availability.canDeleteLeaf
         }
         .onAppear {
             Task { @MainActor in
