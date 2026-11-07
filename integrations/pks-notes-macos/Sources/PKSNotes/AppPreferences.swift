@@ -124,6 +124,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "No backlinks in this workspace.": "此工作区没有反向链接。",
         "Finding related knowledge…": "正在查找相关知识…",
         "No related PKS results.": "没有相关 PKS 结果。",
+        "PKS related search unavailable.": "PKS 关联搜索当前不可用；本地笔记与反向链接不受影响。",
         "Saving Markdown automatically…": "正在自动保存 Markdown…",
         "Quick Open Note…": "快速打开笔记…",
         "New Mind Map": "新建思维导图",

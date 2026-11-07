@@ -561,7 +561,7 @@ struct NotesWindow: View {
                                 if model.loadingRelated {
                                     relationshipEmpty(language.text("Finding related knowledge…"))
                                 } else if let error = model.relatedError {
-                                    relationshipEmpty(error)
+                                    relationshipEmpty(language.text(error))
                                 } else if model.relatedHits.isEmpty {
                                     relationshipEmpty(language.text("No related PKS results."))
                                 } else {

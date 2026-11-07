@@ -21,6 +21,7 @@
 - `AppStore.sync()` only behind a user-selected **Restore Purchases** action.
 - No writable UserDefaults Boolean, plain-text license files, or server verification. Previously owned files remain editable if Pro expires/refunds.
 - Test configuration: `Tests/PKSNotesTests/Resources/PKSNotes.storekit` (local fixture; never uploads to App Store).
+- Real StoreKit flow acceptance lives in the minimal Xcode macOS app-host under `StoreKitTestHost/`; it compiles the canonical `ProPurchases.swift` and reuses the same fixture, so there is no second entitlement implementation. Run `scripts/test-storekit-host.sh`. The local hosted suite covers purchase/unlock, refund/revocation, explicit restore, and Ask-to-Buy pending→approval. This is deterministic local StoreKitTest evidence; Apple signing and App Store Sandbox remain separate release gates.
 
 ## Mac App Store packaging
 
@@ -36,15 +37,15 @@ To create an actual signed upload package after the account identities are ready
 2. Enable/accept paid-apps contracts and complete tax/banking information.
 3. Under In-App Purchases create **Non-Consumable** `com.moretea.pks.notes.pro`; set reference name, simplified Chinese + English localization, pricing per territory (initial China target ¥98), availability, review screenshot.
 4. Confirm Mac App Distribution and Installer identities + appropriate profile and run an actual signed sandbox build. Preserve user-selected folder bookmark across relaunch, including iCloud Drive. Verify save, rename, move to Trash, PDF, MindNode import/export, and PKS integration failure behavior.
-5. Run `swift test --jobs 4`, Swift Release build, `StoreKitTest` purchase/refund flow and App Store Sandbox purchase/restore tests; verify offline re-open, no duplicate charge, refunds/revocations, pending Ask to Buy and unavailable storefront behavior.
+5. Run `swift test --jobs 4`, Swift Release build, and `scripts/test-storekit-host.sh`; then run App Store Sandbox purchase/restore tests. Verify offline re-open, no duplicate charge, refunds/revocations, pending Ask to Buy and unavailable storefront behavior.
 6. Prepare Mac screenshots, localization, privacy policy/support URLs, age rating, encryption/export compliance, China mainland availability and filing applicability; show a self-sufficient reviewer onboarding path **without PKS local provider**.
 7. Upload the signed `.pkg` through Transporter or App Store Connect tools; submit the **first non-consumable** with the first Mac app version for review. Do not claim published before App Review approval.
 
 ## Known blockers / evidence
 
 - Existing local machine certificates were checked on 2026-11-07: Apple Development and Developer ID Application identities exist, but **Mac App Distribution / Mac Installer Distribution** identities were not detected in the checked keychain outputs. This blocks creating a genuine App Store submission package.
-- The app is currently a Swift Package executable installed using an ad-hoc signature; it needs signed macOS sandbox testing and App Store Connect data before release.
-- Current PKS external knowledge search accesses `127.0.0.1:3217` if a local PKS provider is running. This is a standalone-app reviewer experience gap: no custom server is required for Markdown and PDF, but additional features must degrade explicitly when the optional local provider is absent.
+- The normal local preview remains a Swift Package executable installed using an ad-hoc signature. A separate Xcode-hosted local test app validates the canonical StoreKit code with StoreKitTest: purchase/unlock, refund/revocation, explicit restore, and Ask-to-Buy pending→approval all pass. This local test host is not an App Store distribution artifact; Apple Development/App Store Sandbox verification remains required separately.
+- PKS related-knowledge search uses `127.0.0.1:3217` only when the optional local PKS provider is present. If it is absent, the related section clears remote results and shows an explicit unavailable state while Markdown, file access and local backlinks remain usable; no login or custom server is required for the standalone reviewer path.
 - Product configuration exists only as an Xcode StoreKit testing fixture until App Store Connect is updated. **Local StoreKit tests are not a substitute for Apple sandbox / App Review.**
 
 References:
