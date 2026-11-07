@@ -118,6 +118,14 @@ struct MindMapCanvas: View {
         }
         .focusable()
         .focused($canvasFocused)
+        .onAppear {
+            Task { @MainActor in
+                await Task.yield()
+                if editingNodeID == nil {
+                    canvasFocused = true
+                }
+            }
+        }
         .onKeyPress(.downArrow) {
             guard editingNodeID == nil else { return .ignored }
             moveSelection(by: 1)
@@ -297,8 +305,17 @@ struct MindMapCanvas: View {
                     .focused($titleEditorFocused)
                     .onSubmit { finishRename(save: true) }
                     .onExitCommand { finishRename(save: false) }
+                    .onKeyPress(.escape) {
+                        finishRename(save: false)
+                        return .handled
+                    }
                     .accessibilityIdentifier("pks-mind-map-inline-title")
-                    .onAppear { titleEditorFocused = true }
+                    .onAppear {
+                        Task { @MainActor in
+                            await Task.yield()
+                            titleEditorFocused = true
+                        }
+                    }
                 Button {
                     finishRename(save: true)
                 } label: {
@@ -593,7 +610,7 @@ struct MindMapCanvas: View {
         editingNodeID = id
         editingCreatedNodeID = created ? id : nil
         canvasFocused = false
-        titleEditorFocused = true
+        titleEditorFocused = false
     }
 
     private func finishRename(save: Bool) {
@@ -615,7 +632,11 @@ struct MindMapCanvas: View {
         editingNodeID = nil
         editingCreatedNodeID = nil
         titleEditorFocused = false
-        canvasFocused = true
+        canvasFocused = false
+        Task { @MainActor in
+            await Task.yield()
+            canvasFocused = true
+        }
     }
 
     private func shiftedSource(deeper: Bool) -> String? {

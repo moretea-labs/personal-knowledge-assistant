@@ -96,6 +96,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Task": "任务",
         "New Markdown Note": "新建 Markdown 笔记",
         "Quick Open…": "快速打开…",
+        "Reveal Current File": "定位当前文件",
         "Toggle Edit / Preview": "切换编辑 / 预览",
         "Save Markdown": "保存 Markdown",
         "Find in PKS": "在 PKS 中查找",

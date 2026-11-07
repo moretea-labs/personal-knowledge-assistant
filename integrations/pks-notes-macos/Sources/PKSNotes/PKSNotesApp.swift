@@ -106,6 +106,10 @@ struct PKSNotesApp: App {
                     NotificationCenter.default.post(name: NotesMenuEvent.quickOpen, object: nil)
                 }
                 .keyboardShortcut("p", modifiers: .command)
+                Button(language.text("Reveal Current File")) {
+                    NotificationCenter.default.post(name: NotesMenuEvent.revealCurrentFile, object: nil)
+                }
+                .keyboardShortcut(KeyEquivalent(Character(UnicodeScalar(0xF704)!)), modifiers: .option)
                 Divider()
                 Button(language.text("Toggle Edit / Preview")) {
                     NotificationCenter.default.post(name: NotesMenuEvent.toggleEdit, object: nil)
@@ -231,6 +235,7 @@ private enum NotesMenuEvent {
     static let search = Notification.Name("PKSNotesMenuSearch")
     static let toggleEdit = Notification.Name("PKSNotesToggleEditPreview")
     static let paste = Notification.Name("PKSNotesPaste")
+    static let revealCurrentFile = Notification.Name("PKSNotesRevealCurrentFile")
 }
 
 private enum SidebarTab: String, CaseIterable {
@@ -316,6 +321,7 @@ struct NotesWindow: View {
     @State private var expandedFolderPaths: Set<String> = []
     @State private var treeCursorPath: String?
     @State private var fileDropTargetPath: String?
+    @State private var treeRevealRequest: String?
     @FocusState private var searchFieldFocused: Bool
     @FocusState private var treeFocused: Bool
     @FocusState private var quickOpenFocused: Bool
@@ -529,6 +535,9 @@ struct NotesWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.newNote)) { _ in
             beginNewNote()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.revealCurrentFile)) { _ in
+            revealCurrentFile()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.search)) { _ in
             focusKnowledgeSearch()
         }
@@ -668,6 +677,26 @@ struct NotesWindow: View {
         columnVisibility = .all
         sidebarTab = .search
         searchFieldFocused = true
+    }
+
+    private var currentWorkspaceFile: URL? {
+        guard let root = model.root else { return nil }
+        return [model.selected, model.previewPDF, model.previewSource?.localFileURL]
+            .compactMap { $0 }
+            .first { WorkspaceFiles.contains($0, in: root) }
+    }
+
+    private func revealCurrentFile() {
+        guard let file = currentWorkspaceFile, let root = model.root else { return }
+        columnVisibility = .all
+        sidebarTab = .notes
+        expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: file, in: root))
+        treeCursorPath = file.path
+        treeFocused = true
+        Task { @MainActor in
+            await Task.yield()
+            treeRevealRequest = file.path
+        }
     }
 
     private func beginNewNote(in folder: URL? = nil) {
@@ -971,6 +1000,7 @@ struct NotesWindow: View {
                             fileActions(row.item.url)
                         }
                         .help(row.item.url.path)
+                        .id(row.id)
                         .accessibilityIdentifier(row.item.isFolder ? "pks-folder-\(row.item.name)" : row.item.id)
     }
 
@@ -1087,6 +1117,20 @@ struct NotesWindow: View {
                     .font(.system(size: 14, weight: .semibold))
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                Button {
+                    revealCurrentFile()
+                } label: {
+                    Image(systemName: "scope")
+                        .font(.system(size: 14, weight: .medium))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .disabled(currentWorkspaceFile == nil)
+                .help(language.text("Reveal Current File") + " (⌥F1)")
+                .accessibilityIdentifier("pks-reveal-current-file-button")
+
                 Button {
                     beginNewNote()
                 } label: {
@@ -1236,70 +1280,79 @@ struct NotesWindow: View {
                     .frame(height: 27)
             }
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                switch sidebarTab {
-                case .search:
-                    searchResultRows
-                case .recent:
-                    savedNoteRows(model.recentNotes, emptyMessage: language.text("No recent notes yet."))
-                case .favorites:
-                    savedNoteRows(model.favoriteNotes, emptyMessage: language.text("No favorite notes yet."))
-                case .notes:
-                    Group {
-                        if model.loadingFiles {
-                            HStack {
-                                ProgressView().controlSize(.small)
-                                Text(language.text("Loading local Markdown…"))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                    switch sidebarTab {
+                    case .search:
+                        searchResultRows
+                    case .recent:
+                        savedNoteRows(model.recentNotes, emptyMessage: language.text("No recent notes yet."))
+                    case .favorites:
+                        savedNoteRows(model.favoriteNotes, emptyMessage: language.text("No favorite notes yet."))
+                    case .notes:
+                        Group {
+                            if model.loadingFiles {
+                                HStack {
+                                    ProgressView().controlSize(.small)
+                                    Text(language.text("Loading local Markdown…"))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            ForEach(visibleTreeRows) { row in
+                                fileTreeRow(row)
                             }
                         }
-                        ForEach(visibleTreeRows) { row in
-                            fileTreeRow(row)
-                        }
+                    }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 16)
+                }
+                .onChange(of: treeRevealRequest) { _, path in
+                    guard let path else { return }
+                    withAnimation(.easeOut(duration: 0.16)) {
+                        proxy.scrollTo(path, anchor: .center)
+                    }
+                    treeRevealRequest = nil
+                }
+                .focusable(sidebarTab == .notes)
+                .focused($treeFocused)
+                .onMoveCommand { direction in
+                    guard sidebarTab == .notes else { return }
+                    let mapped: NoteTreePresentation.Direction
+                    switch direction {
+                    case .up: mapped = .up
+                    case .down: mapped = .down
+                    case .left: mapped = .left
+                    case .right: mapped = .right
+                    default: return
+                    }
+                    let rows = visibleTreeRows
+                    if let next = NoteTreePresentation.navigate(mapped, rows: rows,
+                                                               focusedPath: treeCursorPath ?? model.selected?.path,
+                                                               expandedPaths: expandedFolderPaths) {
+                        treeCursorPath = next.path
+                        expandedFolderPaths = next.expanded
                     }
                 }
+                .onKeyPress(keys: [.delete]) { key in
+                    guard sidebarTab == .notes, treeFocused, key.modifiers.contains(.command),
+                          let item = visibleTreeRows.first(where: { $0.id == treeCursorPath })?.item
+                    else { return .ignored }
+                    requestMoveToTrash(item.url)
+                    return .handled
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 16)
-            }
-            .focusable(sidebarTab == .notes)
-            .focused($treeFocused)
-            .onMoveCommand { direction in
-                guard sidebarTab == .notes else { return }
-                let mapped: NoteTreePresentation.Direction
-                switch direction {
-                case .up: mapped = .up
-                case .down: mapped = .down
-                case .left: mapped = .left
-                case .right: mapped = .right
-                default: return
+                .onKeyPress(.return) {
+                    guard sidebarTab == .notes, treeFocused else { return .ignored }
+                    let rows = visibleTreeRows
+                    guard let item = rows.first(where: { $0.id == treeCursorPath })?.item else {
+                        return .ignored
+                    }
+                    if item.isFolder { toggleFolder(item.url) }
+                    else { model.openFile(item.url) }
+                    return .handled
                 }
-                let rows = visibleTreeRows
-                if let next = NoteTreePresentation.navigate(mapped, rows: rows,
-                                                           focusedPath: treeCursorPath ?? model.selected?.path,
-                                                           expandedPaths: expandedFolderPaths) {
-                    treeCursorPath = next.path
-                    expandedFolderPaths = next.expanded
-                }
-            }
-            .onKeyPress(keys: [.delete]) { key in
-                guard sidebarTab == .notes, treeFocused, key.modifiers.contains(.command),
-                      let item = visibleTreeRows.first(where: { $0.id == treeCursorPath })?.item
-                else { return .ignored }
-                requestMoveToTrash(item.url)
-                return .handled
-            }
-            .onKeyPress(.return) {
-                guard sidebarTab == .notes, treeFocused else { return .ignored }
-                let rows = visibleTreeRows
-                guard let item = rows.first(where: { $0.id == treeCursorPath })?.item else {
-                    return .ignored
-                }
-                if item.isFolder { toggleFolder(item.url) }
-                else { model.openFile(item.url) }
-                return .handled
             }
         }
         .background(sidebarCanvas)
@@ -1445,9 +1498,17 @@ struct NotesWindow: View {
             model.message = language.text("Could not save the pasted image inside this notes workspace.")
             return
         }
-        let original = textView.string
-        let result = MarkdownEditing.insert(markdown, into: original, selection: textView.selectedRange())
-        MarkdownNativeCommand.apply(result, from: original, in: textView)
+        let result = MarkdownEditing.insert(markdown, into: model.draft, selection: textView.selectedRange())
+        // NotesModel.draft is the single Markdown writer. SwiftUI remounts the native
+        // editor from that canonical value; NSTextView only restores the caret.
+        model.draft = result.text
+        Task { @MainActor in
+            await Task.yield()
+            guard let active = MarkdownNativeCommand.activeTextView()
+                    ?? markdownTextView(in: NSApp.keyWindow?.contentView) else { return }
+            active.setSelectedRange(result.selection)
+            active.scrollRangeToVisible(result.selection)
+        }
     }
 
     private func jumpToOutlineHeading(_ heading: MarkdownOutlineHeading) {

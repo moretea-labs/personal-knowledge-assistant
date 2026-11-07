@@ -1135,7 +1135,6 @@ final class NotesModel: ObservableObject {
               let relative = WorkspaceFiles.storePastedPNG(png, for: selected, in: root) else {
             return nil
         }
-        refresh()
         return "![Pasted image](\(relative))"
     }
 
