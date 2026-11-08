@@ -156,12 +156,19 @@ enum PDFPageReference {
         guard canonicalURL.path.hasPrefix(rootPath + "/") else { return nil }
         let relative = String(canonicalURL.path.dropFirst(rootPath.count + 1))
         var allowed = CharacterSet.urlPathAllowed
-        allowed.remove(charactersIn: "#?")
+        // Parentheses are legal in a URL but terminate Markdown destinations.
+        // Encode them here, as with spaces and '#', so copied references and
+        // PDF-to-note captures resolve to filenames such as "Plan (v2).pdf".
+        allowed.remove(charactersIn: "#?()")
         guard let encoded = relative.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
 
+        // Keep the readable filename in Markdown without inserting escaped
+        // square brackets into the relationship parser's link-label grammar.
+        // Markdown renderers display HTML numeric character references as
+        // brackets, while the canonical target path stays fully URL encoded.
         let label = canonicalURL.lastPathComponent
-            .replacingOccurrences(of: "[", with: "\\[")
-            .replacingOccurrences(of: "]", with: "\\]")
+            .replacingOccurrences(of: "[", with: "&#91;")
+            .replacingOccurrences(of: "]", with: "&#93;")
         let fragment = anchor?.page == page ? anchor!.fragment : "page=\(page)"
         return "[\(label) · p. \(page)](/\(encoded)#\(fragment))"
     }
@@ -459,10 +466,17 @@ final class PDFReaderController: ObservableObject {
     }
 
     func goToPage(_ oneBasedPage: Int) {
+        guard let document, pageCount > 0 else { return }
+        guard (1...pageCount).contains(oneBasedPage) else {
+            // The old clamping behavior silently opened a different page.
+            // Keep the current position and expose the invalid requested page
+            // through the same warning used by anchored PDF references.
+            invalidRequestedPage = oneBasedPage
+            return
+        }
+        guard let page = document.page(at: oneBasedPage - 1) else { return }
+        invalidRequestedPage = nil
         invalidRequestedSelection = false
-        guard let document,
-              let page = document.page(at: min(max(0, oneBasedPage - 1), max(0, pageCount - 1)))
-        else { return }
         pdfView?.go(to: page)
         syncFromView()
     }
@@ -670,7 +684,7 @@ struct NativePDFPreview: View {
                     if let invalid = controller.invalidRequestedPage {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle")
-                            Text(language.text("Referenced PDF page is unavailable.")
+                            Text(language.text("PDF page is unavailable.")
                                  + " \(invalid) / \(max(1, controller.pageCount))")
                             Spacer()
                         }

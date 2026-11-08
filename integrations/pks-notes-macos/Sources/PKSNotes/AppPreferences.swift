@@ -283,7 +283,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Could not add PDF page to note.": "无法将 PDF 页添加到笔记。",
         "Copy PDF page link": "复制 PDF 页码链接",
         "PDF page link copied": "PDF 页码链接已复制",
-        "Referenced PDF page is unavailable.": "引用的 PDF 页码不可用。",
+        "PDF page is unavailable.": "PDF 页码不可用。",
         "Referenced PDF selection has changed.": "引用的 PDF 选区已发生变化。",
         "Linked Notes": "关联笔记",
         "Linked notes for this PDF": "查看关联到此 PDF 的笔记",

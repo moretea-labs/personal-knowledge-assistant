@@ -2252,6 +2252,55 @@ extension PKSNotesTests {
         )
     }
 
+    @MainActor
+    func testPDFManualPageJumpRejectsOutOfRangeInsteadOfClampingSilently() throws {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
+        textView.string = "PDF Page One"
+        let pdf = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: textView.bounds)))
+        let view = PDFView(frame: NSRect(x: 0, y: 0, width: 700, height: 800))
+        let controller = PDFReaderController()
+        let uniqueURL = URL(fileURLWithPath: "/tmp/PKS-PDF-Page-\(UUID().uuidString).pdf")
+
+        controller.attach(view: view, document: pdf, url: uniqueURL,
+                          requestedPage: nil, requestedAnchor: nil)
+        XCTAssertEqual(controller.pageCount, 1)
+        XCTAssertEqual(controller.currentPageIndex, 0)
+
+        controller.goToPage(0)
+        XCTAssertEqual(controller.invalidRequestedPage, 0)
+        XCTAssertEqual(controller.currentPageIndex, 0)
+
+        controller.goToPage(100)
+        XCTAssertEqual(controller.invalidRequestedPage, 100)
+        XCTAssertEqual(controller.currentPageIndex, 0)
+
+        controller.goToPage(1)
+        XCTAssertNil(controller.invalidRequestedPage)
+        XCTAssertEqual(controller.currentPageIndex, 0)
+        controller.detach(view: view)
+    }
+
+    func testPDFReferenceEscapesParenthesesAndKeepsExactFileDestination() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let pdf = root.appendingPathComponent("Research (final) [v2].pdf")
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+        let markdown = try XCTUnwrap(PDFPageReference.markdown(for: pdf, page: 3, root: root))
+        XCTAssertTrue(markdown.contains("Research%20%28final%29%20%5Bv2%5D.pdf#page=3"),
+                      "A literal ')' inside a Markdown link target is interpreted as the end of the link.")
+        let occurrences = MindMapOutline.linkOccurrences(in: markdown)
+        let link = try XCTUnwrap(occurrences.first?.link.target)
+        XCTAssertEqual(occurrences.count, 1)
+        XCTAssertEqual(PDFPageReference.page(from: try XCTUnwrap(URL(string: link))), 3)
+        XCTAssertEqual(
+            WorkspaceFiles.resolveLinkedTarget(link, from: root.appendingPathComponent("Note.md"), in: root),
+            pdf.standardizedFileURL
+        )
+    }
+
     func testPDFSelectionAnchorRoundTripsWithoutChangingPageOnlyLinks() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
