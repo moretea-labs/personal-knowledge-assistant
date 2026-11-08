@@ -375,6 +375,77 @@ enum WorkspaceFiles {
         return resolved
     }
 
+    /// Target-specific backlink resolver. The target is validated once by the scan;
+    /// complete Markdown candidates then let every outgoing link resolve in memory
+    /// instead of repeating path-component lstat/fileExists work.
+    static func linkedTargetMatches(
+        _ rawTarget: String,
+        from note: URL,
+        target: URL,
+        in root: URL,
+        candidateBasenames: [String: [URL]]
+    ) -> Bool {
+        let value = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+
+        let target = target.standardizedFileURL
+        let pathPart = String(value.split(
+            separator: "#",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        ).first ?? "")
+        let decoded = pathPart.removingPercentEncoding ?? pathPart
+        guard !decoded.isEmpty, URL(string: decoded)?.scheme == nil else { return false }
+
+        func markdownCandidates(_ base: URL) -> [URL] {
+            if !base.pathExtension.isEmpty { return [base] }
+            return [base.appendingPathExtension("md"), base.appendingPathExtension("markdown")]
+        }
+
+        let relative = note.deletingLastPathComponent().appendingPathComponent(decoded)
+        let rooted = root.appendingPathComponent(decoded.hasPrefix("/") ? String(decoded.dropFirst()) : decoded)
+        var seen: Set<String> = []
+        for candidate in markdownCandidates(relative) + markdownCandidates(rooted) {
+            let normalized = candidate.standardizedFileURL
+            guard seen.insert(normalized.path).inserted,
+                  ["md", "markdown"].contains(normalized.pathExtension.lowercased())
+            else { continue }
+
+            let basename = normalized.deletingPathExtension().lastPathComponent
+            if candidateBasenames[basename]?.contains(where: {
+                $0.standardizedFileURL == normalized
+            }) == true {
+                // Exact relative/root Markdown paths keep the same precedence as
+                // resolveKnowledgeTarget. If an exact file is another note,
+                // basename fallback must not redirect the link.
+                return normalized == target
+            }
+        }
+
+        if !decoded.contains("/") {
+            let wanted = URL(fileURLWithPath: decoded).deletingPathExtension().lastPathComponent
+            if let matches = candidateBasenames[wanted], matches.count == 1 {
+                return matches[0].standardizedFileURL == target
+            }
+        }
+
+        // Non-Markdown workspace links (notably PDFs) still use exact local path
+        // semantics. Comparing to the already-validated target keeps this path
+        // filesystem-free per link and rejects symlink aliases automatically.
+        guard let link = URL(string: value), link.scheme == nil || link.isFileURL else {
+            return false
+        }
+        let candidate: URL
+        if link.isFileURL {
+            candidate = link
+        } else if link.path.hasPrefix("/") {
+            candidate = root.appendingPathComponent(String(link.path.dropFirst()))
+        } else {
+            candidate = note.deletingLastPathComponent().appendingPathComponent(link.path)
+        }
+        return candidate.standardizedFileURL == target
+    }
+
     /// Deterministic collision-safe suggestion; O_EXCL remains the final writer guard.
     static func nextAvailableNoteName(basedOn name: String, in folder: URL) -> String? {
         guard let normalized = safeNewNoteName(name) else { return nil }
@@ -611,6 +682,11 @@ enum WorkspaceBacklinks {
         parseCache: WorkspaceBacklinkParseCache? = nil
     ) -> BacklinkScanResult {
         let target = target.standardizedFileURL
+        guard WorkspaceFiles.contains(target, in: root),
+              FileManager.default.fileExists(atPath: target.path) else {
+            return .init(backlinks: [], skippedDatalessFiles: 0)
+        }
+
         let candidateIndex = suppliedCandidateIndex
             ?? WorkspaceLinkCandidateIndex(markdownFiles: markdownFiles(files))
         let candidates = candidateIndex.markdownFiles
@@ -633,15 +709,14 @@ enum WorkspaceBacklinks {
             }
 
             var count = 0
-            for link in links {
-                guard let resolved = WorkspaceFiles.resolveLinkedTarget(
-                    link.target,
-                    from: source,
-                    in: root,
-                    candidates: candidates,
-                    candidateBasenames: candidateBasenames
-                ) else { continue }
-                if resolved.standardizedFileURL == target { count += 1 }
+            for link in links where WorkspaceFiles.linkedTargetMatches(
+                link.target,
+                from: source,
+                target: target,
+                in: root,
+                candidateBasenames: candidateBasenames
+            ) {
+                count += 1
             }
             if count > 0 { result.append(.init(source: source, count: count)) }
         }

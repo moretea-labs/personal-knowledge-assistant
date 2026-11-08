@@ -2047,6 +2047,64 @@ extension PKSNotesTests {
 
 
 extension PKSNotesTests {
+    func testTargetSpecificBacklinkResolutionPreservesExactBasenamePDFAndSymlinkRules() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let nested = root.appendingPathComponent("Nested", isDirectory: true)
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let source = root.appendingPathComponent("Source.md")
+        let target = nested.appendingPathComponent("Target.md")
+        let pdf = root.appendingPathComponent("Book.pdf")
+        let alias = root.appendingPathComponent("Alias.md")
+        try "# Source".write(to: source, atomically: true, encoding: .utf8)
+        try "# Target".write(to: target, atomically: true, encoding: .utf8)
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+        try fm.createSymbolicLink(at: alias, withDestinationURL: target)
+
+        let candidates = WorkspaceBacklinks.markdownFiles(WorkspaceFiles.tree(in: root))
+        let basenames = Dictionary(grouping: candidates) {
+            $0.deletingPathExtension().lastPathComponent
+        }
+
+        XCTAssertTrue(WorkspaceFiles.linkedTargetMatches(
+            "Nested/Target.md#section",
+            from: source,
+            target: target,
+            in: root,
+            candidateBasenames: basenames
+        ))
+        XCTAssertTrue(WorkspaceFiles.linkedTargetMatches(
+            "Target",
+            from: source,
+            target: target,
+            in: root,
+            candidateBasenames: basenames
+        ))
+        XCTAssertTrue(WorkspaceFiles.linkedTargetMatches(
+            "/Book.pdf#page=2",
+            from: source,
+            target: pdf,
+            in: root,
+            candidateBasenames: basenames
+        ))
+        XCTAssertFalse(WorkspaceFiles.linkedTargetMatches(
+            "Alias.md",
+            from: source,
+            target: target,
+            in: root,
+            candidateBasenames: basenames
+        ), "A symlink alias is not present in the secure candidate index.")
+        XCTAssertFalse(WorkspaceFiles.linkedTargetMatches(
+            "../Outside.md",
+            from: source,
+            target: target,
+            in: root,
+            candidateBasenames: basenames
+        ))
+    }
+
     func testBacklinkScanResultAndBasenameLookupStayDerived() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
