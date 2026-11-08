@@ -8,12 +8,16 @@ enum MindMapKeyboard {
     enum Command: Equatable {
         case previous, next, parentOrCollapse, childOrExpand
         case addChild, addSibling, promote, rename, toggleBranch
-        case deleteLeaf, deleteBranch, fit, zoomIn, zoomOut, clearSelection
+        case deleteLeaf, deleteBranch, boldTitle, italicTitle, toggleTask
+        case fit, zoomIn, zoomOut, clearSelection
     }
 
     static func command(for key: KeyEquivalent, modifiers: EventModifiers) -> Command? {
         guard !modifiers.contains(.control), !modifiers.contains(.option) else { return nil }
         if modifiers.contains(.command) {
+            if !modifiers.contains(.shift), key == "b" { return .boldTitle }
+            if !modifiers.contains(.shift), key == "i" { return .italicTitle }
+            if !modifiers.contains(.shift), key == .return { return .toggleTask }
             if key == .delete, !modifiers.contains(.shift) { return .deleteBranch }
             if key == "0", !modifiers.contains(.shift) { return .fit }
             if key == "-", !modifiers.contains(.shift) { return .zoomOut }
@@ -152,6 +156,12 @@ enum MindMapVisualStyle: String, CaseIterable, Identifiable {
 enum MindMapTitleEmphasis {
     static func toggle(_ title: String, marker: String) -> String {
         guard marker == "**" || marker == "*", !title.isEmpty else { return title }
+        // Task markers must remain at the beginning of the list item. Styling
+        // wraps only its label, or the checkbox ceases to be valid Markdown.
+        if let task = MindMapTaskNode.parse(title) {
+            guard !task.title.isEmpty else { return title }
+            return String(title.prefix(3)) + " " + toggle(task.title, marker: marker)
+        }
         // Applying italic to an already bold title adds italic; a single
         // asterisk must not strip half of the existing double-asterisk pair.
         if marker == "*", title.hasPrefix("**"), title.hasSuffix("**"),
@@ -331,7 +341,7 @@ struct MindMapCanvas: View {
         } message: {
             Text(language.text("The selected list branch and its child nodes will be removed from this note."))
         }
-        .alert(language.text("Mind Map Import/Export"), isPresented: Binding(
+        .alert(language.text("Mind Map"), isPresented: Binding(
             get: { interchangeError != nil },
             set: { if !$0 { interchangeError = nil } }
         )) {
@@ -630,6 +640,8 @@ struct MindMapCanvas: View {
             ("Return", "Add Sibling"),
             ("⇧ Tab", "Promote node"),
             ("E", "Rename node"),
+            ("⌘ B / ⌘ I", "Bold / Italic node title"),
+            ("⌘ Return", "Toggle task completion"),
             ("Space", "Collapse / expand branch"),
             ("Delete", "Delete Leaf"),
             ("⌘ Delete", "Delete Branch"),
@@ -699,10 +711,21 @@ struct MindMapCanvas: View {
             } else { return false }
         case .addChild:
             guard !nodes.isEmpty else { return false }
-            addChild()
+            guard addChild() else { return false }
         case .addSibling:
             guard !nodes.isEmpty else { return false }
-            addSibling()
+            guard addSibling() else { return false }
+        case .boldTitle, .italicTitle:
+            guard let selectedID,
+                  toggleTitleEmphasis(
+                    nodeID: selectedID,
+                    marker: command == .boldTitle ? "**" : "*"
+                  ) else { return false }
+        case .toggleTask:
+            guard let selectedID,
+                  let updated = MindMapTaskNode.toggle(in: source, nodeID: selectedID)
+            else { return false }
+            source = updated
         case .promote:
             guard let updated = shiftedSource(deeper: false) else { return false }
             source = updated
@@ -803,6 +826,8 @@ struct MindMapCanvas: View {
     private func nodeCard(_ node: MindMapNode, hasChildren: Bool,
                           branch: Int, exporting: Bool = false) -> some View {
         let presentation = MindMapOutline.presentation(for: node.title)
+        let task = MindMapTaskNode.parse(presentation.title)
+        let visibleTitle = task?.title ?? presentation.title
         let accent = mapStyle.branchColor(branch)
         let scheme: ColorScheme = exporting ? .light : colorScheme
         let highlighted = !exporting && selectedID == node.id
@@ -813,6 +838,31 @@ struct MindMapCanvas: View {
                     .fill(accent)
                     .frame(width: 4, height: 24)
                     .accessibilityHidden(true)
+            }
+            if let task {
+                if exporting {
+                    Image(systemName: task.checked ? "checkmark.square.fill" : "square")
+                        .foregroundStyle(task.checked ? accent : Color.secondary)
+                        .font(.system(size: 14))
+                        .accessibilityHidden(true)
+                } else {
+                    Button {
+                        if let updated = MindMapTaskNode.toggle(in: source, nodeID: node.id) {
+                            source = updated
+                            selectedID = node.id
+                            requestCanvasFocus()
+                        }
+                    } label: {
+                        Image(systemName: task.checked ? "checkmark.square.fill" : "square")
+                            .foregroundStyle(task.checked ? accent : Color.secondary)
+                            .font(.system(size: 14))
+                            .frame(minWidth: 20, minHeight: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .help(language.text(task.checked ? "Mark task incomplete" : "Mark task complete"))
+                    .accessibilityLabel(language.text(task.checked ? "Mark task incomplete" : "Mark task complete"))
+                    .accessibilityIdentifier("pks-mind-map-task-\(node.id)")
+                }
             }
             if hasChildren {
                 if exporting {
@@ -876,13 +926,13 @@ struct MindMapCanvas: View {
                 .help(language.text("Cancel"))
                 .accessibilityIdentifier("pks-mind-map-inline-cancel")
             } else {
-                Text(MindMapTitleEmphasis.display(presentation.title))
+                Text(MindMapTitleEmphasis.display(visibleTitle))
                     .font(.system(size: node.depth == 0 ? 16 : 14,
                                   weight: node.depth == 0 ? .semibold : .medium,
                                   design: mapStyle.fontDesign))
                     .lineLimit(5)
                     .fixedSize(horizontal: false, vertical: true)
-                    .help(presentation.title)
+                    .help(visibleTitle)
                     .accessibilityIdentifier("pks-mind-map-node-\(node.id)")
                     .accessibilityValue(!exporting && selectedID == node.id
                                         ? language.text("Selected") : "")
@@ -965,7 +1015,12 @@ struct MindMapCanvas: View {
             dropTargetID = nil
             return true
         } isTargeted: { targeted in
-            dropTargetID = targeted ? node.id : nil
+            if targeted {
+                dropTargetID = node.id
+            } else if dropTargetID == node.id {
+                // A late exit from another card must not erase the current drop cue.
+                dropTargetID = nil
+            }
         }
         .contextMenu {
             Button(language.text("Rename node"), systemImage: "pencil") {
@@ -1021,31 +1076,46 @@ struct MindMapCanvas: View {
         }
     }
 
-    private func toggleTitleEmphasis(nodeID: Int, marker: String) {
+    @discardableResult
+    private func toggleTitleEmphasis(nodeID: Int, marker: String) -> Bool {
         guard editingNodeID == nil,
               let node = MindMapOutline.nodes(in: source).first(where: { $0.id == nodeID }),
               let updated = MindMapOutline.rename(
                 in: source, nodeID: nodeID,
                 to: MindMapTitleEmphasis.toggle(node.title, marker: marker)
-              ) else { return }
+              ) else { return false }
         source = updated
         selectedID = nodeID
         requestCanvasFocus()
+        return true
     }
 
-    private func addChild() {
-        guard let id = selectedID ?? nodes.first?.id,
-              let updated = MindMapOutline.addChild(in: source, parentID: id) else { return }
+    @discardableResult
+    private func addChild() -> Bool {
+        guard let id = selectedID ?? nodes.first?.id else { return false }
+        guard let updated = MindMapOutline.addChild(in: source, parentID: id) else {
+            interchangeError = language.text(
+                "Cannot add a node here without changing attached Markdown. Use the editor."
+            )
+            return false
+        }
         source = updated
         collapsed.removeAll()
         startEditingNode(id + 1, title: "New idea", created: true)
+        return true
     }
 
-    private func addSibling() {
+    @discardableResult
+    private func addSibling() -> Bool {
         guard let id = selectedID ?? nodes.first?.id,
-              let updated = MindMapOutline.addSibling(in: source, nodeID: id) else { return }
+              let position = nodes.firstIndex(where: { $0.id == id }) else { return false }
+        guard let updated = MindMapOutline.addSibling(in: source, nodeID: id) else {
+            interchangeError = language.text(
+                "Cannot add a node here without changing attached Markdown. Use the editor."
+            )
+            return false
+        }
         let original = nodes
-        let position = original.firstIndex(where: { $0.id == id })!
         let siblingLine = original.dropFirst(position + 1)
             .first(where: { $0.depth <= original[position].depth })?.id
             ?? source.components(separatedBy: "\n").count
@@ -1055,6 +1125,7 @@ struct MindMapCanvas: View {
         source = updated
         collapsed.removeAll()
         startEditingNode(isList ? siblingLine : id + 1, title: "New idea", created: true)
+        return true
     }
 
     private func deleteSelectedLeaf() {
@@ -1233,6 +1304,7 @@ struct MindMapCanvas: View {
             // Invalid titles stay in the inline editor instead of silently
             // committing the placeholder/original text.
             guard let updated = MindMapOutline.rename(in: source, nodeID: id, to: renameTitle) else {
+                interchangeError = language.text("Enter a nonempty, single-line node title.")
                 return
             }
             source = updated
