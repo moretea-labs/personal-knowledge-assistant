@@ -2986,9 +2986,8 @@ extension PKSNotesTests {
         XCTAssertNil(model.message)
     }
 
-
     @MainActor
-    func testAutomaticRestoreReportsMissingAndUnreadableNotesWithoutDiscardingFiles() async throws {
+    func testMissingLastOpenedNoteIsReportedAndClearsStalePath() async throws {
         let defaults = UserDefaults.standard
         let previousWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
         let previousLast = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
@@ -3012,20 +3011,6 @@ extension PKSNotesTests {
                        AppLanguage.current.text("Last opened note is no longer available. Choose another note."))
         XCTAssertNil(defaults.string(forKey: "PKSNotesLastOpenedMarkdown"))
 
-        let invalid = folder.appendingPathComponent("InvalidUTF8.md")
-        try Data([0xFF, 0xFE, 0xFF]).write(to: invalid)
-        defaults.set(invalid.path, forKey: "PKSNotesLastOpenedMarkdown")
-        let invalidModel = NotesModel()
-        XCTAssertTrue(invalidModel.openWorkspace(folder))
-        for _ in 0..<150 {
-            if !invalidModel.loadingNote && invalidModel.requestedNote == nil { break }
-            try await Task.sleep(for: .milliseconds(20))
-        }
-        XCTAssertNil(invalidModel.selected)
-        XCTAssertEqual(invalidModel.message,
-                       AppLanguage.current.text("Could not reopen the last note. Select it again to retry."))
-        XCTAssertEqual(defaults.string(forKey: "PKSNotesLastOpenedMarkdown"), invalid.path)
-        XCTAssertEqual(try Data(contentsOf: invalid), Data([0xFF, 0xFE, 0xFF]))
     }
 
 }

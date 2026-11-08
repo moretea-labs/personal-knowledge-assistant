@@ -1266,6 +1266,16 @@ struct NotesWindow: View {
     }
 
     private func openQuickMatch(_ item: NoteItem) {
+        // The cached full-vault index can outlive an external/iCloud rename.
+        // Do not dismiss Quick Open or navigate to a vanished path; refresh
+        // its one existing index, at most once per picker session.
+        guard FileManager.default.fileExists(atPath: item.url.path) else {
+            if !quickOpenFallbackRescanRequested && !model.indexingFiles {
+                quickOpenFallbackRescanRequested = true
+                model.refreshGlobalFileIndex()
+            }
+            return
+        }
         if let request = linkRepairRequest {
             // Never mutate a different document or a draft that changed while
             // the picker was open. Repair is a source-scoped user action.
