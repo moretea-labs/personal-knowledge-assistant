@@ -262,7 +262,8 @@ final class PDFReaderController: ObservableObject {
         requestedPage: Int?,
         requestedAnchor: PDFSourceAnchor?
     ) {
-        if pdfView !== view {
+        let viewChanged = pdfView !== view
+        if viewChanged {
             removeViewObservers()
             pdfView = view
             installViewObservers(for: view)
@@ -271,19 +272,26 @@ final class PDFReaderController: ObservableObject {
         let documentChanged = self.document !== document || documentURL != url
         let pageRequestChanged = self.requestedPage != requestedPage
         let anchorRequestChanged = self.requestedAnchor != requestedAnchor
+        let presentationChanged = viewChanged || documentChanged
         self.document = document
         documentURL = url
         self.requestedPage = requestedPage
         self.requestedAnchor = requestedAnchor
 
-        if view.document !== document {
-            view.document = document
+        // PDFView presentation properties can trigger PDFKit layout/redraw work even
+        // when assigned the same value. SwiftUI calls updateNSView for unrelated toolbar
+        // and controller publications, so only configure the native view when its actual
+        // view/document identity changes.
+        if presentationChanged {
+            if view.document !== document {
+                view.document = document
+            }
+            view.displayMode = .singlePageContinuous
+            view.displaysPageBreaks = true
+            view.backgroundColor = .textBackgroundColor
         }
-        view.displayMode = .singlePageContinuous
-        view.displaysPageBreaks = true
-        view.backgroundColor = .textBackgroundColor
 
-        if !documentChanged {
+        if !presentationChanged {
             if pageRequestChanged || anchorRequestChanged {
                 applyRequestedSource(page: requestedPage, anchor: requestedAnchor)
             } else {
