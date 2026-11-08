@@ -687,7 +687,12 @@ struct NotesWindow: View {
             rebuildQuickOpenMatches()
         }
         .onChange(of: quickOpenQuery) { _, _ in
-            if showingQuickOpen { rebuildQuickOpenMatches() }
+            guard showingQuickOpen else { return }
+            rebuildQuickOpenMatches()
+            requestGlobalQuickOpenIndexIfNeeded()
+        }
+        .onChange(of: model.indexingFiles) { _, indexing in
+            if !indexing { requestGlobalQuickOpenIndexIfNeeded() }
         }
         .onChange(of: expandedFolderPaths) { _, expanded in
             visibleTreeRows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expanded)
@@ -879,12 +884,22 @@ struct NotesWindow: View {
             : min(quickOpenIndex, quickOpenMatches.count - 1)
     }
 
+    private func requestGlobalQuickOpenIndexIfNeeded() {
+        guard showingQuickOpen,
+              !quickOpenQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !model.globalFileIndexReady,
+              !model.indexingFiles else { return }
+        model.prepareGlobalFileIndex()
+    }
+
     private func prepareQuickOpenPresentation() {
         quickOpenEntries = model.globalFileIndexReady
             ? model.globalQuickOpenEntries
             : localQuickOpenEntries(model.files)
         rebuildQuickOpenMatches()
-        model.prepareGlobalFileIndex()
+        // Opening the picker itself must not recurse through a large/iCloud vault.
+        // Current/recent/local entries are ready immediately; the complete utility
+        // scan begins only after a non-empty query expresses full-library intent.
         showingQuickOpen = true
     }
 
