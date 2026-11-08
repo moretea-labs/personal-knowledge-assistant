@@ -844,6 +844,7 @@ final class NotesModel: ObservableObject {
     private var fileRefreshTask: Task<Void, Never>?
     private var folderLoadTask: Task<Void, Never>?
     private var pendingFolderPaths: Set<String> = []
+    private var pendingFolderQueue: [String] = []
     private var preferredFolderPath: String?
     private var loadedFolderPaths: Set<String> = []
     private var mutationRefreshTask: Task<Void, Never>?
@@ -1040,6 +1041,7 @@ final class NotesModel: ObservableObject {
         mutationRefreshTask = nil
         mutationRefreshGeneration &+= 1
         pendingFolderPaths.removeAll()
+        pendingFolderQueue.removeAll(keepingCapacity: true)
         pendingMutationParentPaths.removeAll()
         preferredFolderPath = nil
         loadedFolderPaths.removeAll()
@@ -1092,6 +1094,7 @@ final class NotesModel: ObservableObject {
         }
         loadedFolderPaths = Set(loadedFolderPaths.filter(outside))
         pendingFolderPaths = Set(pendingFolderPaths.filter(outside))
+        pendingFolderQueue.removeAll { !outside($0) }
         pendingMutationParentPaths = Set(pendingMutationParentPaths.filter(outside))
         if let preferredFolderPath, !outside(preferredFolderPath) {
             self.preferredFolderPath = nil
@@ -1143,6 +1146,21 @@ final class NotesModel: ObservableObject {
         }
     }
 
+    private func rebuildPendingFolderQueue(rootPath: String) {
+        let ranked = pendingFolderPaths.compactMap { path -> (path: String, depth: Int)? in
+            guard path.hasPrefix(rootPath + "/"),
+                  !loadedFolderPaths.contains(path) else { return nil }
+            return (path, path.split(separator: "/").count)
+        }
+        pendingFolderPaths = Set(ranked.map(\.path))
+        // Reverse priority order so popLast() returns shallowest, then lexical.
+        // Sorting happens only when the expanded set changes, not after every load.
+        pendingFolderQueue = ranked.sorted {
+            if $0.depth != $1.depth { return $0.depth > $1.depth }
+            return $0.path.localizedStandardCompare($1.path) == .orderedDescending
+        }.map(\.path)
+    }
+
     func loadExpandedFolders(_ paths: Set<String>) {
         guard let root else { return }
         let rootPath = root.standardizedFileURL.path
@@ -1155,6 +1173,7 @@ final class NotesModel: ObservableObject {
         // Already-loaded children stay as a presentation cache for cheap reopen.
         pendingFolderPaths.formIntersection(expanded)
         pendingFolderPaths.formUnion(expanded.filter { !loadedFolderPaths.contains($0) })
+        rebuildPendingFolderQueue(rootPath: rootPath)
         if let preferredFolderPath, !expanded.contains(preferredFolderPath) {
             self.preferredFolderPath = nil
         }
@@ -1169,7 +1188,11 @@ final class NotesModel: ObservableObject {
         guard normalized.hasPrefix(rootPath + "/"),
               !loadedFolderPaths.contains(normalized) else { return }
         preferredFolderPath = normalized
-        pendingFolderPaths.insert(normalized)
+        if pendingFolderPaths.insert(normalized).inserted {
+            // Direct user disclosure is immediately eligible even before the
+            // SwiftUI expanded-set callback rebuilds the background queue.
+            pendingFolderQueue.append(normalized)
+        }
         startPendingFolderLoad()
     }
 
@@ -1178,28 +1201,29 @@ final class NotesModel: ObservableObject {
               !pendingFolderPaths.isEmpty else { return }
 
         let rootPath = root.standardizedFileURL.path
-        let candidates = pendingFolderPaths.filter {
-            $0.hasPrefix(rootPath + "/") && !loadedFolderPaths.contains($0)
+        var target: String?
+        if let preferred = preferredFolderPath,
+           pendingFolderPaths.contains(preferred),
+           preferred.hasPrefix(rootPath + "/"),
+           !loadedFolderPaths.contains(preferred) {
+            pendingFolderPaths.remove(preferred)
+            target = preferred
+            preferredFolderPath = nil
         }
-        guard !candidates.isEmpty else {
+
+        while target == nil, let candidate = pendingFolderQueue.popLast() {
+            guard pendingFolderPaths.remove(candidate) != nil,
+                  candidate.hasPrefix(rootPath + "/"),
+                  !loadedFolderPaths.contains(candidate) else { continue }
+            target = candidate
+        }
+
+        guard let target else {
             pendingFolderPaths.removeAll()
+            pendingFolderQueue.removeAll(keepingCapacity: true)
             preferredFolderPath = nil
             return
         }
-
-        let target: String
-        if let preferred = preferredFolderPath, candidates.contains(preferred) {
-            target = preferred
-            preferredFolderPath = nil
-        } else {
-            target = candidates.min {
-                let lhsDepth = $0.split(separator: "/").count
-                let rhsDepth = $1.split(separator: "/").count
-                if lhsDepth != rhsDepth { return lhsDepth < rhsDepth }
-                return $0.localizedStandardCompare($1) == .orderedAscending
-            }!
-        }
-        pendingFolderPaths.remove(target)
 
         let generation = fileRefreshGeneration
         folderLoadTask = Task { [weak self] in
