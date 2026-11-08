@@ -113,6 +113,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Return to Markdown": "返回 Markdown",
         "Mind Map": "思维导图",
         "Mind Map Style": "导图样式",
+        "Bold node title": "节点标题加粗",
+        "Italic node title": "节点标题斜体",
         "Layout Density": "布局密度",
         "Compact": "紧凑",
         "Standard": "标准",

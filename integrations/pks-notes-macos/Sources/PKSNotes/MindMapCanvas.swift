@@ -147,6 +147,37 @@ enum MindMapVisualStyle: String, CaseIterable, Identifiable {
     }
 }
 
+/// Node emphasis uses standard Markdown markup, not additional style metadata.
+/// The canvas formats titles for display while inline editing still shows source.
+enum MindMapTitleEmphasis {
+    static func toggle(_ title: String, marker: String) -> String {
+        guard marker == "**" || marker == "*", !title.isEmpty else { return title }
+        // Applying italic to an already bold title adds italic; a single
+        // asterisk must not strip half of the existing double-asterisk pair.
+        if marker == "*", title.hasPrefix("**"), title.hasSuffix("**"),
+           !title.hasPrefix("***"), !title.hasSuffix("***") {
+            return marker + title + marker
+        }
+        if title.hasPrefix(marker), title.hasSuffix(marker),
+           title.count > marker.count * 2 {
+            return String(title.dropFirst(marker.count).dropLast(marker.count))
+        }
+        return marker + title + marker
+    }
+
+    static func display(_ title: String) -> AttributedString {
+        guard title.contains("*") || title.contains("_") ||
+              title.contains("~") || title.utf8.contains(96) else {
+            return AttributedString(title)
+        }
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        return (try? AttributedString(markdown: title, options: options))
+            ?? AttributedString(title)
+    }
+}
+
 /// An editable Markdown-backed mind-map canvas. Markdown remains the only document authority.
 struct MindMapCanvas: View {
     @Environment(\.notesLanguage) private var language
@@ -455,6 +486,17 @@ struct MindMapCanvas: View {
                     requestCanvasFocus()
                 }
                 .disabled(selectedID == nil || !canDemote)
+                Divider()
+                Button(language.text("Bold node title"), systemImage: "bold") {
+                    if let selectedID { toggleTitleEmphasis(nodeID: selectedID, marker: "**") }
+                }
+                .disabled(selectedID == nil)
+                .accessibilityIdentifier("pks-mind-map-node-bold")
+                Button(language.text("Italic node title"), systemImage: "italic") {
+                    if let selectedID { toggleTitleEmphasis(nodeID: selectedID, marker: "*") }
+                }
+                .disabled(selectedID == nil)
+                .accessibilityIdentifier("pks-mind-map-node-italic")
                 Divider()
                 Button(language.text("Delete Leaf"), systemImage: "trash") {
                     _ = performShortcut(.deleteLeaf)
@@ -834,7 +876,7 @@ struct MindMapCanvas: View {
                 .help(language.text("Cancel"))
                 .accessibilityIdentifier("pks-mind-map-inline-cancel")
             } else {
-                Text(presentation.title)
+                Text(MindMapTitleEmphasis.display(presentation.title))
                     .font(.system(size: node.depth == 0 ? 16 : 14,
                                   weight: node.depth == 0 ? .semibold : .medium,
                                   design: mapStyle.fontDesign))
@@ -929,6 +971,13 @@ struct MindMapCanvas: View {
                 selectedID = node.id
                 beginRename()
             }
+            Button(language.text("Bold node title"), systemImage: "bold") {
+                toggleTitleEmphasis(nodeID: node.id, marker: "**")
+            }
+            Button(language.text("Italic node title"), systemImage: "italic") {
+                toggleTitleEmphasis(nodeID: node.id, marker: "*")
+            }
+            Divider()
             Button(language.text("Link Note"), systemImage: "doc.text") {
                 selectedID = node.id
                 connectNote(node.id)
@@ -968,6 +1017,18 @@ struct MindMapCanvas: View {
             selectedID = node.id
             beginRename()
         }
+    }
+
+    private func toggleTitleEmphasis(nodeID: Int, marker: String) {
+        guard editingNodeID == nil,
+              let node = MindMapOutline.nodes(in: source).first(where: { $0.id == nodeID }),
+              let updated = MindMapOutline.rename(
+                in: source, nodeID: nodeID,
+                to: MindMapTitleEmphasis.toggle(node.title, marker: marker)
+              ) else { return }
+        source = updated
+        selectedID = nodeID
+        requestCanvasFocus()
     }
 
     private func addChild() {
