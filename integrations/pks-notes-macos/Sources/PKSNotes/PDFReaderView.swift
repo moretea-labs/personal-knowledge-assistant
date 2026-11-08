@@ -5,7 +5,13 @@ import SwiftUI
 enum PDFDocumentLoading {
     static func load(_ url: URL) async -> PDFDocument? {
         let loader = Task.detached(priority: .userInitiated) {
-            PDFDocument(url: url)
+            do {
+                try await WorkspaceFiles.hydrateUbiquitousItemIfNeeded(url)
+                try Task.checkCancellation()
+                return PDFDocument(url: url)
+            } catch {
+                return nil
+            }
         }
         let loaded = await loader.value
         guard !Task.isCancelled else {
@@ -252,7 +258,8 @@ final class PDFReaderController: ObservableObject {
     private var requestedPage: Int?
     private var requestedAnchor: PDFSourceAnchor?
     private var viewObservers: [NSObjectProtocol] = []
-    private var findObservers: [NSObjectProtocol] = []
+    private var searchTask: Task<Void, Never>?
+    private var searchGeneration: UInt64 = 0
     private var searchMatches: [PDFSelection] = []
 
     func attach(
@@ -262,7 +269,8 @@ final class PDFReaderController: ObservableObject {
         requestedPage: Int?,
         requestedAnchor: PDFSourceAnchor?
     ) {
-        if pdfView !== view {
+        let viewChanged = pdfView !== view
+        if viewChanged {
             removeViewObservers()
             pdfView = view
             installViewObservers(for: view)
@@ -271,19 +279,26 @@ final class PDFReaderController: ObservableObject {
         let documentChanged = self.document !== document || documentURL != url
         let pageRequestChanged = self.requestedPage != requestedPage
         let anchorRequestChanged = self.requestedAnchor != requestedAnchor
+        let presentationChanged = viewChanged || documentChanged
         self.document = document
         documentURL = url
         self.requestedPage = requestedPage
         self.requestedAnchor = requestedAnchor
 
-        if view.document !== document {
-            view.document = document
+        // PDFView presentation properties can trigger PDFKit layout/redraw work even when
+        // assigned the same value. SwiftUI calls updateNSView for unrelated toolbar and
+        // controller publications, so only configure the native view when its actual
+        // view/document identity changes.
+        if presentationChanged {
+            if view.document !== document {
+                view.document = document
+            }
+            view.displayMode = .singlePageContinuous
+            view.displaysPageBreaks = true
+            view.backgroundColor = .textBackgroundColor
         }
-        view.displayMode = .singlePageContinuous
-        view.displaysPageBreaks = true
-        view.backgroundColor = .textBackgroundColor
 
-        if !documentChanged {
+        if !presentationChanged {
             if pageRequestChanged || anchorRequestChanged {
                 applyRequestedSource(page: requestedPage, anchor: requestedAnchor)
             } else {
@@ -295,7 +310,6 @@ final class PDFReaderController: ObservableObject {
         cancelSearch()
         pageCount = document.pageCount
         outline = Self.flattenOutline(document.outlineRoot, in: document)
-        installFindObservers(for: document)
 
         if requestedPage != nil || requestedAnchor != nil {
             applyRequestedSource(page: requestedPage, anchor: requestedAnchor)
@@ -487,18 +501,35 @@ final class PDFReaderController: ObservableObject {
     func search(_ query: String) {
         guard let document else { return }
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        document.cancelFindString()
-        searchMatches.removeAll()
-        searchMatchCount = 0
-        searchMatchIndex = 0
+        cancelSearch()
 
         guard !text.isEmpty else {
-            isSearching = false
             pdfView?.currentSelection = nil
             return
         }
+
+        searchGeneration &+= 1
+        let generation = searchGeneration
         isSearching = true
-        document.beginFindString(text, withOptions: .caseInsensitive)
+        searchTask = Task { @MainActor [weak self] in
+            let worker = Task.detached(priority: .userInitiated) {
+                document.findString(text, withOptions: .caseInsensitive)
+            }
+            let matches = await worker.value
+            guard !Task.isCancelled,
+                  let self,
+                  self.searchGeneration == generation,
+                  self.document === document else { return }
+
+            self.searchMatches = matches
+            self.searchMatchCount = matches.count
+            self.searchMatchIndex = 0
+            self.isSearching = false
+            self.searchTask = nil
+            if !matches.isEmpty {
+                self.revealSearchMatch()
+            }
+        }
     }
 
     func previousSearchMatch() {
@@ -556,29 +587,6 @@ final class PDFReaderController: ObservableObject {
         ]
     }
 
-    private func installFindObservers(for document: PDFDocument) {
-        removeFindObservers()
-        let center = NotificationCenter.default
-        findObservers = [
-            center.addObserver(forName: .PDFDocumentDidFindMatch, object: document, queue: .main) { [weak self] note in
-                Task { @MainActor in
-                    guard let self,
-                          let selection = note.userInfo?["PDFDocumentFoundSelection"] as? PDFSelection
-                    else { return }
-                    self.searchMatches.append(selection)
-                    self.searchMatchCount = self.searchMatches.count
-                    if self.searchMatches.count == 1 {
-                        self.searchMatchIndex = 0
-                        self.revealSearchMatch()
-                    }
-                }
-            },
-            center.addObserver(forName: .PDFDocumentDidEndFind, object: document, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.isSearching = false }
-            }
-        ]
-    }
-
     private func revealSearchMatch() {
         guard searchMatches.indices.contains(searchMatchIndex),
               let view = pdfView else { return }
@@ -590,12 +598,13 @@ final class PDFReaderController: ObservableObject {
     }
 
     private func cancelSearch() {
-        document?.cancelFindString()
+        searchGeneration &+= 1
+        searchTask?.cancel()
+        searchTask = nil
         searchMatches.removeAll()
         searchMatchCount = 0
         searchMatchIndex = 0
         isSearching = false
-        removeFindObservers()
     }
 
     private func removeViewObservers() {
@@ -604,11 +613,6 @@ final class PDFReaderController: ObservableObject {
         viewObservers.removeAll()
     }
 
-    private func removeFindObservers() {
-        let center = NotificationCenter.default
-        for observer in findObservers { center.removeObserver(observer) }
-        findObservers.removeAll()
-    }
 
     private static func flattenOutline(
         _ root: PDFOutline?,

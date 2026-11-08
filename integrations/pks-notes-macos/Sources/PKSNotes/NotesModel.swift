@@ -90,10 +90,53 @@ enum WorkspaceFiles {
         )
     }
 
+    /// NSTextView canonicalizes CRLF/CR into LF. Normalize once at the file/editor
+    /// boundary so merely mounting the native editor never creates a false dirty draft.
+    static func editorText(_ content: String) -> String {
+        guard content.utf8.contains(13) else { return content }
+        return content
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+    }
+
     static func defaultVault() -> URL {
         let root = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/学习笔记管理", isDirectory: true)
         return root
+    }
+
+    /// One File Provider hydration path for every reader. Dataless placeholders can
+    /// fail immediately with EDEADLK when consumers try to parse them directly.
+    static func hydrateUbiquitousItemIfNeeded(_ url: URL) async throws {
+        guard FileManager.default.isUbiquitousItem(at: url) else { return }
+        let keys: Set<URLResourceKey> = [.ubiquitousItemDownloadingStatusKey]
+        var status = try? url.resourceValues(forKeys: keys).ubiquitousItemDownloadingStatus
+        guard status != .current else { return }
+
+        try FileManager.default.startDownloadingUbiquitousItem(at: url)
+        for _ in 0..<200 {
+            try Task.checkCancellation()
+            status = try? url.resourceValues(forKeys: keys).ubiquitousItemDownloadingStatus
+            if status == .current { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw CocoaError(.fileReadUnknown)
+    }
+
+    /// Keep hydration and content IO off the main actor, then capture the final POSIX
+    /// stamp after hydration so save/conflict detection does not mistake a download for
+    /// an external edit. A second read is allowed only when the file changed mid-read.
+    static func readUTF8ForOpening(_ url: URL) async throws -> (content: String, stamp: WorkspaceFileStamp) {
+        try await hydrateUbiquitousItemIfNeeded(url)
+
+        for _ in 0..<2 {
+            try Task.checkCancellation()
+            guard let before = fileStamp(url) else { throw CocoaError(.fileReadNoSuchFile) }
+            let content = try String(contentsOf: url, encoding: .utf8)
+            guard let after = fileStamp(url) else { throw CocoaError(.fileReadNoSuchFile) }
+            if before == after { return (content, after) }
+        }
+        throw CocoaError(.fileReadUnknown)
     }
 
     static func contains(_ candidate: URL, in root: URL) -> Bool {
@@ -865,7 +908,7 @@ final class NotesModel: ObservableObject {
     private(set) var draftRevision: UInt64 = 0
     private(set) var bodyRevision: UInt64 = 0
 
-    private struct CachedNote {
+    private struct CachedNote: Sendable {
         let content: String
         let stamp: WorkspaceFileStamp
     }
@@ -874,11 +917,13 @@ final class NotesModel: ObservableObject {
     private var autoSaveTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var noteLoadTask: Task<Void, Never>?
-    private var requestedNote: URL?
+    @Published private(set) var requestedNote: URL?
     private var loadIdentity: UUID?
     private var pendingMatch: SearchHit?
     private var noteCache: [String: CachedNote] = [:]
     private var noteCacheOrder: [String] = []
+    private var filePrefetchTask: Task<Void, Never>?
+    private var filePrefetchPath: String?
     private var securityScopedFolder: URL?
     private var backlinkTask: Task<Void, Never>?
     private var backlinkParseCache = WorkspaceBacklinkParseCache()
@@ -1020,6 +1065,7 @@ final class NotesModel: ObservableObject {
 
         previewTask?.cancel()
         cancelNoteLoad()
+        cancelFilePrefetch()
         backlinkTask?.cancel()
         // A detached scan may still finish after cancellation. Swapping the
         // cache object isolates any late writes to the old workspace instance.
@@ -1203,6 +1249,24 @@ final class NotesModel: ObservableObject {
         }.map(\.path)
     }
 
+    /// Pick the next materializable directory on one preferred deep path.
+    /// The existing pending set remains the only queue authority: this is merely
+    /// a priority hint that walks the path shallow-to-deep so each child can be
+    /// published into an already materialized parent.
+    static func preferredPendingFolder(in pending: Set<String>, toward preferredLeaf: String) -> String? {
+        var selected: String?
+        var selectedDepth = Int.max
+        for candidate in pending
+        where candidate == preferredLeaf || preferredLeaf.hasPrefix(candidate + "/") {
+            let depth = candidate.split(separator: "/").count
+            if depth < selectedDepth {
+                selected = candidate
+                selectedDepth = depth
+            }
+        }
+        return selected
+    }
+
     func loadExpandedFolders(_ paths: Set<String>) {
         guard let root else { return }
         let rootPath = root.standardizedFileURL.path
@@ -1219,6 +1283,27 @@ final class NotesModel: ObservableObject {
         if let preferredFolderPath, !expanded.contains(preferredFolderPath) {
             self.preferredFolderPath = nil
         }
+        startPendingFolderLoad()
+    }
+
+    /// Prioritize one already-expanded deep path (for example the active note)
+    /// without introducing another tree/index. The scheduler derives each next
+    /// ancestor from the same pending set used by normal disclosure loading.
+    func prioritizeExpandedPath(_ paths: Set<String>, toward targetFolder: URL) {
+        guard let root else { return }
+        let rootPath = root.standardizedFileURL.path
+        let target = targetFolder.standardizedFileURL.path
+        guard target.hasPrefix(rootPath + "/") else { return }
+
+        let expanded = Set(paths.compactMap { path -> String? in
+            let normalized = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+            return normalized.hasPrefix(rootPath + "/") ? normalized : nil
+        })
+        guard expanded.contains(target) else { return }
+
+        pendingFolderPaths.formUnion(expanded.filter { !loadedFolderPaths.contains($0) })
+        preferredFolderPath = target
+        rebuildPendingFolderQueue(rootPath: rootPath)
         startPendingFolderLoad()
     }
 
@@ -1245,11 +1330,16 @@ final class NotesModel: ObservableObject {
         let rootPath = root.standardizedFileURL.path
         var target: String?
         if let preferred = preferredFolderPath,
-           pendingFolderPaths.contains(preferred),
            preferred.hasPrefix(rootPath + "/"),
-           !loadedFolderPaths.contains(preferred) {
-            pendingFolderPaths.remove(preferred)
-            target = preferred
+           let next = Self.preferredPendingFolder(in: pendingFolderPaths, toward: preferred),
+           !loadedFolderPaths.contains(next) {
+            pendingFolderPaths.remove(next)
+            target = next
+            if next == preferred {
+                preferredFolderPath = nil
+            }
+        } else if let preferred = preferredFolderPath,
+                  !preferred.hasPrefix(rootPath + "/") || loadedFolderPaths.contains(preferred) {
             preferredFolderPath = nil
         }
 
@@ -1422,6 +1512,9 @@ final class NotesModel: ObservableObject {
             // Do not repeat the full symlink/lstat chain on the main actor.
             openValidatedNote(url, navigationDecision: navigationDecision, preservePDFPreview: false)
         } else if url.pathExtension.lowercased() == "pdf" {
+            // The actual reader becomes the sole waiter. Cancelling this task does not
+            // cancel a File Provider download already requested during hover warmup.
+            cancelFilePrefetch()
             if previewPDF == url {
                 if let pdfAnchor {
                     previewPDFAnchor = pdfAnchor
@@ -1511,6 +1604,42 @@ final class NotesModel: ObservableObject {
         loadingNote = false
     }
 
+    /// Warm exactly one strongly signalled local target (for example a hovered row).
+    /// Measurements show local reads are already cheap; warmup does no content IO and
+    /// exists only to start expensive File Provider hydration for Markdown or PDF.
+    func prefetchFile(_ url: URL) {
+        let candidate = url.standardizedFileURL
+        let ext = candidate.pathExtension.lowercased()
+        guard let root,
+              selected?.standardizedFileURL != candidate,
+              previewPDF?.standardizedFileURL != candidate,
+              ["md", "markdown", "pdf"].contains(ext) else { return }
+
+        let canonicalRoot = root.standardizedFileURL
+        let key = candidate.path
+        // Keep pointer/keyboard transit cheap. The dwell lets a newer target cancel
+        // before containment or File Provider metadata work begins.
+        guard key.hasPrefix(canonicalRoot.path + "/") else { return }
+        if filePrefetchPath == key { return }
+
+        filePrefetchTask?.cancel()
+        filePrefetchPath = key
+        filePrefetchTask = Task.detached(priority: .utility) {
+            do { try await Task.sleep(for: .milliseconds(120)) }
+            catch { return }
+            guard !Task.isCancelled,
+                  WorkspaceFiles.contains(candidate, in: canonicalRoot),
+                  FileManager.default.isUbiquitousItem(at: candidate) else { return }
+            try? await WorkspaceFiles.hydrateUbiquitousItemIfNeeded(candidate)
+        }
+    }
+
+    private func cancelFilePrefetch() {
+        filePrefetchTask?.cancel()
+        filePrefetchTask = nil
+        filePrefetchPath = nil
+    }
+
     private func loadNote(_ url: URL, preservePDFPreview: Bool = false) {
         cancelNoteLoad()
         previewTask?.cancel()
@@ -1520,6 +1649,10 @@ final class NotesModel: ObservableObject {
         loadingNote = true
         message = nil
 
+        // Warmup never owns content. An actual click cancels any remaining debounce
+        // and immediately enters the canonical user-initiated hydration/read path.
+        cancelFilePrefetch()
+
         // iCloud File Provider can block while hydrating files. Never read Markdown
         // on the main actor; only publish a successful, current request. A small
         // POSIX-stamp-validated cache avoids decoding unchanged contents and also
@@ -1527,21 +1660,25 @@ final class NotesModel: ObservableObject {
         let cached = noteCache[url.path]
         noteLoadTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
-                guard let stamp = WorkspaceFiles.fileStamp(url) else {
+                guard let initialStamp = WorkspaceFiles.fileStamp(url) else {
                     throw CocoaError(.fileReadNoSuchFile)
                 }
                 let content: String
-                if let cached, cached.stamp == stamp {
+                let resolvedStamp: WorkspaceFileStamp
+                if let cached, cached.stamp == initialStamp {
                     content = cached.content
+                    resolvedStamp = initialStamp
                 } else {
-                    content = try String(contentsOf: url, encoding: .utf8)
+                    let loaded = try await WorkspaceFiles.readUTF8ForOpening(url)
+                    content = loaded.content
+                    resolvedStamp = loaded.stamp
                 }
                 guard !Task.isCancelled else { return }
                 await self?.finishOpeningNote(
                     url,
                     identity: identity,
                     content: content,
-                    stamp: stamp,
+                    stamp: resolvedStamp,
                     preservePDFPreview: preservePDFPreview
                 )
             } catch {
@@ -1560,10 +1697,11 @@ final class NotesModel: ObservableObject {
             previewPDF = nil
             previewPDFPage = nil
         }
-        baseline = content
-        draft = content
+        let editorContent = WorkspaceFiles.editorText(content)
+        baseline = editorContent
+        draft = editorContent
         savedFileStamp = stamp
-        cacheNote(url, content: content, stamp: stamp)
+        cacheNote(url, content: editorContent, stamp: stamp)
         externalBody = nil
         externalTitle = nil
         previewSource = nil
@@ -1576,6 +1714,7 @@ final class NotesModel: ObservableObject {
         UserDefaults.standard.set(url.path, forKey: "PKSNotesLastOpenedMarkdown")
         if let root {
             recentNotes = NoteNavigationStore.recordRecent(url, in: root)
+            requestRecentHydration(excluding: url, in: root)
         }
         backlinkTask?.cancel()
         backlinks = []
@@ -1596,6 +1735,31 @@ final class NotesModel: ObservableObject {
         while noteCacheOrder.count > 10 {
             let evicted = noteCacheOrder.removeFirst()
             noteCache.removeValue(forKey: evicted)
+        }
+    }
+
+    /// Recent history is the strongest cheap signal for the next navigation target.
+    /// Request hydration for only two neighbors and never read their contents here;
+    /// File Provider remains the storage owner and loadNote remains the sole reader.
+    private func requestRecentHydration(excluding active: URL, in root: URL) {
+        let candidates = Array(recentNotes.lazy
+            .filter { $0.standardizedFileURL != active.standardizedFileURL }
+            .prefix(2))
+        guard !candidates.isEmpty else { return }
+
+        Task.detached(priority: .utility) {
+            for candidate in candidates {
+                guard !Task.isCancelled,
+                      ["md", "markdown"].contains(candidate.pathExtension.lowercased()),
+                      WorkspaceFiles.contains(candidate, in: root),
+                      FileManager.default.isUbiquitousItem(at: candidate) else { continue }
+                let status = try? candidate.resourceValues(
+                    forKeys: [.ubiquitousItemDownloadingStatusKey]
+                ).ubiquitousItemDownloadingStatus
+                if status != .current {
+                    try? FileManager.default.startDownloadingUbiquitousItem(at: candidate)
+                }
+            }
         }
     }
 
@@ -1721,10 +1885,21 @@ final class NotesModel: ObservableObject {
         do {
             // POSIX ctime/inode/size/mtime together detect ordinary writes and atomic
             // replacement without rereading the whole Markdown file on every autosave.
-            guard let actualStamp = WorkspaceFiles.fileStamp(selected),
-                  actualStamp == savedFileStamp else {
+            guard let actualStamp = WorkspaceFiles.fileStamp(selected) else {
                 message = AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
                 return
+            }
+            if actualStamp != savedFileStamp {
+                // File Provider hydration/metadata updates may change ctime without
+                // changing Markdown. Verify the single authoritative file content
+                // before classifying the stamp drift as an external edit.
+                guard let diskContent = try? String(contentsOf: selected, encoding: .utf8),
+                      WorkspaceFiles.editorText(diskContent) == baseline else {
+                    message = AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
+                    return
+                }
+                savedFileStamp = actualStamp
+                cacheNote(selected, content: baseline, stamp: actualStamp)
             }
             try draft.write(to: selected, atomically: true, encoding: .utf8)
             baseline = draft

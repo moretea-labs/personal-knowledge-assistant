@@ -646,7 +646,13 @@ struct NotesWindow: View {
                     }
                 }
 
-                if model.autoSavePending && model.selected != nil {
+                if model.loadingNote, let requested = model.requestedNote {
+                    ProgressView()
+                        .controlSize(.small)
+                        .help("\(language.text("Opening note…")) \(requested.deletingPathExtension().lastPathComponent)")
+                        .accessibilityLabel(language.text("Opening note…"))
+                        .accessibilityIdentifier("pks-note-open-progress")
+                } else if model.autoSavePending && model.selected != nil {
                     ProgressView()
                         .controlSize(.small)
                         .help(language.text("Saving Markdown automatically…"))
@@ -822,7 +828,12 @@ struct NotesWindow: View {
             showingBacklinks = false
             outgoingLinks = []
             if let note, let root = model.root {
-                expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: note, in: root))
+                let ancestors = NoteTreePresentation.ancestorPaths(for: note, in: root)
+                expandedFolderPaths.formUnion(ancestors)
+                model.prioritizeExpandedPath(
+                    ancestors,
+                    toward: note.deletingLastPathComponent()
+                )
                 treeCursorPath = note.path
             }
             if note == pendingBacklinkNote,
@@ -938,7 +949,12 @@ struct NotesWindow: View {
         guard let file = currentWorkspaceFile, let root = model.root else { return }
         columnVisibility = .all
         sidebarTab = .notes
-        expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: file, in: root))
+        let ancestors = NoteTreePresentation.ancestorPaths(for: file, in: root)
+        expandedFolderPaths.formUnion(ancestors)
+        model.prioritizeExpandedPath(
+            ancestors,
+            toward: file.deletingLastPathComponent()
+        )
         treeCursorPath = file.path
         treeFocused = true
         Task { @MainActor in
@@ -1001,6 +1017,9 @@ struct NotesWindow: View {
         quickOpenIndex = quickOpenMatches.isEmpty
             ? 0
             : min(quickOpenIndex, quickOpenMatches.count - 1)
+        if quickOpenMatches.indices.contains(quickOpenIndex) {
+            model.prefetchFile(quickOpenMatches[quickOpenIndex].url)
+        }
     }
 
     private func requestGlobalQuickOpenIndexIfNeeded() {
@@ -1417,10 +1436,16 @@ struct NotesWindow: View {
                     }
                     .onKeyPress(.downArrow) {
                         quickOpenIndex = min(quickOpenIndex + 1, max(0, matches.count - 1))
+                        if matches.indices.contains(quickOpenIndex) {
+                            model.prefetchFile(matches[quickOpenIndex].url)
+                        }
                         return .handled
                     }
                     .onKeyPress(.upArrow) {
                         quickOpenIndex = max(0, quickOpenIndex - 1)
+                        if matches.indices.contains(quickOpenIndex) {
+                            model.prefetchFile(matches[quickOpenIndex].url)
+                        }
                         return .handled
                     }
                     .accessibilityIdentifier("pks-quick-open-input")
@@ -1510,6 +1535,9 @@ struct NotesWindow: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .onHover { hovering in
+                                if hovering { model.prefetchFile(item.url) }
+                            }
                             .accessibilityIdentifier("pks-quick-open-\(item.id)")
                         }
                     }
@@ -1709,12 +1737,20 @@ struct NotesWindow: View {
                                                   height: NotesGeometry.treeRowHeight)
                             }
 
-                            Image(systemName: row.item.isFolder ? "folder.fill" : row.item.iconName)
-                                .font(.system(size: NotesGeometry.symbolSize, weight: .regular))
-                                .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                                .frame(width: NotesGeometry.treeIconWidth,
-                                       height: NotesGeometry.treeRowHeight)
+                            if model.loadingNote && model.requestedNote?.standardizedFileURL == row.item.url.standardizedFileURL {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                    .frame(width: NotesGeometry.treeIconWidth,
+                                           height: NotesGeometry.treeRowHeight)
+                                    .accessibilityLabel(language.text("Opening note…"))
+                            } else {
+                                Image(systemName: row.item.isFolder ? "folder.fill" : row.item.iconName)
+                                    .font(.system(size: NotesGeometry.symbolSize, weight: .regular))
+                                    .symbolRenderingMode(.hierarchical)
+                                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                                    .frame(width: NotesGeometry.treeIconWidth,
+                                           height: NotesGeometry.treeRowHeight)
+                            }
 
                             if row.item.isFolder {
                                 Text(row.item.name)
@@ -1793,6 +1829,9 @@ struct NotesWindow: View {
                                 Divider()
                             }
                             fileActions(row.item.url)
+                        }
+                        .onHover { hovering in
+                            if hovering && (row.item.isMarkdown || row.item.isPDF) { model.prefetchFile(row.item.url) }
                         }
                         .help(row.item.url.path)
                         .id(row.id)
@@ -2112,6 +2151,10 @@ struct NotesWindow: View {
                                                                expandedPaths: expandedFolderPaths) {
                         treeCursorPath = next.path
                         expandedFolderPaths = next.expanded
+                        if let item = rows.first(where: { $0.id == next.path })?.item,
+                           item.isMarkdown || item.isPDF {
+                            model.prefetchFile(item.url)
+                        }
                     }
                 }
                 .onKeyPress(keys: [.delete]) { key in
@@ -2349,6 +2392,9 @@ struct NotesWindow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .onHover { hovering in
+                    if hovering { model.prefetchFile(note) }
+                }
                 .contextMenu { fileActions(note) }
                 .accessibilityIdentifier("pks-saved-note-\(note.lastPathComponent)")
             }

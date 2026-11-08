@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import PDFKit
 import SwiftUI
 import XCTest
 @testable import PKSNotes
@@ -124,6 +125,144 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(model.draft, "# Local pending")
         XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "# External revision")
         XCTAssertTrue(model.message?.contains(AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")) == true)
+    }
+
+    @MainActor
+    func testPDFReaderAttachDoesNotReconfigureUnchangedNativeView() {
+        let controller = PDFReaderController()
+        let view = PDFView()
+        let document = PDFDocument()
+        let url = URL(fileURLWithPath: "/tmp/pks-idempotent-preview.pdf")
+
+        controller.attach(
+            view: view,
+            document: document,
+            url: url,
+            requestedPage: nil,
+            requestedAnchor: nil
+        )
+        XCTAssertEqual(view.displayMode, .singlePageContinuous)
+        XCTAssertTrue(view.displaysPageBreaks)
+
+        // Model a later SwiftUI update after PDFKit/user interaction has changed native
+        // view presentation. An unchanged attach must read/sync state, not write it again.
+        view.displayMode = .singlePage
+        view.displaysPageBreaks = false
+        controller.attach(
+            view: view,
+            document: document,
+            url: url,
+            requestedPage: nil,
+            requestedAnchor: nil
+        )
+
+        XCTAssertEqual(view.displayMode, .singlePage)
+        XCTAssertFalse(view.displaysPageBreaks)
+        controller.detach(view: view)
+    }
+
+    @MainActor
+    func testEditorLineEndingNormalizationDoesNotCreateFalseDirtyState() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let previous { defaults.set(previous, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+
+        let first = folder.appendingPathComponent("windows-line-endings.md")
+        let second = folder.appendingPathComponent("second.md")
+        let original = "# First\r\n\r\nBody\r\n"
+        try Data(original.utf8).write(to: first)
+        try "# Second".write(to: second, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(folder))
+        model.openNote(first)
+        await waitForNote(model, first)
+
+        XCTAssertEqual(model.draft, "# First\n\nBody\n")
+        XCTAssertEqual(model.baseline, model.draft)
+        XCTAssertFalse(model.isDirty)
+        XCTAssertTrue(model.confirmLeavingNote(decision: .cancel))
+
+        model.openNote(second, navigationDecision: .cancel)
+        await waitForNote(model, second)
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), original)
+    }
+
+    @MainActor
+    func testMetadataOnlyStampChangeDoesNotBlockSafeSave() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let previous { defaults.set(previous, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+
+        let note = folder.appendingPathComponent("metadata.md")
+        try "# Original".write(to: note, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(folder))
+        model.openNote(note)
+        await waitForNote(model, note)
+
+        let loadedStamp = WorkspaceFiles.fileStamp(note)
+        try fm.setAttributes([.posixPermissions: NSNumber(value: 0o600)], ofItemAtPath: note.path)
+        let metadataStamp = WorkspaceFiles.fileStamp(note)
+        XCTAssertNotEqual(loadedStamp, metadataStamp)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "# Original")
+
+        model.draft = "# Safe local edit"
+        model.save()
+
+        XCTAssertFalse(model.isDirty)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "# Safe local edit")
+        XCTAssertFalse(model.message?.contains(
+            AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
+        ) == true)
+    }
+
+    @MainActor
+    func testIntentHydrationNeverOverridesNewerMarkdownContent() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let previous { defaults.set(previous, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        let note = folder.appendingPathComponent("prefetch.md")
+        try "# Before prefetch".write(to: note, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(folder))
+        model.prefetchFile(note)
+
+        // Race the warmup with a real external replacement. Regardless of which
+        // read wins, the fresh file stamp at open time must keep the file authoritative.
+        try "# Newer file content".write(to: note, atomically: true, encoding: .utf8)
+        model.openNote(note)
+        await waitForNote(model, note)
+
+        XCTAssertEqual(model.draft, "# Newer file content")
+        XCTAssertEqual(model.baseline, "# Newer file content")
+        XCTAssertFalse(model.isDirty)
     }
 
     func testTypographyThemesChangeLayoutNotOnlyBackgrounds() {
@@ -566,6 +705,88 @@ final class PKSNotesTests: XCTestCase {
 
         let loaded = flatten(model.files)
         XCTAssertTrue(expectedNotes.allSatisfy(loaded.contains))
+    }
+
+    @MainActor
+    func testCurrentFilePathPriorityWalksAncestorsBeforeUnrelatedExpandedFolders() {
+        let root = URL(fileURLWithPath: "/tmp/PKS-Vault", isDirectory: true)
+        let level1 = root.appendingPathComponent("Course", isDirectory: true)
+        let level2 = level1.appendingPathComponent("Term", isDirectory: true)
+        let leaf = level2.appendingPathComponent("Week", isDirectory: true)
+        let unrelated = root.appendingPathComponent("Archive", isDirectory: true)
+
+        var pending: Set<String> = [
+            unrelated.path,
+            leaf.path,
+            level2.path,
+            level1.path
+        ]
+
+        XCTAssertEqual(
+            NotesModel.preferredPendingFolder(in: pending, toward: leaf.path),
+            level1.path
+        )
+        pending.remove(level1.path)
+        XCTAssertEqual(
+            NotesModel.preferredPendingFolder(in: pending, toward: leaf.path),
+            level2.path
+        )
+        pending.remove(level2.path)
+        XCTAssertEqual(
+            NotesModel.preferredPendingFolder(in: pending, toward: leaf.path),
+            leaf.path
+        )
+        pending.remove(leaf.path)
+        XCTAssertNil(NotesModel.preferredPendingFolder(in: pending, toward: leaf.path))
+    }
+
+    @MainActor
+    func testLargeWorkspaceInitialRefreshStaysShallow() async throws {
+        let defaults = UserDefaults.standard
+        let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        let priorBookmark = defaults.data(forKey: "PKSNotesWorkspaceBookmark")
+        defaults.removeObject(forKey: "PKSNotesWorkspace")
+        defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark")
+        defer {
+            if let priorWorkspace { defaults.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let priorBookmark { defaults.set(priorBookmark, forKey: "PKSNotesWorkspaceBookmark") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let folderCount = 1_000
+        for index in 0..<folderCount {
+            let folder = root.appendingPathComponent(String(format: "Folder-%04d", index), isDirectory: true)
+            let nested = folder.appendingPathComponent("Nested", isDirectory: true)
+            try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+            try "# Deep".write(
+                to: nested.appendingPathComponent("Deep.md"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        let model = NotesModel()
+        let clock = ContinuousClock()
+        let started = clock.now
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<1_000 where model.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let elapsed = started.duration(to: clock.now)
+
+        XCTAssertFalse(model.loadingFiles)
+        XCTAssertEqual(model.files.count, folderCount)
+        XCTAssertTrue(model.files.allSatisfy { $0.isFolder && $0.children?.isEmpty == true })
+        XCTAssertFalse(model.globalFileIndexReady)
+        XCTAssertTrue(model.globalFiles.isEmpty)
+        XCTAssertLessThan(elapsed, .seconds(5), "Initial shallow refresh should not scale with nested file count.")
+        print("PKS_PERF large_workspace_shallow_root_1000=\(elapsed)")
     }
 
     @MainActor
@@ -1558,8 +1779,11 @@ final class PKSNotesTests: XCTestCase {
         model.openWorkspace(root)
         model.openNote(large)
         XCTAssertTrue(model.loadingNote)
+        XCTAssertEqual(model.requestedNote, large)
         model.openNote(latest)
+        XCTAssertEqual(model.requestedNote, latest)
         await waitForNote(model, latest)
+        XCTAssertNil(model.requestedNote)
         XCTAssertEqual(model.draft, "# Latest")
         try? await Task.sleep(nanoseconds: 130_000_000)
         XCTAssertEqual(model.selected, latest)
