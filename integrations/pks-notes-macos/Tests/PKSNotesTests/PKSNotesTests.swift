@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import PDFKit
 import SwiftUI
 import XCTest
 @testable import PKSNotes
@@ -124,6 +125,113 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(model.draft, "# Local pending")
         XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "# External revision")
         XCTAssertTrue(model.message?.contains(AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")) == true)
+    }
+
+    @MainActor
+    func testPDFReaderAttachDoesNotReconfigureUnchangedNativeView() {
+        let controller = PDFReaderController()
+        let view = PDFView()
+        let document = PDFDocument()
+        let url = URL(fileURLWithPath: "/tmp/pks-idempotent-preview.pdf")
+
+        controller.attach(
+            view: view,
+            document: document,
+            url: url,
+            requestedPage: nil,
+            requestedAnchor: nil
+        )
+        XCTAssertEqual(view.displayMode, .singlePageContinuous)
+        XCTAssertTrue(view.displaysPageBreaks)
+
+        // Model a later SwiftUI update after PDFKit/user interaction has changed native
+        // view presentation. An unchanged attach must read/sync state, not write it again.
+        view.displayMode = .singlePage
+        view.displaysPageBreaks = false
+        controller.attach(
+            view: view,
+            document: document,
+            url: url,
+            requestedPage: nil,
+            requestedAnchor: nil
+        )
+
+        XCTAssertEqual(view.displayMode, .singlePage)
+        XCTAssertFalse(view.displaysPageBreaks)
+        controller.detach(view: view)
+    }
+
+    @MainActor
+    func testEditorLineEndingNormalizationDoesNotCreateFalseDirtyState() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let previous { defaults.set(previous, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+
+        let first = folder.appendingPathComponent("windows-line-endings.md")
+        let second = folder.appendingPathComponent("second.md")
+        let original = "# First\r\n\r\nBody\r\n"
+        try Data(original.utf8).write(to: first)
+        try "# Second".write(to: second, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(folder))
+        model.openNote(first)
+        await waitForNote(model, first)
+
+        XCTAssertEqual(model.draft, "# First\n\nBody\n")
+        XCTAssertEqual(model.baseline, model.draft)
+        XCTAssertFalse(model.isDirty)
+        XCTAssertTrue(model.confirmLeavingNote(decision: .cancel))
+
+        model.openNote(second, navigationDecision: .cancel)
+        await waitForNote(model, second)
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), original)
+    }
+
+    @MainActor
+    func testMetadataOnlyStampChangeDoesNotBlockSafeSave() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let previous { defaults.set(previous, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+
+        let note = folder.appendingPathComponent("metadata.md")
+        try "# Original".write(to: note, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(folder))
+        model.openNote(note)
+        await waitForNote(model, note)
+
+        let loadedStamp = WorkspaceFiles.fileStamp(note)
+        try fm.setAttributes([.posixPermissions: NSNumber(value: 0o600)], ofItemAtPath: note.path)
+        let metadataStamp = WorkspaceFiles.fileStamp(note)
+        XCTAssertNotEqual(loadedStamp, metadataStamp)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "# Original")
+
+        model.draft = "# Safe local edit"
+        model.save()
+
+        XCTAssertFalse(model.isDirty)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "# Safe local edit")
+        XCTAssertFalse(model.message?.contains(
+            AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
+        ) == true)
     }
 
     @MainActor

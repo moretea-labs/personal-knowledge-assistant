@@ -90,6 +90,15 @@ enum WorkspaceFiles {
         )
     }
 
+    /// NSTextView canonicalizes CRLF/CR into LF. Normalize once at the file/editor
+    /// boundary so merely mounting the native editor never creates a false dirty draft.
+    static func editorText(_ content: String) -> String {
+        guard content.utf8.contains(13) else { return content }
+        return content
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+    }
+
     static func defaultVault() -> URL {
         let root = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/学习笔记管理", isDirectory: true)
@@ -1644,10 +1653,11 @@ final class NotesModel: ObservableObject {
             previewPDF = nil
             previewPDFPage = nil
         }
-        baseline = content
-        draft = content
+        let editorContent = WorkspaceFiles.editorText(content)
+        baseline = editorContent
+        draft = editorContent
         savedFileStamp = stamp
-        cacheNote(url, content: content, stamp: stamp)
+        cacheNote(url, content: editorContent, stamp: stamp)
         externalBody = nil
         externalTitle = nil
         previewSource = nil
@@ -1831,10 +1841,21 @@ final class NotesModel: ObservableObject {
         do {
             // POSIX ctime/inode/size/mtime together detect ordinary writes and atomic
             // replacement without rereading the whole Markdown file on every autosave.
-            guard let actualStamp = WorkspaceFiles.fileStamp(selected),
-                  actualStamp == savedFileStamp else {
+            guard let actualStamp = WorkspaceFiles.fileStamp(selected) else {
                 message = AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
                 return
+            }
+            if actualStamp != savedFileStamp {
+                // File Provider hydration/metadata updates may change ctime without
+                // changing Markdown. Verify the single authoritative file content
+                // before classifying the stamp drift as an external edit.
+                guard let diskContent = try? String(contentsOf: selected, encoding: .utf8),
+                      WorkspaceFiles.editorText(diskContent) == baseline else {
+                    message = AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
+                    return
+                }
+                savedFileStamp = actualStamp
+                cacheNote(selected, content: baseline, stamp: actualStamp)
             }
             try draft.write(to: selected, atomically: true, encoding: .utf8)
             baseline = draft
