@@ -865,7 +865,7 @@ final class NotesModel: ObservableObject {
     private(set) var draftRevision: UInt64 = 0
     private(set) var bodyRevision: UInt64 = 0
 
-    private struct CachedNote {
+    private struct CachedNote: Sendable {
         let content: String
         let stamp: WorkspaceFileStamp
     }
@@ -879,6 +879,8 @@ final class NotesModel: ObservableObject {
     private var pendingMatch: SearchHit?
     private var noteCache: [String: CachedNote] = [:]
     private var noteCacheOrder: [String] = []
+    private var notePrefetchTask: Task<CachedNote?, Never>?
+    private var notePrefetchPath: String?
     private var securityScopedFolder: URL?
     private var backlinkTask: Task<Void, Never>?
     private var backlinkParseCache = WorkspaceBacklinkParseCache()
@@ -1020,6 +1022,9 @@ final class NotesModel: ObservableObject {
 
         previewTask?.cancel()
         cancelNoteLoad()
+        notePrefetchTask?.cancel()
+        notePrefetchTask = nil
+        notePrefetchPath = nil
         backlinkTask?.cancel()
         // A detached scan may still finish after cancellation. Swapping the
         // cache object isolates any late writes to the old workspace instance.
@@ -1511,6 +1516,48 @@ final class NotesModel: ObservableObject {
         loadingNote = false
     }
 
+    /// Warm exactly one strongly signalled Markdown target (for example a hovered
+    /// sidebar row). The file remains authoritative: loadNote validates a fresh
+    /// POSIX stamp before it may consume this transient snapshot.
+    func prefetchNote(_ url: URL) {
+        let candidate = url.standardizedFileURL
+        guard let root,
+              selected?.standardizedFileURL != candidate,
+              ["md", "markdown"].contains(candidate.pathExtension.lowercased()) else { return }
+
+        let canonicalRoot = root.standardizedFileURL
+        let key = candidate.path
+        // Keep hover handling filesystem-free on the main actor. Full symlink-safe
+        // containment and stamp validation happen inside the bounded utility task.
+        guard key.hasPrefix(canonicalRoot.path + "/") else { return }
+        if notePrefetchPath == key { return }
+        let cached = noteCache[key]
+
+        notePrefetchTask?.cancel()
+        notePrefetchPath = key
+        notePrefetchTask = Task.detached(priority: .utility) {
+            let isICloud = candidate.path.contains("/Mobile Documents/")
+            if isICloud {
+                // Pointer transit across a long tree must not hydrate every cloud file.
+                // A short dwell is enough to express intent, while an immediate click
+                // keeps using the normal user-initiated read path below.
+                do { try await Task.sleep(for: .milliseconds(120)) }
+                catch { return nil }
+            }
+            guard !Task.isCancelled,
+                  WorkspaceFiles.contains(candidate, in: canonicalRoot) else { return nil }
+            if isICloud {
+                try? FileManager.default.startDownloadingUbiquitousItem(at: candidate)
+                return nil
+            }
+            guard let stamp = WorkspaceFiles.fileStamp(candidate) else { return nil }
+            if let cached, cached.stamp == stamp { return cached }
+            guard let content = try? String(contentsOf: candidate, encoding: .utf8),
+                  !Task.isCancelled else { return nil }
+            return CachedNote(content: content, stamp: stamp)
+        }
+    }
+
     private func loadNote(_ url: URL, preservePDFPreview: Bool = false) {
         cancelNoteLoad()
         previewTask?.cancel()
@@ -1519,6 +1566,21 @@ final class NotesModel: ObservableObject {
         loadIdentity = identity
         loadingNote = true
         message = nil
+
+        // Reuse the single intent-driven prefetch when it targets this exact note.
+        // Any unrelated warmup is cancelled so background iCloud hydration never
+        // competes with the document the user actually chose.
+        let prefetched: Task<CachedNote?, Never>?
+        if notePrefetchPath == url.path, !url.path.contains("/Mobile Documents/") {
+            prefetched = notePrefetchTask
+        } else {
+            // Cloud warmup only requests hydration; never make a user click wait for
+            // its debounce/metadata work. The actual open remains user-initiated.
+            notePrefetchTask?.cancel()
+            prefetched = nil
+        }
+        notePrefetchTask = nil
+        notePrefetchPath = nil
 
         // iCloud File Provider can block while hydrating files. Never read Markdown
         // on the main actor; only publish a successful, current request. A small
@@ -1533,6 +1595,10 @@ final class NotesModel: ObservableObject {
                 let content: String
                 if let cached, cached.stamp == stamp {
                     content = cached.content
+                } else if let prefetched,
+                          let warmed = await prefetched.value,
+                          warmed.stamp == stamp {
+                    content = warmed.content
                 } else {
                     content = try String(contentsOf: url, encoding: .utf8)
                 }

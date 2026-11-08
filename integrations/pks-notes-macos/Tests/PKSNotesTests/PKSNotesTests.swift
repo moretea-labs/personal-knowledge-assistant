@@ -126,6 +126,37 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(model.message?.contains(AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")) == true)
     }
 
+    @MainActor
+    func testIntentPrefetchNeverOverridesNewerMarkdownContent() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let previous { defaults.set(previous, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        let note = folder.appendingPathComponent("prefetch.md")
+        try "# Before prefetch".write(to: note, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(folder))
+        model.prefetchNote(note)
+
+        // Race the warmup with a real external replacement. Regardless of which
+        // read wins, the fresh file stamp at open time must keep the file authoritative.
+        try "# Newer file content".write(to: note, atomically: true, encoding: .utf8)
+        model.openNote(note)
+        await waitForNote(model, note)
+
+        XCTAssertEqual(model.draft, "# Newer file content")
+        XCTAssertEqual(model.baseline, "# Newer file content")
+        XCTAssertFalse(model.isDirty)
+    }
+
     func testTypographyThemesChangeLayoutNotOnlyBackgrounds() {
         let profiles = NotesTheme.allCases.map(\.typography)
         XCTAssertEqual(profiles.count, 5)

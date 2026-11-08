@@ -1407,6 +1407,9 @@ struct NotesWindow: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .onHover { hovering in
+                                if hovering { model.prefetchNote(item.url) }
+                            }
                             .accessibilityIdentifier("pks-quick-open-\(item.id)")
                         }
                     }
@@ -1690,6 +1693,9 @@ struct NotesWindow: View {
                                 Divider()
                             }
                             fileActions(row.item.url)
+                        }
+                        .onHover { hovering in
+                            if hovering && row.item.isMarkdown { model.prefetchNote(row.item.url) }
                         }
                         .help(row.item.url.path)
                         .id(row.id)
@@ -2246,6 +2252,9 @@ struct NotesWindow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .onHover { hovering in
+                    if hovering { model.prefetchNote(note) }
+                }
                 .contextMenu { fileActions(note) }
                 .accessibilityIdentifier("pks-saved-note-\(note.lastPathComponent)")
             }
