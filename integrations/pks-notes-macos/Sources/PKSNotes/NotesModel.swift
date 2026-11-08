@@ -96,25 +96,29 @@ enum WorkspaceFiles {
         return root
     }
 
-    /// File Provider placeholders cannot be synchronously decoded like ordinary files:
-    /// Foundation may fail immediately with EDEADLK while the item is dataless. Keep
-    /// hydration and content IO off the main actor, then capture the final POSIX stamp
-    /// after hydration so save/conflict detection does not mistake a cloud download for
+    /// One File Provider hydration path for every reader. Dataless placeholders can
+    /// fail immediately with EDEADLK when consumers try to parse them directly.
+    static func hydrateUbiquitousItemIfNeeded(_ url: URL) async throws {
+        guard FileManager.default.isUbiquitousItem(at: url) else { return }
+        let keys: Set<URLResourceKey> = [.ubiquitousItemDownloadingStatusKey]
+        var status = try? url.resourceValues(forKeys: keys).ubiquitousItemDownloadingStatus
+        guard status != .current else { return }
+
+        try FileManager.default.startDownloadingUbiquitousItem(at: url)
+        for _ in 0..<200 {
+            try Task.checkCancellation()
+            status = try? url.resourceValues(forKeys: keys).ubiquitousItemDownloadingStatus
+            if status == .current { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw CocoaError(.fileReadUnknown)
+    }
+
+    /// Keep hydration and content IO off the main actor, then capture the final POSIX
+    /// stamp after hydration so save/conflict detection does not mistake a download for
     /// an external edit. A second read is allowed only when the file changed mid-read.
     static func readUTF8ForOpening(_ url: URL) async throws -> (content: String, stamp: WorkspaceFileStamp) {
-        if FileManager.default.isUbiquitousItem(at: url) {
-            let keys: Set<URLResourceKey> = [.ubiquitousItemDownloadingStatusKey]
-            var status = try? url.resourceValues(forKeys: keys).ubiquitousItemDownloadingStatus
-            if status != .current {
-                try FileManager.default.startDownloadingUbiquitousItem(at: url)
-                for _ in 0..<200 {
-                    try Task.checkCancellation()
-                    status = try? url.resourceValues(forKeys: keys).ubiquitousItemDownloadingStatus
-                    if status == .current { break }
-                    try await Task.sleep(for: .milliseconds(50))
-                }
-            }
-        }
+        try await hydrateUbiquitousItemIfNeeded(url)
 
         for _ in 0..<2 {
             try Task.checkCancellation()

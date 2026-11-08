@@ -5,7 +5,13 @@ import SwiftUI
 enum PDFDocumentLoading {
     static func load(_ url: URL) async -> PDFDocument? {
         let loader = Task.detached(priority: .userInitiated) {
-            PDFDocument(url: url)
+            do {
+                try await WorkspaceFiles.hydrateUbiquitousItemIfNeeded(url)
+                try Task.checkCancellation()
+                return PDFDocument(url: url)
+            } catch {
+                return nil
+            }
         }
         let loaded = await loader.value
         guard !Task.isCancelled else {
