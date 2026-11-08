@@ -460,7 +460,7 @@ struct NotesWindow: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil && !showingMindMap {
+                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
                     HStack(spacing: 2) {
                         ForEach(ReadingMode.allCases, id: \.self) { choice in
                             Button {
@@ -646,7 +646,13 @@ struct NotesWindow: View {
                     }
                 }
 
-                if model.autoSavePending && model.selected != nil {
+                if model.loadingNote, let requested = model.requestedNote {
+                    ProgressView()
+                        .controlSize(.small)
+                        .help("\(language.text("Opening note…")) \(requested.deletingPathExtension().lastPathComponent)")
+                        .accessibilityLabel(language.text("Opening note…"))
+                        .accessibilityIdentifier("pks-note-open-progress")
+                } else if model.autoSavePending && model.selected != nil {
                     ProgressView()
                         .controlSize(.small)
                         .help(language.text("Saving Markdown automatically…"))
@@ -1011,6 +1017,9 @@ struct NotesWindow: View {
         quickOpenIndex = quickOpenMatches.isEmpty
             ? 0
             : min(quickOpenIndex, quickOpenMatches.count - 1)
+        if quickOpenMatches.indices.contains(quickOpenIndex) {
+            model.prefetchFile(quickOpenMatches[quickOpenIndex].url)
+        }
     }
 
     private func requestGlobalQuickOpenIndexIfNeeded() {
@@ -1427,10 +1436,16 @@ struct NotesWindow: View {
                     }
                     .onKeyPress(.downArrow) {
                         quickOpenIndex = min(quickOpenIndex + 1, max(0, matches.count - 1))
+                        if matches.indices.contains(quickOpenIndex) {
+                            model.prefetchFile(matches[quickOpenIndex].url)
+                        }
                         return .handled
                     }
                     .onKeyPress(.upArrow) {
                         quickOpenIndex = max(0, quickOpenIndex - 1)
+                        if matches.indices.contains(quickOpenIndex) {
+                            model.prefetchFile(matches[quickOpenIndex].url)
+                        }
                         return .handled
                     }
                     .accessibilityIdentifier("pks-quick-open-input")
@@ -1522,7 +1537,10 @@ struct NotesWindow: View {
                                 }
                                 .buttonStyle(.plain)
                                 .onHover { hovering in
-                                    if hovering { quickOpenIndex = i }
+                                    if hovering {
+                                        quickOpenIndex = i
+                                        model.prefetchFile(item.url)
+                                    }
                                 }
                                 .id(i)
                                 .accessibilityIdentifier("pks-quick-open-\(item.id)")
@@ -1704,7 +1722,6 @@ struct NotesWindow: View {
     private func fileTreeRow(_ row: NoteTreePresentation.Row) -> some View {
                         let isSelected = model.selected == row.item.url || model.previewPDF == row.item.url
                         return HStack(spacing: 0) {
-                            // Both folders and documents reserve the same disclosure column.
                             if row.item.isFolder {
                                 Button {
                                     treeCursorPath = row.id
@@ -1726,19 +1743,14 @@ struct NotesWindow: View {
                                     language.text(expandedFolderPaths.contains(row.item.id) ? "Collapse" : "Expand")
                                     + " " + row.item.name
                                 )
-                            } else {
-                                Color.clear.frame(width: NotesGeometry.disclosureWidth,
-                                                  height: NotesGeometry.treeRowHeight)
-                            }
 
-                            Image(systemName: row.item.isFolder ? "folder.fill" : row.item.iconName)
-                                .font(.system(size: NotesGeometry.symbolSize, weight: .regular))
-                                .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                                .frame(width: NotesGeometry.treeIconWidth,
-                                       height: NotesGeometry.treeRowHeight)
+                                Image(systemName: "folder.fill")
+                                    .font(.system(size: NotesGeometry.symbolSize, weight: .regular))
+                                    .symbolRenderingMode(.hierarchical)
+                                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                                    .frame(width: NotesGeometry.treeIconWidth,
+                                           height: NotesGeometry.treeRowHeight)
 
-                            if row.item.isFolder {
                                 Text(row.item.name)
                                     .font(.system(size: 12.5, weight: .medium))
                                     .foregroundStyle(.primary)
@@ -1773,22 +1785,44 @@ struct NotesWindow: View {
                                     })
                                     .help(language.text("Double-click to expand or collapse"))
                             } else {
-                                Text(row.item.name)
-                                    .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
-                                    .foregroundStyle(.primary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .lineLimit(1)
-                                    .frame(height: NotesGeometry.treeRowHeight)
-                                    .padding(.leading, NotesGeometry.treeTextGap)
+                                // One native action owns the entire document row, including
+                                // the icon and disclosure gap; no competing Text tap gesture.
+                                Button {
+                                    model.openFile(row.item.url)
+                                    treeCursorPath = row.id
+                                    treeFocused = true
+                                } label: {
+                                    HStack(spacing: 0) {
+                                        Color.clear.frame(width: NotesGeometry.disclosureWidth,
+                                                          height: NotesGeometry.treeRowHeight)
+                                        if model.loadingNote &&
+                                            model.requestedNote?.standardizedFileURL == row.item.url.standardizedFileURL {
+                                            ProgressView()
+                                                .controlSize(.mini)
+                                                .frame(width: NotesGeometry.treeIconWidth,
+                                                       height: NotesGeometry.treeRowHeight)
+                                                .accessibilityLabel(language.text("Opening note…"))
+                                        } else {
+                                            Image(systemName: row.item.iconName)
+                                                .font(.system(size: NotesGeometry.symbolSize, weight: .regular))
+                                                .symbolRenderingMode(.hierarchical)
+                                                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                                                .frame(width: NotesGeometry.treeIconWidth,
+                                                       height: NotesGeometry.treeRowHeight)
+                                        }
+                                        Text(row.item.name)
+                                            .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
+                                            .foregroundStyle(.primary)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .lineLimit(1)
+                                            .frame(height: NotesGeometry.treeRowHeight)
+                                            .padding(.leading, NotesGeometry.treeTextGap)
+                                    }
                                     .contentShape(Rectangle())
-                                    .draggable(row.item.url)
-                                    .simultaneousGesture(TapGesture(count: 1).onEnded {
-                                        treeCursorPath = row.id
-                                        treeFocused = true
-                                        model.openFile(row.item.url)
-                                    })
-                                    .accessibilityAddTraits(.isButton)
-                                    .accessibilityIdentifier("pks-note-\(row.item.name)")
+                                }
+                                .buttonStyle(.plain)
+                                .draggable(row.item.url)
+                                .accessibilityIdentifier("pks-note-\(row.item.name)")
                             }
                         }
                         .padding(.leading, CGFloat(row.depth) * NotesGeometry.treeIndent)
@@ -1815,6 +1849,9 @@ struct NotesWindow: View {
                                 Divider()
                             }
                             fileActions(row.item.url)
+                        }
+                        .onHover { hovering in
+                            if hovering && (row.item.isMarkdown || row.item.isPDF) { model.prefetchFile(row.item.url) }
                         }
                         .help(row.item.url.path)
                         .id(row.id)
@@ -2134,11 +2171,14 @@ struct NotesWindow: View {
                                                                expandedPaths: expandedFolderPaths) {
                         treeCursorPath = next.path
                         expandedFolderPaths = next.expanded
-                        // Keep the keyboard cursor visible: reuse the reveal-scroll
-                        // mechanism after a yield so newly expanded rows exist first.
+                        // Keep the keyboard cursor visible after a folder expands.
                         Task { @MainActor in
                             await Task.yield()
                             treeRevealRequest = next.path
+                        }
+                        if let item = rows.first(where: { $0.id == next.path })?.item,
+                           item.isMarkdown || item.isPDF {
+                            model.prefetchFile(item.url)
                         }
                     }
                 }
@@ -2377,6 +2417,9 @@ struct NotesWindow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .onHover { hovering in
+                    if hovering { model.prefetchFile(note) }
+                }
                 .contextMenu { fileActions(note) }
                 .accessibilityIdentifier("pks-saved-note-\(note.lastPathComponent)")
             }

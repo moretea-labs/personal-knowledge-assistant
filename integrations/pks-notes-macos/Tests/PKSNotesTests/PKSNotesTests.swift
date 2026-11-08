@@ -237,6 +237,37 @@ final class PKSNotesTests: XCTestCase {
         ) == true)
     }
 
+    @MainActor
+    func testIntentHydrationNeverOverridesNewerMarkdownContent() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let previous { defaults.set(previous, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        let note = folder.appendingPathComponent("prefetch.md")
+        try "# Before prefetch".write(to: note, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(folder))
+        model.prefetchFile(note)
+
+        // Race the warmup with a real external replacement. Regardless of which
+        // read wins, the fresh file stamp at open time must keep the file authoritative.
+        try "# Newer file content".write(to: note, atomically: true, encoding: .utf8)
+        model.openNote(note)
+        await waitForNote(model, note)
+
+        XCTAssertEqual(model.draft, "# Newer file content")
+        XCTAssertEqual(model.baseline, "# Newer file content")
+        XCTAssertFalse(model.isDirty)
+    }
+
     func testTypographyThemesChangeLayoutNotOnlyBackgrounds() {
         let profiles = NotesTheme.allCases.map(\.typography)
         XCTAssertEqual(profiles.count, 5)
@@ -1751,8 +1782,11 @@ final class PKSNotesTests: XCTestCase {
         model.openWorkspace(root)
         model.openNote(large)
         XCTAssertTrue(model.loadingNote)
+        XCTAssertEqual(model.requestedNote, large)
         model.openNote(latest)
+        XCTAssertEqual(model.requestedNote, latest)
         await waitForNote(model, latest)
+        XCTAssertNil(model.requestedNote)
         XCTAssertEqual(model.draft, "# Latest")
         try? await Task.sleep(nanoseconds: 130_000_000)
         XCTAssertEqual(model.selected, latest)
@@ -1769,6 +1803,52 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(model.draft, "# Preserve unsaved source")
         XCTAssertEqual(try String(contentsOf: latest, encoding: .utf8), "# Latest")
         XCTAssertTrue(model.message?.contains(AppLanguage.current.text("Cannot open the note")) == true)
+    }
+
+    @MainActor
+    func testFirstOpenFromExpandedNestedDirectoryLoadsOnFirstActivation() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let previous { defaults.set(previous, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = root.appendingPathComponent("Course", isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = folder.appendingPathComponent("Lesson.md")
+        try "# First activation".write(to: note, atomically: true, encoding: .utf8)
+
+        func containsURL(_ target: URL, in items: [NoteItem]) -> Bool {
+            items.contains { item in
+                item.url.standardizedFileURL == target.standardizedFileURL
+                    || containsURL(target, in: item.children ?? [])
+            }
+        }
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<200 {
+            if !model.loadingFiles { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        model.loadExpandedFolder(folder)
+        for _ in 0..<200 {
+            if containsURL(note, in: model.files) { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(containsURL(note, in: model.files))
+
+        // One openFile call must be enough after the lazy folder scan publishes the row.
+        model.openFile(note)
+        await waitForNote(model, note)
+        XCTAssertEqual(model.selected, note)
+        XCTAssertEqual(model.draft, "# First activation")
     }
 
     @MainActor
