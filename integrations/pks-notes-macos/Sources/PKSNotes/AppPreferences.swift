@@ -358,6 +358,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "The original file is not available locally.": "原始文件当前不在本地。",
         "Unable to copy source location.": "无法复制来源位置。",
         "Cannot open the note": "无法打开笔记",
+        "Last opened note is no longer available. Choose another note.": "上次打开的笔记已不存在，请选择另一篇笔记。",
+        "Could not reopen the last note. Select it again to retry.": "无法恢复上次的笔记，请重新选择以重试。",
         "Save failed": "保存失败",
         "Cannot create note": "无法创建笔记",
         "PKS search failed": "PKS 搜索失败",

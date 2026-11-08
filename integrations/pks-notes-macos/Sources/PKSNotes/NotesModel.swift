@@ -1110,11 +1110,15 @@ final class NotesModel: ObservableObject {
     private func restoreLastOpenedNote(in root: URL) {
         guard let path = UserDefaults.standard.string(forKey: "PKSNotesLastOpenedMarkdown") else { return }
         let url = URL(fileURLWithPath: path).standardizedFileURL
-        guard WorkspaceFiles.contains(url, in: root),
-              ["md", "markdown"].contains(url.pathExtension.lowercased()) else { return }
+        guard WorkspaceFiles.contains(url, in: root) else { return }
+        guard ["md", "markdown"].contains(url.pathExtension.lowercased()) else { return }
         var info = Darwin.stat()
         guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0,
-              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else { return }
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+            UserDefaults.standard.removeObject(forKey: "PKSNotesLastOpenedMarkdown")
+            message = AppLanguage.current.text("Last opened note is no longer available. Choose another note.")
+            return
+        }
         openNote(url, reportFailure: false)
     }
 
@@ -1943,6 +1947,10 @@ final class NotesModel: ObservableObject {
         cancelNoteLoad()
         if reportFailure {
             message = "\(AppLanguage.current.text("Cannot open the note")): \(reason)"
+        } else {
+            // Automatic restore must not silently leave a blank workspace.
+            // Preserve the path so transient iCloud failures remain retryable.
+            message = AppLanguage.current.text("Could not reopen the last note. Select it again to retry.")
         }
     }
 

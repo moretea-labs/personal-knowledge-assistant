@@ -988,7 +988,7 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
-    func testAutomaticRestoreFailureIsSilentButExplicitOpenStillReportsError() async throws {
+    func testAutomaticRestoreFailureReportsRetryAndExplicitOpenStillReportsError() async throws {
         let defaults = UserDefaults.standard
         let previousWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
         let previousNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
@@ -1013,7 +1013,9 @@ final class PKSNotesTests: XCTestCase {
         }
         XCTAssertNil(model.selected)
         XCTAssertFalse(model.loadingNote)
-        XCTAssertNil(model.message)
+        XCTAssertEqual(model.message,
+                       AppLanguage.current.text("Could not reopen the last note. Select it again to retry."))
+        XCTAssertEqual(defaults.string(forKey: "PKSNotesLastOpenedMarkdown"), invalid.path)
 
         model.openNote(invalid)
         for _ in 0..<100 where model.loadingNote {
@@ -2982,6 +2984,48 @@ extension PKSNotesTests {
         XCTAssertFalse(model.loadingNote)
         XCTAssertEqual(model.draft, expected)
         XCTAssertNil(model.message)
+    }
+
+
+    @MainActor
+    func testAutomaticRestoreReportsMissingAndUnreadableNotesWithoutDiscardingFiles() async throws {
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        let previousLast = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let previousWorkspace { defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousLast { defaults.set(previousLast, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+
+        let missing = folder.appendingPathComponent("Missing.md")
+        defaults.set(missing.path, forKey: "PKSNotesLastOpenedMarkdown")
+        let missingModel = NotesModel()
+        XCTAssertTrue(missingModel.openWorkspace(folder))
+        XCTAssertNil(missingModel.selected)
+        XCTAssertEqual(missingModel.message,
+                       AppLanguage.current.text("Last opened note is no longer available. Choose another note."))
+        XCTAssertNil(defaults.string(forKey: "PKSNotesLastOpenedMarkdown"))
+
+        let invalid = folder.appendingPathComponent("InvalidUTF8.md")
+        try Data([0xFF, 0xFE, 0xFF]).write(to: invalid)
+        defaults.set(invalid.path, forKey: "PKSNotesLastOpenedMarkdown")
+        let invalidModel = NotesModel()
+        XCTAssertTrue(invalidModel.openWorkspace(folder))
+        for _ in 0..<150 {
+            if !invalidModel.loadingNote && invalidModel.requestedNote == nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNil(invalidModel.selected)
+        XCTAssertEqual(invalidModel.message,
+                       AppLanguage.current.text("Could not reopen the last note. Select it again to retry."))
+        XCTAssertEqual(defaults.string(forKey: "PKSNotesLastOpenedMarkdown"), invalid.path)
+        XCTAssertEqual(try Data(contentsOf: invalid), Data([0xFF, 0xFE, 0xFF]))
     }
 
 }
