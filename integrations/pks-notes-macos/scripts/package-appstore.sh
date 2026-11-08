@@ -81,6 +81,11 @@ cp "$info" "$app/Contents/Info.plist"
 cp "$profile" "$app/Contents/embedded.provisionprofile"
 chmod 755 "$app/Contents/MacOS/PKSNotes"
 
+# Downloaded profiles and copied resources can carry Finder/browser provenance.
+# App Store packages must not contain quarantine metadata, so normalize the
+# assembled bundle before signing rather than mutating the source profile.
+/usr/bin/xattr -cr "$app"
+
 codesign --force --timestamp --sign "$PKS_NOTES_APP_SIGN_IDENTITY" \
   --entitlements "$effective_entitlements" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
@@ -111,6 +116,11 @@ do
     exit 9
   fi
 done
+
+if /usr/bin/xattr -r "$app" 2>/dev/null | /usr/bin/grep -q 'com.apple.quarantine'; then
+  echo "Packaged app still contains com.apple.quarantine metadata." >&2
+  exit 10
+fi
 
 productbuild --sign "$PKS_NOTES_INSTALLER_SIGN_IDENTITY" --component "$app" /Applications "$pkg"
 /usr/sbin/pkgutil --check-signature "$pkg"
