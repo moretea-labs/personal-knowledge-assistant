@@ -62,9 +62,96 @@ enum MindMapKeyboard {
     }
 }
 
+/// Visual-only preference: node hierarchy/links still come from Markdown.
+enum MindMapVisualStyle: String, CaseIterable, Identifiable {
+    case classic, colorful, minimal
+    static let defaultsKey = "PKSNotesMindMapStyle"
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .classic: "Classic"
+        case .colorful: "Colorful"
+        case .minimal: "Minimal"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .classic: "square.on.square"
+        case .colorful: "paintpalette"
+        case .minimal: "line.diagonal"
+        }
+    }
+    /// Stable branch accents follow the original Markdown order, even when
+    /// a subtree is collapsed; there is no second stored hierarchy.
+    static func branchIndices(_ nodes: [MindMapNode]) -> [Int: Int] {
+        var result: [Int: Int] = [:]
+        var currentBranch = 0
+        for node in nodes {
+            if node.depth == 0 { currentBranch = 0 }
+            else if node.depth == 1 { currentBranch += 1 }
+            result[node.id] = currentBranch
+        }
+        return result
+    }
+
+    var usesBranchColors: Bool { self == .colorful }
+    var angularConnectors: Bool { self == .minimal }
+    var connectorWidth: CGFloat { self == .colorful ? 2.2 : (self == .minimal ? 1.2 : 1.5) }
+    var cardRadius: CGFloat { self == .minimal ? 6 : (self == .colorful ? 15 : 11) }
+
+    // Reuse the palette across nodes and connectors; large maps must not
+    // allocate six SwiftUI Color values on every node render.
+    private static let branchPalette: [Color] = [
+        Color(red: 0.25, green: 0.49, blue: 0.91),
+        Color(red: 0.12, green: 0.65, blue: 0.54),
+        Color(red: 0.64, green: 0.41, blue: 0.87),
+        Color(red: 0.89, green: 0.53, blue: 0.22),
+        Color(red: 0.88, green: 0.39, blue: 0.57),
+        Color(red: 0.26, green: 0.64, blue: 0.80)
+    ]
+
+    func branchColor(_ index: Int) -> Color {
+        guard usesBranchColors else { return .accentColor }
+        return Self.branchPalette[index % Self.branchPalette.count]
+    }
+
+    func fill(depth: Int, branch: Int, scheme: ColorScheme) -> Color {
+        switch self {
+        case .classic:
+            return depth == 0 ? .accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor)
+        case .colorful:
+            return branchColor(branch).opacity(depth == 0
+                ? (scheme == .dark ? 0.28 : 0.19)
+                : (scheme == .dark ? 0.23 : 0.13))
+        case .minimal:
+            return depth == 0
+                ? Color.primary.opacity(scheme == .dark ? 0.11 : 0.065)
+                : (scheme == .dark ? Color(red: 0.14, green: 0.14, blue: 0.15) : .white)
+        }
+    }
+
+    func outline(depth: Int, branch: Int) -> Color {
+        switch self {
+        case .classic: Color.primary.opacity(0.09)
+        case .colorful: branchColor(branch).opacity(depth == 0 ? 0.68 : 0.44)
+        case .minimal: Color.primary.opacity(depth == 0 ? 0.25 : 0.16)
+        }
+    }
+
+    var fontDesign: Font.Design {
+        switch self {
+        case .classic: .default
+        case .colorful: .rounded
+        case .minimal: .serif
+        }
+    }
+}
+
 /// An editable Markdown-backed mind-map canvas. Markdown remains the only document authority.
 struct MindMapCanvas: View {
     @Environment(\.notesLanguage) private var language
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(MindMapVisualStyle.defaultsKey) private var mapStyleID = MindMapVisualStyle.classic.rawValue
     @Binding var source: String
     @Binding var selectedID: Int?
     let revision: UInt64
@@ -93,6 +180,10 @@ struct MindMapCanvas: View {
     @State private var canDeleteLeaf = false
     @FocusState private var canvasFocused: Bool
     @FocusState private var titleEditorFocused: Bool
+
+    private var mapStyle: MindMapVisualStyle {
+        MindMapVisualStyle(rawValue: mapStyleID) ?? .classic
+    }
 
     private struct ActionAvailabilityKey: Hashable {
         let revision: UInt64
@@ -143,7 +234,17 @@ struct MindMapCanvas: View {
                             )
                     }
                 }
-                .background(Color.primary.opacity(0.012))
+                .background {
+                    if mapStyle == .colorful {
+                        LinearGradient(
+                            colors: [Color.accentColor.opacity(0.055), Color.primary.opacity(0.012)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    } else {
+                        Color.primary.opacity(mapStyle == .minimal ? 0.005 : 0.012)
+                    }
+                }
                 .accessibilityIdentifier("pks-mind-map-canvas")
                 .simultaneousGesture(
                     MagnifyGesture()
@@ -364,6 +465,29 @@ struct MindMapCanvas: View {
             .accessibilityLabel(language.text("Node Actions"))
             .accessibilityIdentifier("pks-mind-map-node-actions")
 
+            Menu {
+                ForEach(MindMapVisualStyle.allCases) { style in
+                    Button {
+                        mapStyleID = style.rawValue
+                        requestCanvasFocus()
+                    } label: {
+                        Label(language.text(style.label), systemImage: style.symbol)
+                        if mapStyle == style {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                    .accessibilityIdentifier("pks-mind-map-style-\(style.rawValue)")
+                }
+                Divider()
+                Text(language.text("Appearance applies to all mind maps."))
+            } label: {
+                Image(systemName: "paintpalette")
+                    .frame(width: 30, height: 30)
+            }
+            .help(language.text("Mind Map Style"))
+            .accessibilityLabel(language.text("Mind Map Style"))
+            .accessibilityIdentifier("pks-mind-map-style")
+
             Divider().frame(height: 18)
 
             Button {
@@ -552,18 +676,21 @@ struct MindMapCanvas: View {
         let byID = Dictionary(uniqueKeysWithValues: layout.placements.map { ($0.id, $0) })
         // Build once per rendered map. Never reparse the full Markdown for each card.
         let allNodes = nodes
+        let branchByID = MindMapVisualStyle.branchIndices(allNodes)
         let parentIDs = Set(allNodes.indices.dropLast().compactMap { index -> Int? in
             allNodes[index + 1].depth > allNodes[index].depth ? allNodes[index].id : nil
         })
         ZStack(alignment: .topLeading) {
             ForEach(layout.placements) { placement in
                 if let parentID = placement.parentID, let parent = byID[parentID] {
-                    connector(from: parent, to: placement)
+                    connector(from: parent, to: placement,
+                              branch: branchByID[placement.id] ?? 0)
                 }
             }
 
             ForEach(layout.placements) { placement in
-                nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id), exporting: exporting)
+                nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id),
+                         branch: branchByID[placement.id] ?? 0, exporting: exporting)
                     .frame(width: placement.size.width, height: placement.size.height)
                     .position(placement.center)
                     .id(placement.id)
@@ -572,7 +699,8 @@ struct MindMapCanvas: View {
         .frame(width: layout.size.width, height: layout.size.height, alignment: .topLeading)
     }
 
-    private func connector(from parent: MindMapPlacement, to child: MindMapPlacement) -> some View {
+    private func connector(from parent: MindMapPlacement, to child: MindMapPlacement,
+                           branch: Int) -> some View {
         Path { path in
             let start = CGPoint(
                 x: parent.center.x + parent.size.width / 2,
@@ -582,22 +710,46 @@ struct MindMapCanvas: View {
                 x: child.center.x - child.size.width / 2,
                 y: child.center.y
             )
-            let bend = max(34, (end.x - start.x) * 0.48)
             path.move(to: start)
-            path.addCurve(
-                to: end,
-                control1: CGPoint(x: start.x + bend, y: start.y),
-                control2: CGPoint(x: end.x - bend, y: end.y)
-            )
+            if mapStyle.angularConnectors {
+                let middleX = (start.x + end.x) / 2
+                path.addLine(to: CGPoint(x: middleX, y: start.y))
+                path.addLine(to: CGPoint(x: middleX, y: end.y))
+                path.addLine(to: end)
+            } else {
+                let bend = max(34, (end.x - start.x) * 0.48)
+                path.addCurve(
+                    to: end,
+                    control1: CGPoint(x: start.x + bend, y: start.y),
+                    control2: CGPoint(x: end.x - bend, y: end.y)
+                )
+            }
         }
-        .stroke(Color.secondary.opacity(0.30), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+        .stroke(
+            mapStyle == .colorful
+                ? mapStyle.branchColor(branch).opacity(0.67)
+                : Color.secondary.opacity(mapStyle == .minimal ? 0.43 : 0.30),
+            style: StrokeStyle(lineWidth: mapStyle.connectorWidth, lineCap: .round,
+                               lineJoin: .round)
+        )
         .allowsHitTesting(false)
     }
 
     @ViewBuilder
-    private func nodeCard(_ node: MindMapNode, hasChildren: Bool, exporting: Bool = false) -> some View {
+    private func nodeCard(_ node: MindMapNode, hasChildren: Bool,
+                          branch: Int, exporting: Bool = false) -> some View {
         let presentation = MindMapOutline.presentation(for: node.title)
+        let accent = mapStyle.branchColor(branch)
+        let scheme: ColorScheme = exporting ? .light : colorScheme
+        let highlighted = !exporting && selectedID == node.id
+        let cardRadius = node.depth == 0 && mapStyle != .minimal ? 15 : mapStyle.cardRadius
         HStack(spacing: 9) {
+            if mapStyle.usesBranchColors && node.depth > 0 {
+                Capsule()
+                    .fill(accent)
+                    .frame(width: 4, height: 24)
+                    .accessibilityHidden(true)
+            }
             if hasChildren {
                 if exporting {
                     Image(systemName: "chevron.down")
@@ -624,7 +776,8 @@ struct MindMapCanvas: View {
             if !exporting && editingNodeID == node.id {
                 TextField(language.text("Node title"), text: $renameTitle)
                     .textFieldStyle(.plain)
-                    .font(.system(size: node.depth == 0 ? 16 : 14, weight: .medium))
+                    .font(.system(size: node.depth == 0 ? 16 : 14,
+                                  weight: .medium, design: mapStyle.fontDesign))
                     .focused($titleEditorFocused)
                     .onSubmit { finishRename(save: true) }
                     .onExitCommand { finishRename(save: false) }
@@ -661,7 +814,8 @@ struct MindMapCanvas: View {
             } else {
                 Text(presentation.title)
                     .font(.system(size: node.depth == 0 ? 16 : 14,
-                                  weight: node.depth == 0 ? .semibold : .medium))
+                                  weight: node.depth == 0 ? .semibold : .medium,
+                                  design: mapStyle.fontDesign))
                     .lineLimit(2)
                     .accessibilityIdentifier("pks-mind-map-node-\(node.id)")
                     .accessibilityValue(!exporting && selectedID == node.id
@@ -710,26 +864,28 @@ struct MindMapCanvas: View {
         }
         .padding(.horizontal, 13)
         .background(
-            !exporting && selectedID == node.id
-                ? Color.accentColor.opacity(0.16)
-                : (node.depth == 0 ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor)),
-            in: RoundedRectangle(cornerRadius: node.depth == 0 ? 14 : 11)
+            highlighted ? accent.opacity(scheme == .dark ? 0.30 : 0.19)
+                        : mapStyle.fill(depth: node.depth, branch: branch, scheme: scheme),
+            in: RoundedRectangle(cornerRadius: cardRadius)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: node.depth == 0 ? 14 : 11)
+            RoundedRectangle(cornerRadius: cardRadius)
                 .strokeBorder(
                     !exporting && dropTargetID == node.id
-                        ? Color.accentColor
-                        : (!exporting && selectedID == node.id ? Color.accentColor.opacity(0.60) : Color.primary.opacity(0.08)),
+                        ? accent
+                        : (highlighted ? accent.opacity(0.85)
+                                       : mapStyle.outline(depth: node.depth, branch: branch)),
                     style: StrokeStyle(
-                        lineWidth: !exporting && dropTargetID == node.id ? 2 : 1,
+                        lineWidth: !exporting && dropTargetID == node.id ? 2.2
+                                   : (highlighted ? 1.8 : (mapStyle == .minimal ? 1.0 : 1.1)),
                         dash: !exporting && dropTargetID == node.id ? [5, 3] : []
                     )
                 )
                 .allowsHitTesting(false)
         }
-        .shadow(color: .black.opacity(node.depth == 0 ? 0.08 : 0.04), radius: 8, y: 3)
-        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(mapStyle == .minimal ? 0 : (node.depth == 0 ? 0.08 : 0.045)),
+                radius: mapStyle == .minimal ? 0 : 8, y: mapStyle == .minimal ? 0 : 3)
+        .contentShape(RoundedRectangle(cornerRadius: cardRadius))
         .draggable(String(node.id))
         .dropDestination(for: String.self) { items, _ in
             guard let raw = items.first,
