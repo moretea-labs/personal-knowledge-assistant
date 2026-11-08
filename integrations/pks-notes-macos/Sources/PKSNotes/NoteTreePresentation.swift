@@ -141,16 +141,34 @@ enum NoteTreePresentation {
         }
 
         // Only uncommon substring/path queries pay the complete-index scan.
-        for entry in entries where !entry.foldedName.hasPrefix(search)
-            && entry.foldedName.contains(search) {
-            result.append(entry.item)
-            if result.count == limit { return result }
+        // Gather both lower-priority ranks in one pass so a path fallback does
+        // not traverse a large vault a second time.
+        let remaining = limit - result.count
+        var nameSubstringMatches: [NoteItem] = []
+        var folderMatches: [NoteItem] = []
+        nameSubstringMatches.reserveCapacity(remaining)
+        folderMatches.reserveCapacity(remaining)
+
+        for entry in entries {
+            if entry.foldedName.hasPrefix(search) { continue }
+
+            if entry.foldedName.contains(search) {
+                nameSubstringMatches.append(entry.item)
+                if nameSubstringMatches.count == remaining {
+                    result.append(contentsOf: nameSubstringMatches)
+                    return result
+                }
+            } else if entry.foldedFolder.contains(search), folderMatches.count < remaining {
+                folderMatches.append(entry.item)
+            }
         }
 
-        for entry in entries where !entry.foldedName.contains(search)
-            && entry.foldedFolder.contains(search) {
-            result.append(entry.item)
-            if result.count == limit { return result }
+        result.append(contentsOf: nameSubstringMatches)
+        if result.count == limit { return result }
+
+        for item in folderMatches {
+            result.append(item)
+            if result.count == limit { break }
         }
         return result
     }

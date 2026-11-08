@@ -842,6 +842,11 @@ final class PKSNotesTests: XCTestCase {
             "Prefix matches should satisfy the bounded result before substring/path fallback."
         )
         XCTAssertEqual(
+            NoteTreePresentation.quickOpen(entries, query: "alpha").map(\.name),
+            ["Álpha", "Alpha Notes", "My Alpha", "Other"],
+            "Name substring matches must stay ahead of folder-path matches."
+        )
+        XCTAssertEqual(
             NoteTreePresentation.quickOpen(entries, query: "my alpha").first?.name,
             "My Alpha",
             "Name substring fallback must remain available."
