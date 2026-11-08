@@ -127,6 +127,24 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(model.message?.contains(AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")) == true)
     }
 
+    func testPDFDocumentLoadingCompletesForLocalPDF() async throws {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+
+        let url = folder.appendingPathComponent("Local.pdf")
+        await MainActor.run {
+            let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
+            view.string = "Local PDF loading regression"
+            try? view.dataWithPDF(inside: view.bounds).write(to: url)
+        }
+
+        let document = await PDFDocumentLoading.load(url)
+        XCTAssertNotNil(document)
+        XCTAssertEqual(document?.pageCount, 1)
+    }
+
     @MainActor
     func testPDFReaderAttachDoesNotReconfigureUnchangedNativeView() {
         let controller = PDFReaderController()

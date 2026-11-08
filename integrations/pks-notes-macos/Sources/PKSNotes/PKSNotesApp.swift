@@ -1,4 +1,5 @@
 import AppKit
+import PDFKit
 import SwiftUI
 import MarkdownUI
 
@@ -375,6 +376,9 @@ struct NotesWindow: View {
     @State private var quickOpenFallbackRescanRequested = false
     @State private var pdfCaptureRequest: PDFCaptureRequest?
     @State private var pdfCaptureCommentary = ""
+    @State private var loadedPDFDocument: PDFDocument?
+    @State private var loadedPDFURL: URL?
+    @StateObject private var pdfReaderController = PDFReaderController()
     @State private var mindMapLinkNodeID: Int?
     @State private var mindMapLinkSectionMode = false
     @State private var mindMapSectionTarget: URL?
@@ -723,6 +727,24 @@ struct NotesWindow: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.paste)) { _ in
             handlePaste()
+        }
+        .task(id: model.previewPDF?.standardizedFileURL.path ?? "") {
+            guard let requestedURL = model.previewPDF?.standardizedFileURL else {
+                loadedPDFDocument = nil
+                loadedPDFURL = nil
+                return
+            }
+            if loadedPDFURL?.standardizedFileURL == requestedURL {
+                return
+            }
+
+            loadedPDFDocument = nil
+            loadedPDFURL = nil
+            let loaded = await PDFDocumentLoading.load(requestedURL)
+            guard !Task.isCancelled,
+                  model.previewPDF?.standardizedFileURL == requestedURL else { return }
+            loadedPDFDocument = loaded
+            loadedPDFURL = requestedURL
         }
         .task(id: OutlineWarmupKey(
             identity: model.selected?.path ?? "",
@@ -2632,6 +2654,10 @@ struct NotesWindow: View {
         NativePDFPreview(
             url: url,
             root: model.root,
+            document: loadedPDFURL?.standardizedFileURL == url.standardizedFileURL
+                ? loadedPDFDocument : nil,
+            attemptedURL: loadedPDFURL,
+            controller: pdfReaderController,
             requestedPage: model.previewPDFPage,
             requestedAnchor: model.previewPDFAnchor,
             onAddPageToNote: { page, selectedText, anchor in

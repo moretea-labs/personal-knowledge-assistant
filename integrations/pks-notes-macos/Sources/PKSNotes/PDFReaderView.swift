@@ -651,16 +651,16 @@ struct NativePDFPreview: View {
     @Environment(\.notesLanguage) private var language
     let url: URL
     let root: URL?
+    let document: PDFDocument?
+    let attemptedURL: URL?
+    @ObservedObject var controller: PDFReaderController
     let requestedPage: Int?
     let requestedAnchor: PDFSourceAnchor?
     let onAddPageToNote: (Int, String?, PDFSourceAnchor?) -> Void
 
-    @State private var document: PDFDocument?
-    @State private var attemptedURL: URL?
     @State private var pageText = "1"
     @State private var searchText = ""
     @State private var copiedPage: Int?
-    @StateObject private var controller = PDFReaderController()
 
     var body: some View {
         Group {
@@ -708,14 +708,8 @@ struct NativePDFPreview: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task(id: url) {
-            document = nil
-            attemptedURL = nil
-            let requestedURL = url
-            let loaded = await PDFDocumentLoading.load(requestedURL)
-            guard !Task.isCancelled else { return }
-            document = loaded
-            attemptedURL = requestedURL
+        .onAppear {
+            pageText = String(controller.currentPageIndex + 1)
         }
         .onChange(of: controller.currentPageIndex) { _, page in
             pageText = String(page + 1)
