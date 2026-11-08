@@ -112,6 +112,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Read": "阅读",
         "Return to Markdown": "返回 Markdown",
         "Mind Map": "思维导图",
+        "QA preview — purchases disabled": "开发测试预览 · 已禁用购买",
         "Mark task complete": "标记任务完成",
         "Mark task incomplete": "标记任务未完成",
         "Toggle task completion": "切换任务完成状态",

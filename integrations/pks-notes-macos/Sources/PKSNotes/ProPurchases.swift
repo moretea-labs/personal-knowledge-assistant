@@ -4,7 +4,20 @@ import SwiftUI
 enum ProAccess {
     static let productID = "com.moretea.pks.notes.pro"
     enum Feature { case mindMap, relationships }
-    static func allows(_ feature: Feature, unlocked: Bool) -> Bool { unlocked }
+    static var isLocalQA: Bool {
+        #if DEBUG
+        // Separate QA identity AND explicit argument. The entire path is
+        // absent from Release. Never simulate a verified StoreKit purchase.
+        Bundle.main.bundleIdentifier == "com.moretea.pks.notes.qa"
+            && ProcessInfo.processInfo.arguments.contains("--pks-qa-pro")
+        #else
+        false
+        #endif
+    }
+
+    static func allows(_ feature: Feature, unlocked: Bool) -> Bool {
+        unlocked || isLocalQA
+    }
 }
 
 @MainActor
@@ -16,7 +29,7 @@ final class ProPurchases: ObservableObject {
     private var updates: Task<Void, Never>?
 
     func start() async {
-        guard updates == nil else { return }
+        guard !ProAccess.isLocalQA, updates == nil else { return }
         updates = Task { [weak self] in
             for await result in Transaction.updates {
                 guard let self, !Task.isCancelled else { return }
@@ -33,6 +46,7 @@ final class ProPurchases: ObservableObject {
     }
 
     func loadProduct() async {
+        guard !ProAccess.isLocalQA else { return }
         do {
             product = try await Product.products(for: [ProAccess.productID]).first {
                 $0.id == ProAccess.productID && $0.type == .nonConsumable
@@ -57,7 +71,7 @@ final class ProPurchases: ObservableObject {
     }
 
     func purchase() async {
-        guard !busy else { return }
+        guard !ProAccess.isLocalQA, !busy else { return }
         busy = true
         defer { busy = false }
         message = nil
@@ -84,7 +98,7 @@ final class ProPurchases: ObservableObject {
     }
 
     func restore() async {
-        guard !busy else { return }
+        guard !ProAccess.isLocalQA, !busy else { return }
         busy = true
         defer { busy = false }
         message = nil
@@ -112,7 +126,11 @@ struct ProSettingsView: View {
             Divider()
             Label(language.text("Editable mind maps and MindNode interchange"), systemImage: "checkmark.circle")
             Label(language.text("Backlinks and related knowledge"), systemImage: "checkmark.circle")
-            if purchases.unlocked {
+            if ProAccess.isLocalQA {
+                Label(language.text("QA preview — purchases disabled"),
+                      systemImage: "hammer.circle")
+                    .foregroundStyle(.secondary).font(.headline)
+            } else if purchases.unlocked {
                 Label(language.text("Pro unlocked"), systemImage: "checkmark.seal.fill")
                     .foregroundStyle(.green).font(.headline)
             } else {
@@ -131,13 +149,15 @@ struct ProSettingsView: View {
                 .disabled(purchases.busy || purchases.product == nil)
                 .accessibilityIdentifier("pks-purchase-pro")
             }
-            if purchases.product == nil && !purchases.unlocked {
+            if !ProAccess.isLocalQA && purchases.product == nil && !purchases.unlocked {
                 Button(language.text("Retry Loading Pro")) { Task { await purchases.loadProduct() } }
                     .disabled(purchases.busy)
             }
-            Button(language.text("Restore Purchases")) { Task { await purchases.restore() } }
-                .disabled(purchases.busy)
-                .accessibilityIdentifier("pks-restore-purchases")
+            if !ProAccess.isLocalQA {
+                Button(language.text("Restore Purchases")) { Task { await purchases.restore() } }
+                    .disabled(purchases.busy)
+                    .accessibilityIdentifier("pks-restore-purchases")
+            }
             if let message = purchases.message {
                 Text(language.text(message)).font(.callout).foregroundStyle(.secondary)
             }
