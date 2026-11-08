@@ -822,7 +822,12 @@ struct NotesWindow: View {
             showingBacklinks = false
             outgoingLinks = []
             if let note, let root = model.root {
-                expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: note, in: root))
+                let ancestors = NoteTreePresentation.ancestorPaths(for: note, in: root)
+                expandedFolderPaths.formUnion(ancestors)
+                model.prioritizeExpandedPath(
+                    ancestors,
+                    toward: note.deletingLastPathComponent()
+                )
                 treeCursorPath = note.path
             }
             if note == pendingBacklinkNote,
@@ -938,7 +943,12 @@ struct NotesWindow: View {
         guard let file = currentWorkspaceFile, let root = model.root else { return }
         columnVisibility = .all
         sidebarTab = .notes
-        expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: file, in: root))
+        let ancestors = NoteTreePresentation.ancestorPaths(for: file, in: root)
+        expandedFolderPaths.formUnion(ancestors)
+        model.prioritizeExpandedPath(
+            ancestors,
+            toward: file.deletingLastPathComponent()
+        )
         treeCursorPath = file.path
         treeFocused = true
         Task { @MainActor in
