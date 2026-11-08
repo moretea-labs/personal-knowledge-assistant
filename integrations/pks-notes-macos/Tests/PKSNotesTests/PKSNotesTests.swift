@@ -60,6 +60,16 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(MarkdownSection.targetIndex(in: pieces.map(\.source),
                                                   headingPath: hit.headingPath,
                                                   snippet: hit.snippet, query: "Search"), 1)
+
+        let anchored = await Task.detached {
+            MarkdownPreviewParsing.prepare(
+                source,
+                match: nil,
+                anchorFragment: "%E7%AC%AC%E4%BA%8C%E8%8A%82"
+            )
+        }.value
+        XCTAssertEqual(anchored.count, 2)
+        XCTAssertEqual(anchored.map(\.source.heading), ["Overview", "第二节"])
     }
 
     @MainActor
@@ -653,6 +663,43 @@ final class PKSNotesTests: XCTestCase {
             WorkspaceFiles.resolveKnowledgeTarget(wikiTarget, from: source, in: root),
             target.standardizedFileURL
         )
+    }
+
+    @MainActor
+    func testMarkdownLinkHeadingFragmentProducesPreviewAnchorRequest() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let previous { defaults.set(previous, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let current = root.appendingPathComponent("Current.md")
+        let target = root.appendingPathComponent("Target.md")
+        try "# Current".write(to: current, atomically: true, encoding: .utf8)
+        try "# Intro\n\n## Details\nBody".write(to: target, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(current)
+        await waitForNote(model, current)
+
+        XCTAssertTrue(model.openInternalLink(URL(string: "Target.md#Details")!))
+        await waitForNote(model, target)
+        let first = try XCTUnwrap(model.markdownAnchorRequest)
+        XCTAssertEqual(first.note.standardizedFileURL, target.standardizedFileURL)
+        XCTAssertEqual(first.fragment, "Details")
+
+        XCTAssertTrue(model.openKnowledgeLink("#Intro"))
+        let second = try XCTUnwrap(model.markdownAnchorRequest)
+        XCTAssertEqual(second.note.standardizedFileURL, target.standardizedFileURL)
+        XCTAssertEqual(second.fragment, "Intro")
+        XCTAssertGreaterThan(second.sequence, first.sequence)
     }
 
     func testQuickOpenSearchIsDerivedRankedAndIncludesNestedFiles() {

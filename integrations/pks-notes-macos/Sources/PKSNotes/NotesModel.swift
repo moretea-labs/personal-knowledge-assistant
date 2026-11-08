@@ -294,6 +294,14 @@ enum WorkspaceFiles {
         return "/" + encoded
     }
 
+    static func knowledgeFragment(in rawTarget: String) -> String? {
+        guard let marker = rawTarget.firstIndex(of: "#") else { return nil }
+        let raw = String(rawTarget[rawTarget.index(after: marker)...])
+        let decoded = (raw.removingPercentEncoding ?? raw)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return decoded.isEmpty ? nil : decoded
+    }
+
     /// Resolve a WikiLink/Markdown note target through one deterministic workspace path.
     /// Exact relative/root paths win; basename fallback is accepted only when unique.
     static func resolveKnowledgeTarget(
@@ -590,6 +598,12 @@ enum WorkspaceBacklinks {
     }
 }
 
+struct MarkdownAnchorRequest: Equatable {
+    let note: URL
+    let fragment: String
+    let sequence: UInt64
+}
+
 @MainActor
 final class NotesModel: ObservableObject {
     @Published private(set) var root: URL?
@@ -621,6 +635,7 @@ final class NotesModel: ObservableObject {
     @Published private(set) var activeMatch: SearchHit?
     @Published private(set) var matchJumpSequence = 0
     @Published private(set) var matchedQuery = ""
+    @Published private(set) var markdownAnchorRequest: MarkdownAnchorRequest?
     @Published var query = ""
     @Published private(set) var hits: [SearchHit] = []
     @Published private(set) var searching = false
@@ -671,6 +686,7 @@ final class NotesModel: ObservableObject {
     private var globalFileScanGeneration: UInt64 = 0
     private var globalFileIndexGeneration: UInt64 = 0
     private var knowledgeLinkTask: Task<Void, Never>?
+    private var markdownAnchorSequence: UInt64 = 0
     private var fileRefreshGeneration: UInt64 = 0
 
     var isDirty: Bool { selected != nil && draft != baseline }
@@ -813,6 +829,7 @@ final class NotesModel: ObservableObject {
         previewPDF = nil
         previewPDFPage = nil
         previewPDFAnchor = nil
+        markdownAnchorRequest = nil
         externalTitle = nil
         externalBody = nil
         previewSource = nil
@@ -1139,6 +1156,7 @@ final class NotesModel: ObservableObject {
         pdfPage: Int? = nil,
         pdfAnchor: PDFSourceAnchor? = nil
     ) {
+        markdownAnchorRequest = nil
         guard let root, WorkspaceFiles.contains(url, in: root) else {
             message = AppLanguage.current.text("File is outside the selected workspace."); return
         }
@@ -1635,6 +1653,26 @@ final class NotesModel: ObservableObject {
         }
     }
 
+    private func requestMarkdownAnchor(_ fragment: String, note: URL) {
+        let clean = fragment.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        markdownAnchorSequence &+= 1
+        markdownAnchorRequest = MarkdownAnchorRequest(
+            note: note.standardizedFileURL,
+            fragment: clean,
+            sequence: markdownAnchorSequence
+        )
+    }
+
+    private func requestMarkdownAnchorIfNavigationStarted(_ fragment: String?, note: URL) {
+        guard let fragment else { return }
+        let target = note.standardizedFileURL
+        guard selected?.standardizedFileURL == target
+                || requestedNote?.standardizedFileURL == target
+        else { return }
+        requestMarkdownAnchor(fragment, note: target)
+    }
+
     @discardableResult
     func openKnowledgeLink(_ target: String) -> Bool {
         let value = target.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1649,6 +1687,14 @@ final class NotesModel: ObservableObject {
         guard let root, let selected else {
             message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
             return false
+        }
+
+        if value.hasPrefix("#"),
+           ["md", "markdown"].contains(selected.pathExtension.lowercased()),
+           let fragment = WorkspaceFiles.knowledgeFragment(in: value) {
+            requestMarkdownAnchor(fragment, note: selected)
+            message = nil
+            return true
         }
 
         // Exact relative/root paths remain immediate. Basename fallback must only
@@ -1698,33 +1744,43 @@ final class NotesModel: ObservableObject {
 
     private func openResolvedKnowledgeLink(_ value: String, resolved: URL) {
         let linkURL = URL(string: value)
-        let anchor = resolved.pathExtension.lowercased() == "pdf"
-            ? linkURL.flatMap(PDFPageReference.anchor(from:))
-            : nil
-        let page = resolved.pathExtension.lowercased() == "pdf"
-            ? anchor?.page ?? linkURL.flatMap(PDFPageReference.page(from:))
-            : nil
+        let isPDF = resolved.pathExtension.lowercased() == "pdf"
+        let anchor = isPDF ? linkURL.flatMap(PDFPageReference.anchor(from:)) : nil
+        let page = isPDF ? anchor?.page ?? linkURL.flatMap(PDFPageReference.page(from:)) : nil
+        let fragment = isPDF ? nil : WorkspaceFiles.knowledgeFragment(in: value)
         openFile(resolved, pdfPage: page, pdfAnchor: anchor)
+        requestMarkdownAnchorIfNavigationStarted(fragment, note: resolved)
     }
 
     func openInternalLink(_ url: URL) -> Bool {
-        guard let root, let selected,
-              let resolved = WorkspaceFiles.resolve(url, from: selected, in: root) else { return false }
+        guard let root, let selected else { return false }
+        let fragment = url.fragment?.removingPercentEncoding ?? url.fragment
+        if url.path.isEmpty,
+           let fragment,
+           !fragment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           ["md", "markdown"].contains(selected.pathExtension.lowercased()) {
+            requestMarkdownAnchor(fragment, note: selected)
+            message = nil
+            return true
+        }
+
+        guard let resolved = WorkspaceFiles.resolve(url, from: selected, in: root) else { return false }
         if resolved.pathExtension.isEmpty {
             let markdown = resolved.appendingPathExtension("md")
             if FileManager.default.fileExists(atPath: markdown.path) {
                 openFile(markdown)
+                requestMarkdownAnchorIfNavigationStarted(fragment, note: markdown)
                 return true
             }
         }
         guard FileManager.default.fileExists(atPath: resolved.path) else { return false }
-        let anchor = resolved.pathExtension.lowercased() == "pdf"
-            ? PDFPageReference.anchor(from: url)
-            : nil
-        let page = resolved.pathExtension.lowercased() == "pdf"
-            ? anchor?.page ?? PDFPageReference.page(from: url)
-            : nil
+        let isPDF = resolved.pathExtension.lowercased() == "pdf"
+        let anchor = isPDF ? PDFPageReference.anchor(from: url) : nil
+        let page = isPDF ? anchor?.page ?? PDFPageReference.page(from: url) : nil
         openFile(resolved, pdfPage: page, pdfAnchor: anchor)
+        if !isPDF {
+            requestMarkdownAnchorIfNavigationStarted(fragment, note: resolved)
+        }
         return true
     }
 

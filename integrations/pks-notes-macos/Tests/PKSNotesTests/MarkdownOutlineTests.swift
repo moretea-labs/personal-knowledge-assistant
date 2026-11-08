@@ -37,4 +37,24 @@ final class MarkdownOutlineTests: XCTestCase {
         XCTAssertTrue(ns.substring(from: headings[0].utf16Offset).hasPrefix("# 标题"))
         XCTAssertTrue(ns.substring(from: headings[1].utf16Offset).hasPrefix("## Next"))
     }
+
+    func testHeadingFragmentMatchesExactAndSlugWithoutSeeingFencedHeadings() {
+        let source = "# Overview\n## Café & 数据\n\n~~~markdown\n## Hidden Heading\n~~~"
+        XCTAssertEqual(
+            MarkdownOutline.heading(matchingFragment: "Overview", in: source)?.title,
+            "Overview"
+        )
+        XCTAssertEqual(
+            MarkdownOutline.heading(matchingFragment: "cafe-数据", in: source)?.title,
+            "Café & 数据"
+        )
+        XCTAssertEqual(
+            MarkdownOutline.heading(
+                matchingFragment: "Caf%C3%A9%20%26%20%E6%95%B0%E6%8D%AE",
+                in: source
+            )?.title,
+            "Café & 数据"
+        )
+        XCTAssertNil(MarkdownOutline.heading(matchingFragment: "hidden-heading", in: source))
+    }
 }

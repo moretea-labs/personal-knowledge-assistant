@@ -67,4 +67,43 @@ enum MarkdownOutline {
         }
         return headings
     }
+
+    static func heading(matchingFragment fragment: String, in source: String) -> MarkdownOutlineHeading? {
+        let decoded = (fragment.removingPercentEncoding ?? fragment)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard !decoded.isEmpty else { return nil }
+
+        let headings = headings(in: source)
+        if let exact = headings.first(where: {
+            $0.title.localizedCaseInsensitiveCompare(decoded) == .orderedSame
+        }) {
+            return exact
+        }
+
+        let wanted = anchorKey(decoded)
+        guard !wanted.isEmpty else { return nil }
+        return headings.first { anchorKey($0.title) == wanted }
+    }
+
+    private static func anchorKey(_ value: String) -> String {
+        let folded = value.folding(
+            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+            locale: .current
+        )
+        var result = ""
+        var pendingSeparator = false
+
+        for scalar in folded.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                if pendingSeparator, !result.isEmpty { result.append("-") }
+                result.unicodeScalars.append(scalar)
+                pendingSeparator = false
+            } else if CharacterSet.whitespacesAndNewlines.contains(scalar)
+                        || scalar == "-" || scalar == "_" {
+                pendingSeparator = true
+            }
+        }
+        return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
 }

@@ -246,6 +246,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Link Note": "链接笔记",
         "Link selected node to note": "将所选节点链接到笔记",
         "Choose a Markdown note to link this node.": "选择一个 Markdown 笔记链接到此节点。",
+        "Heading not found in linked note.": "链接笔记中未找到对应标题。",
         "Choose a MindNode Template": "选择 MindNode 模板",
         "A real MindNode document is needed to preserve native package structure. Verified package versions 7 and 9 are supported; the template remains unchanged.": "需要选择真实的 MindNode 文件以保留原生包结构。已验证支持版本 7 和 9；模板不会被修改。",
         "Export Native MindNode": "导出原生 MindNode",
