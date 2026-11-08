@@ -13,12 +13,15 @@ enum PDFDocumentLoading {
                 return nil
             }
         }
-        let loaded = await loader.value
-        guard !Task.isCancelled else {
+        // Detached workers do not inherit cancellation. When SwiftUI replaces
+        // the active PDF task, propagate cancellation to an in-flight iCloud
+        // hydration rather than leaving it running after a rapid file switch.
+        let loaded = await withTaskCancellationHandler {
+            await loader.value
+        } onCancel: {
             loader.cancel()
-            return nil
         }
-        return loaded
+        return Task.isCancelled ? nil : loaded
     }
 }
 
@@ -331,9 +334,14 @@ final class PDFReaderController: ObservableObject {
             view.go(to: first)
         }
         syncFromView()
-        Task { @MainActor [weak self] in
+        Task { @MainActor [weak self, weak view, weak document] in
             await Task.yield()
-            self?.fitWidth()
+            // A prior document's deferred layout must not resize the newly
+            // opened PDF after the user switches A → B in the same window.
+            guard let self, let view, let document,
+                  self.pdfView === view, self.document === document,
+                  self.documentURL == url else { return }
+            self.fitWidth()
         }
     }
 
