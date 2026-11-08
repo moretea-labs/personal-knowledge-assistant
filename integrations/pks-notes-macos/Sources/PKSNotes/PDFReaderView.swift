@@ -711,6 +711,13 @@ struct NativePDFPreview: View {
         .onAppear {
             pageText = String(controller.currentPageIndex + 1)
         }
+        .onChange(of: url) { _, _ in
+            // Loading belongs to NotesWindow. Reset only this reader's
+            // transient controls when SwiftUI reuses it for another PDF.
+            searchText = ""
+            pageText = "1"
+            copiedPage = nil
+        }
         .onChange(of: controller.currentPageIndex) { _, page in
             pageText = String(page + 1)
             if copiedPage != page { copiedPage = nil }
