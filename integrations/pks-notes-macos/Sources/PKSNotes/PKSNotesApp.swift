@@ -898,6 +898,9 @@ struct NotesWindow: View {
         quickOpenIndex = quickOpenMatches.isEmpty
             ? 0
             : min(quickOpenIndex, quickOpenMatches.count - 1)
+        if quickOpenMatches.indices.contains(quickOpenIndex) {
+            model.prefetchNote(quickOpenMatches[quickOpenIndex].url)
+        }
     }
 
     private func requestGlobalQuickOpenIndexIfNeeded() {
@@ -1314,10 +1317,16 @@ struct NotesWindow: View {
                     }
                     .onKeyPress(.downArrow) {
                         quickOpenIndex = min(quickOpenIndex + 1, max(0, matches.count - 1))
+                        if matches.indices.contains(quickOpenIndex) {
+                            model.prefetchNote(matches[quickOpenIndex].url)
+                        }
                         return .handled
                     }
                     .onKeyPress(.upArrow) {
                         quickOpenIndex = max(0, quickOpenIndex - 1)
+                        if matches.indices.contains(quickOpenIndex) {
+                            model.prefetchNote(matches[quickOpenIndex].url)
+                        }
                         return .handled
                     }
                     .accessibilityIdentifier("pks-quick-open-input")
@@ -2015,6 +2024,10 @@ struct NotesWindow: View {
                                                                expandedPaths: expandedFolderPaths) {
                         treeCursorPath = next.path
                         expandedFolderPaths = next.expanded
+                        if let item = rows.first(where: { $0.id == next.path })?.item,
+                           item.isMarkdown {
+                            model.prefetchNote(item.url)
+                        }
                     }
                 }
                 .onKeyPress(keys: [.delete]) { key in
