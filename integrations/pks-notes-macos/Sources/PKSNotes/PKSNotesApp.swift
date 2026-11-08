@@ -905,7 +905,7 @@ struct NotesWindow: View {
             ? 0
             : min(quickOpenIndex, quickOpenMatches.count - 1)
         if quickOpenMatches.indices.contains(quickOpenIndex) {
-            model.prefetchNote(quickOpenMatches[quickOpenIndex].url)
+            model.prefetchFile(quickOpenMatches[quickOpenIndex].url)
         }
     }
 
@@ -1324,14 +1324,14 @@ struct NotesWindow: View {
                     .onKeyPress(.downArrow) {
                         quickOpenIndex = min(quickOpenIndex + 1, max(0, matches.count - 1))
                         if matches.indices.contains(quickOpenIndex) {
-                            model.prefetchNote(matches[quickOpenIndex].url)
+                            model.prefetchFile(matches[quickOpenIndex].url)
                         }
                         return .handled
                     }
                     .onKeyPress(.upArrow) {
                         quickOpenIndex = max(0, quickOpenIndex - 1)
                         if matches.indices.contains(quickOpenIndex) {
-                            model.prefetchNote(matches[quickOpenIndex].url)
+                            model.prefetchFile(matches[quickOpenIndex].url)
                         }
                         return .handled
                     }
@@ -1423,7 +1423,7 @@ struct NotesWindow: View {
                             }
                             .buttonStyle(.plain)
                             .onHover { hovering in
-                                if hovering { model.prefetchNote(item.url) }
+                                if hovering { model.prefetchFile(item.url) }
                             }
                             .accessibilityIdentifier("pks-quick-open-\(item.id)")
                         }
@@ -1718,7 +1718,7 @@ struct NotesWindow: View {
                             fileActions(row.item.url)
                         }
                         .onHover { hovering in
-                            if hovering && row.item.isMarkdown { model.prefetchNote(row.item.url) }
+                            if hovering && (row.item.isMarkdown || row.item.isPDF) { model.prefetchFile(row.item.url) }
                         }
                         .help(row.item.url.path)
                         .id(row.id)
@@ -2039,8 +2039,8 @@ struct NotesWindow: View {
                         treeCursorPath = next.path
                         expandedFolderPaths = next.expanded
                         if let item = rows.first(where: { $0.id == next.path })?.item,
-                           item.isMarkdown {
-                            model.prefetchNote(item.url)
+                           item.isMarkdown || item.isPDF {
+                            model.prefetchFile(item.url)
                         }
                     }
                 }
@@ -2280,7 +2280,7 @@ struct NotesWindow: View {
                 }
                 .buttonStyle(.plain)
                 .onHover { hovering in
-                    if hovering { model.prefetchNote(note) }
+                    if hovering { model.prefetchFile(note) }
                 }
                 .contextMenu { fileActions(note) }
                 .accessibilityIdentifier("pks-saved-note-\(note.lastPathComponent)")

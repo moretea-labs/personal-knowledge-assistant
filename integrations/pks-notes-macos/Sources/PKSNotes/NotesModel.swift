@@ -913,8 +913,8 @@ final class NotesModel: ObservableObject {
     private var pendingMatch: SearchHit?
     private var noteCache: [String: CachedNote] = [:]
     private var noteCacheOrder: [String] = []
-    private var notePrefetchTask: Task<Void, Never>?
-    private var notePrefetchPath: String?
+    private var filePrefetchTask: Task<Void, Never>?
+    private var filePrefetchPath: String?
     private var securityScopedFolder: URL?
     private var backlinkTask: Task<Void, Never>?
     private var backlinkParseCache = WorkspaceBacklinkParseCache()
@@ -1056,9 +1056,7 @@ final class NotesModel: ObservableObject {
 
         previewTask?.cancel()
         cancelNoteLoad()
-        notePrefetchTask?.cancel()
-        notePrefetchTask = nil
-        notePrefetchPath = nil
+        cancelFilePrefetch()
         backlinkTask?.cancel()
         // A detached scan may still finish after cancellation. Swapping the
         // cache object isolates any late writes to the old workspace instance.
@@ -1461,6 +1459,9 @@ final class NotesModel: ObservableObject {
             // Do not repeat the full symlink/lstat chain on the main actor.
             openValidatedNote(url, navigationDecision: navigationDecision, preservePDFPreview: false)
         } else if url.pathExtension.lowercased() == "pdf" {
+            // The actual reader becomes the sole waiter. Cancelling this task does not
+            // cancel a File Provider download already requested during hover warmup.
+            cancelFilePrefetch()
             if previewPDF == url {
                 if let pdfAnchor {
                     previewPDFAnchor = pdfAnchor
@@ -1550,37 +1551,40 @@ final class NotesModel: ObservableObject {
         loadingNote = false
     }
 
-    /// Warm exactly one strongly signalled Markdown target (for example a hovered
-    /// sidebar row). Measurements show local reads are already cheap; warmup therefore
-    /// does no content IO and exists only to start expensive File Provider hydration.
-    func prefetchNote(_ url: URL) {
+    /// Warm exactly one strongly signalled local target (for example a hovered row).
+    /// Measurements show local reads are already cheap; warmup does no content IO and
+    /// exists only to start expensive File Provider hydration for Markdown or PDF.
+    func prefetchFile(_ url: URL) {
         let candidate = url.standardizedFileURL
+        let ext = candidate.pathExtension.lowercased()
         guard let root,
               selected?.standardizedFileURL != candidate,
-              ["md", "markdown"].contains(candidate.pathExtension.lowercased()) else { return }
+              previewPDF?.standardizedFileURL != candidate,
+              ["md", "markdown", "pdf"].contains(ext) else { return }
 
         let canonicalRoot = root.standardizedFileURL
         let key = candidate.path
-        // Keep hover handling filesystem-free on the main actor. A short dwell also
-        // lets transient pointer/keyboard movement cancel before any metadata IO.
+        // Keep pointer/keyboard transit cheap. The dwell lets a newer target cancel
+        // before containment or File Provider metadata work begins.
         guard key.hasPrefix(canonicalRoot.path + "/") else { return }
-        if notePrefetchPath == key { return }
+        if filePrefetchPath == key { return }
 
-        notePrefetchTask?.cancel()
-        notePrefetchPath = key
-        notePrefetchTask = Task.detached(priority: .utility) {
+        filePrefetchTask?.cancel()
+        filePrefetchPath = key
+        filePrefetchTask = Task.detached(priority: .utility) {
             do { try await Task.sleep(for: .milliseconds(120)) }
             catch { return }
             guard !Task.isCancelled,
                   WorkspaceFiles.contains(candidate, in: canonicalRoot),
                   FileManager.default.isUbiquitousItem(at: candidate) else { return }
-            let status = try? candidate.resourceValues(
-                forKeys: [.ubiquitousItemDownloadingStatusKey]
-            ).ubiquitousItemDownloadingStatus
-            if status != .current {
-                try? FileManager.default.startDownloadingUbiquitousItem(at: candidate)
-            }
+            try? await WorkspaceFiles.hydrateUbiquitousItemIfNeeded(candidate)
         }
+    }
+
+    private func cancelFilePrefetch() {
+        filePrefetchTask?.cancel()
+        filePrefetchTask = nil
+        filePrefetchPath = nil
     }
 
     private func loadNote(_ url: URL, preservePDFPreview: Bool = false) {
@@ -1594,9 +1598,7 @@ final class NotesModel: ObservableObject {
 
         // Warmup never owns content. An actual click cancels any remaining debounce
         // and immediately enters the canonical user-initiated hydration/read path.
-        notePrefetchTask?.cancel()
-        notePrefetchTask = nil
-        notePrefetchPath = nil
+        cancelFilePrefetch()
 
         // iCloud File Provider can block while hydrating files. Never read Markdown
         // on the main actor; only publish a successful, current request. A small

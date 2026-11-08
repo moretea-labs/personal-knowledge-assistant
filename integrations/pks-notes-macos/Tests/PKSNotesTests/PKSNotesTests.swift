@@ -127,7 +127,7 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
-    func testIntentPrefetchNeverOverridesNewerMarkdownContent() async throws {
+    func testIntentHydrationNeverOverridesNewerMarkdownContent() async throws {
         let defaults = UserDefaults.standard
         let previous = defaults.string(forKey: "PKSNotesWorkspace")
         defer {
@@ -144,7 +144,7 @@ final class PKSNotesTests: XCTestCase {
 
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(folder))
-        model.prefetchNote(note)
+        model.prefetchFile(note)
 
         // Race the warmup with a real external replacement. Regardless of which
         // read wins, the fresh file stamp at open time must keep the file authoritative.
