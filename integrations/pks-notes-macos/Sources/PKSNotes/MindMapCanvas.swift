@@ -9,6 +9,9 @@ struct MindMapCanvas: View {
     @Binding var selectedID: Int?
     let revision: UInt64
     let openLink: (String) -> Void
+    let connectNote: (Int) -> Void
+    let connectSection: (Int) -> Void
+    let createLinkedNote: (Int) -> Void
     let revealSource: (Int) -> Void
     let importOutline: (String, String) -> Bool
     @State private var renameTitle = ""
@@ -215,6 +218,24 @@ struct MindMapCanvas: View {
             Button(language.text("Rename"), systemImage: "pencil") { beginRename() }
                 .disabled(selectedID == nil)
 
+            Menu {
+                Button(language.text("Link Note"), systemImage: "doc.text") {
+                    if let selectedID { connectNote(selectedID) }
+                }
+                Button(language.text("Link Section"), systemImage: "text.badge.plus") {
+                    if let selectedID { connectSection(selectedID) }
+                }
+                Divider()
+                Button(language.text("Create Linked Note"), systemImage: "doc.badge.plus") {
+                    if let selectedID { createLinkedNote(selectedID) }
+                }
+            } label: {
+                Label(language.text("Link"), systemImage: "link.badge.plus")
+            }
+            .disabled(selectedID == nil)
+            .help(language.text("Link selected node to note"))
+            .accessibilityIdentifier("pks-mind-map-link")
+
             Button(language.text("Show in Markdown"), systemImage: "text.cursor") {
                 if let selectedID { revealSource(selectedID) }
             }
@@ -331,6 +352,7 @@ struct MindMapCanvas: View {
 
     @ViewBuilder
     private func nodeCard(_ node: MindMapNode, hasChildren: Bool, exporting: Bool = false) -> some View {
+        let presentation = MindMapOutline.presentation(for: node.title)
         HStack(spacing: 9) {
             if hasChildren {
                 if exporting {
@@ -387,14 +409,14 @@ struct MindMapCanvas: View {
                 .help(language.text("Cancel"))
                 .accessibilityIdentifier("pks-mind-map-inline-cancel")
             } else {
-                Text(node.title)
+                Text(presentation.title)
                     .font(.system(size: node.depth == 0 ? 16 : 14,
                                   weight: node.depth == 0 ? .semibold : .medium))
                     .lineLimit(2)
             }
             Spacer(minLength: 0)
 
-            if !exporting, let link = MindMapOutline.links(in: node.title).first {
+            if !exporting, presentation.links.count == 1, let link = presentation.links.first {
                 Button {
                     openLink(link.target)
                 } label: {
@@ -405,6 +427,32 @@ struct MindMapCanvas: View {
                 .buttonStyle(.plain)
                 .help("\(language.text("Open linked note")) · \(link.label)")
                 .accessibilityLabel("\(language.text("Open linked note")) \(link.label)")
+            } else if !exporting, presentation.links.count > 1 {
+                Menu {
+                    ForEach(Array(presentation.links.enumerated()), id: \.offset) { _, link in
+                        Button {
+                            openLink(link.target)
+                        } label: {
+                            Label(link.label, systemImage: "link")
+                        }
+                        .help(link.target)
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "link")
+                        Text("\(presentation.links.count)")
+                            .font(.caption2.monospacedDigit())
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .frame(height: 22)
+                    .background(Color.primary.opacity(0.055), in: Capsule())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help(language.text("Open linked note"))
+                .accessibilityLabel("\(language.text("Open linked note")) \(presentation.links.count)")
             }
         }
         .padding(.horizontal, 13)
@@ -449,6 +497,18 @@ struct MindMapCanvas: View {
                 if editingNodeID != nil { finishRename(save: true) }
                 selectedID = node.id
                 beginRename()
+            }
+            Button(language.text("Link Note"), systemImage: "doc.text") {
+                selectedID = node.id
+                connectNote(node.id)
+            }
+            Button(language.text("Link Section"), systemImage: "text.badge.plus") {
+                selectedID = node.id
+                connectSection(node.id)
+            }
+            Button(language.text("Create Linked Note"), systemImage: "doc.badge.plus") {
+                selectedID = node.id
+                createLinkedNote(node.id)
             }
             Button(language.text("Show in Markdown"), systemImage: "text.cursor") {
                 selectedID = node.id

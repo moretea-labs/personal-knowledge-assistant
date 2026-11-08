@@ -189,28 +189,53 @@ enum WorkspaceFiles {
         }
     }
 
-    /// Flat, transient full-vault files for on-demand Quick Open/backlinks.
-    /// This avoids building and sorting a complete nested tree.
-    static func flatFiles(in root: URL) -> [NoteItem] {
+    /// One filesystem-authoritative flat traversal shared by all complete-vault
+    /// transient projections. Callers decide which lightweight derived buffers to keep.
+    static func visitFlatFiles(in root: URL, _ visit: (URL) -> Void) {
         var pending = [root]
-        var result: [NoteItem] = []
-
         while let folder = pending.popLast() {
             guard !scanCancelled else { break }
             for entry in directoryEntries(in: folder) {
-                guard !scanCancelled else { return result }
+                guard !scanCancelled else { return }
                 switch entry.kind {
                 case .directory:
                     pending.append(entry.url)
                 case .regular:
-                    result.append(NoteItem(url: entry.url, children: nil))
+                    visit(entry.url)
                 }
             }
+        }
+    }
+
+    /// Flat, transient full-vault files for compatibility/fallback callers.
+    static func flatFiles(in root: URL) -> [NoteItem] {
+        var result: [NoteItem] = []
+        visitFlatFiles(in: root) { url in
+            result.append(NoteItem(url: url, children: nil))
         }
         return result
     }
 
-    /// Replace one loaded folder while preserving every other loaded subtree.
+    /// Reconcile one filesystem-authoritative shallow listing with already
+    /// loaded descendants. Only a directory that still exists at the exact same
+    /// path may retain its in-memory children.
+    static func preservingLoadedChildren(
+        _ fresh: [NoteItem],
+        from previous: [NoteItem]
+    ) -> [NoteItem] {
+        let previousByPath = Dictionary(uniqueKeysWithValues: previous.map {
+            ($0.url.standardizedFileURL.path, $0)
+        })
+        return fresh.map { item in
+            guard item.isFolder,
+                  let old = previousByPath[item.url.standardizedFileURL.path],
+                  let loaded = old.children else { return item }
+            return NoteItem(url: item.url, children: loaded)
+        }
+    }
+
+    /// Replace one loaded folder while preserving every other loaded subtree and
+    /// any already-loaded descendants whose direct directory path still exists.
     static func replacingChildren(
         in items: [NoteItem],
         folder: URL,
@@ -220,7 +245,10 @@ enum WorkspaceFiles {
         return items.map { item in
             let itemPath = item.url.standardizedFileURL.path
             if itemPath == target, item.isFolder {
-                return NoteItem(url: item.url, children: children)
+                return NoteItem(
+                    url: item.url,
+                    children: preservingLoadedChildren(children, from: item.children ?? [])
+                )
             }
             guard target.hasPrefix(itemPath + "/"), let current = item.children else {
                 return item
@@ -245,6 +273,69 @@ enum WorkspaceFiles {
         }
         let normalized = candidate.standardizedFileURL.resolvingSymlinksInPath()
         return contains(normalized, in: root) ? normalized : nil
+    }
+
+    /// Build one deterministic root-relative WikiLink target for a Markdown file.
+    /// The existing resolver treats a leading slash as workspace-root relative.
+    static func canonicalWikiTarget(for target: URL, in root: URL) -> String? {
+        let canonicalRoot = root.standardizedFileURL
+        let canonicalTarget = target.standardizedFileURL
+        guard contains(canonicalTarget, in: canonicalRoot),
+              ["md", "markdown"].contains(canonicalTarget.pathExtension.lowercased())
+        else { return nil }
+
+        let prefix = canonicalRoot.path + "/"
+        guard canonicalTarget.path.hasPrefix(prefix) else { return nil }
+        var relative = String(canonicalTarget.path.dropFirst(prefix.count))
+        let ext = canonicalTarget.pathExtension
+        if !ext.isEmpty {
+            relative.removeLast(ext.count + 1)
+        }
+        guard !relative.isEmpty else { return nil }
+
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "#?[]|%")
+        guard let encoded = relative.addingPercentEncoding(withAllowedCharacters: allowed),
+              !encoded.isEmpty else { return nil }
+        return "/" + encoded
+    }
+
+    static func canonicalWikiTarget(
+        for target: URL,
+        in root: URL,
+        heading: String
+    ) -> String? {
+        guard let base = canonicalWikiTarget(for: target, in: root) else { return nil }
+        let clean = heading.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return nil }
+
+        var allowed = CharacterSet.urlFragmentAllowed
+        allowed.remove(charactersIn: "#%[]|")
+        guard let encoded = clean.addingPercentEncoding(withAllowedCharacters: allowed),
+              !encoded.isEmpty else { return nil }
+        return "\(base)#\(encoded)"
+    }
+
+    static func linkableMarkdownHeadings(at target: URL, in root: URL) -> [MarkdownOutlineHeading]? {
+        let file = target.standardizedFileURL
+        guard contains(file, in: root),
+              ["md", "markdown"].contains(file.pathExtension.lowercased())
+        else { return nil }
+
+        var info = Darwin.stat()
+        guard file.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG),
+              let source = try? String(contentsOf: file, encoding: .utf8)
+        else { return nil }
+        return MarkdownOutline.linkableHeadings(in: source)
+    }
+
+    static func knowledgeFragment(in rawTarget: String) -> String? {
+        guard let marker = rawTarget.firstIndex(of: "#") else { return nil }
+        let raw = String(rawTarget[rawTarget.index(after: marker)...])
+        let decoded = (raw.removingPercentEncoding ?? raw)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return decoded.isEmpty ? nil : decoded
     }
 
     /// Resolve a WikiLink/Markdown note target through one deterministic workspace path.
@@ -320,6 +411,77 @@ enum WorkspaceFiles {
         return resolved
     }
 
+    /// Target-specific backlink resolver. The target is validated once by the scan;
+    /// complete Markdown candidates then let every outgoing link resolve in memory
+    /// instead of repeating path-component lstat/fileExists work.
+    static func linkedTargetMatches(
+        _ rawTarget: String,
+        from note: URL,
+        target: URL,
+        in root: URL,
+        candidateBasenames: [String: [URL]]
+    ) -> Bool {
+        let value = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+
+        let target = target.standardizedFileURL
+        let pathPart = String(value.split(
+            separator: "#",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        ).first ?? "")
+        let decoded = pathPart.removingPercentEncoding ?? pathPart
+        guard !decoded.isEmpty, URL(string: decoded)?.scheme == nil else { return false }
+
+        func markdownCandidates(_ base: URL) -> [URL] {
+            if !base.pathExtension.isEmpty { return [base] }
+            return [base.appendingPathExtension("md"), base.appendingPathExtension("markdown")]
+        }
+
+        let relative = note.deletingLastPathComponent().appendingPathComponent(decoded)
+        let rooted = root.appendingPathComponent(decoded.hasPrefix("/") ? String(decoded.dropFirst()) : decoded)
+        var seen: Set<String> = []
+        for candidate in markdownCandidates(relative) + markdownCandidates(rooted) {
+            let normalized = candidate.standardizedFileURL
+            guard seen.insert(normalized.path).inserted,
+                  ["md", "markdown"].contains(normalized.pathExtension.lowercased())
+            else { continue }
+
+            let basename = normalized.deletingPathExtension().lastPathComponent
+            if candidateBasenames[basename]?.contains(where: {
+                $0.standardizedFileURL == normalized
+            }) == true {
+                // Exact relative/root Markdown paths keep the same precedence as
+                // resolveKnowledgeTarget. If an exact file is another note,
+                // basename fallback must not redirect the link.
+                return normalized == target
+            }
+        }
+
+        if !decoded.contains("/") {
+            let wanted = URL(fileURLWithPath: decoded).deletingPathExtension().lastPathComponent
+            if let matches = candidateBasenames[wanted], matches.count == 1 {
+                return matches[0].standardizedFileURL == target
+            }
+        }
+
+        // Non-Markdown workspace links (notably PDFs) still use exact local path
+        // semantics. Comparing to the already-validated target keeps this path
+        // filesystem-free per link and rejects symlink aliases automatically.
+        guard let link = URL(string: value), link.scheme == nil || link.isFileURL else {
+            return false
+        }
+        let candidate: URL
+        if link.isFileURL {
+            candidate = link
+        } else if link.path.hasPrefix("/") {
+            candidate = root.appendingPathComponent(String(link.path.dropFirst()))
+        } else {
+            candidate = note.deletingLastPathComponent().appendingPathComponent(link.path)
+        }
+        return candidate.standardizedFileURL == target
+    }
+
     /// Deterministic collision-safe suggestion; O_EXCL remains the final writer guard.
     static func nextAvailableNoteName(basedOn name: String, in folder: URL) -> String? {
         guard let normalized = safeNewNoteName(name) else { return nil }
@@ -377,12 +539,21 @@ enum WorkspaceFiles {
     }
 }
 
+struct NoteBacklinkLocation: Identifiable, Equatable {
+    let lineIndex: Int
+    let count: Int
+
+    var id: Int { lineIndex }
+}
+
 struct NoteBacklink: Identifiable, Equatable {
     let source: URL
-    let count: Int
+    let sourceStamp: WorkspaceFileStamp
+    let locations: [NoteBacklinkLocation]
 
     var id: String { source.path }
     var title: String { source.deletingPathExtension().lastPathComponent }
+    var count: Int { locations.reduce(0) { $0 + $1.count } }
 }
 
 struct BacklinkScanResult: Equatable {
@@ -390,9 +561,35 @@ struct BacklinkScanResult: Equatable {
     let skippedDatalessFiles: Int
 }
 
+/// Transient projection of the complete vault file index for link resolution.
+/// Markdown/filesystem data remains authoritative; this only removes repeated
+/// O(N) filter/map/grouping work from every backlink scan and link activation.
+struct WorkspaceLinkCandidateIndex: Sendable {
+    let markdownFiles: [URL]
+    let byBasename: [String: [URL]]
+
+    init(markdownFiles: [URL]) {
+        var standardized: [URL] = []
+        standardized.reserveCapacity(markdownFiles.count)
+        var grouped: [String: [URL]] = [:]
+        grouped.reserveCapacity(markdownFiles.count)
+
+        for url in markdownFiles {
+            let normalized = url.standardizedFileURL
+            standardized.append(normalized)
+            grouped[normalized.deletingPathExtension().lastPathComponent, default: []].append(normalized)
+        }
+
+        self.markdownFiles = standardized
+        self.byBasename = grouped
+    }
+
+    static let empty = WorkspaceLinkCandidateIndex(markdownFiles: [])
+}
+
 private struct GlobalFileIndexSnapshot {
-    let files: [NoteItem]
     let quickOpenEntries: [NoteTreePresentation.QuickOpenEntry]
+    let linkCandidates: WorkspaceLinkCandidateIndex
 }
 
 /// Session-only memoization of raw outgoing Markdown links. The file itself
@@ -400,23 +597,78 @@ private struct GlobalFileIndexSnapshot {
 /// target-specific backlink resolution is still recomputed by WorkspaceBacklinks.
 final class WorkspaceBacklinkParseCache: @unchecked Sendable {
     struct Lookup {
-        let links: [MindMapLink]
+        let stamp: WorkspaceFileStamp
+        let occurrences: [MarkdownLinkOccurrence]
         let hit: Bool
+
+        var links: [MindMapLink] { occurrences.map(\.link) }
+    }
+
+    private final class Node {
+        let key: String
+        weak var previous: Node?
+        var next: Node?
+
+        init(key: String) {
+            self.key = key
+        }
     }
 
     private struct Entry {
         let stamp: WorkspaceFileStamp
-        let links: [MindMapLink]
-        var lastAccess: UInt64
+        let occurrences: [MarkdownLinkOccurrence]
+        let node: Node
     }
 
     private let lock = NSLock()
     private let capacity: Int
-    private var accessClock: UInt64 = 0
     private var entries: [String: Entry] = [:]
+    private var leastRecent: Node?
+    private var mostRecent: Node?
 
     init(capacity: Int = 1_024) {
         self.capacity = max(1, capacity)
+    }
+
+    private func unlink(_ node: Node) {
+        let previous = node.previous
+        let next = node.next
+        previous?.next = next
+        next?.previous = previous
+        if leastRecent === node { leastRecent = next }
+        if mostRecent === node { mostRecent = previous }
+        node.previous = nil
+        node.next = nil
+    }
+
+    private func markMostRecent(_ node: Node) {
+        guard mostRecent !== node else { return }
+        unlink(node)
+        node.previous = mostRecent
+        mostRecent?.next = node
+        mostRecent = node
+        if leastRecent == nil { leastRecent = node }
+    }
+
+    private func removeEntry(forKey key: String) {
+        guard let removed = entries.removeValue(forKey: key) else { return }
+        unlink(removed.node)
+    }
+
+    private func insertEntry(
+        key: String,
+        stamp: WorkspaceFileStamp,
+        occurrences: [MarkdownLinkOccurrence]
+    ) {
+        if entries[key] == nil, entries.count >= capacity, let victim = leastRecent {
+            removeEntry(forKey: victim.key)
+        }
+        if let existing = entries[key] {
+            unlink(existing.node)
+        }
+        let node = Node(key: key)
+        entries[key] = Entry(stamp: stamp, occurrences: occurrences, node: node)
+        markMostRecent(node)
     }
 
     func lookup(_ source: URL) -> Lookup? {
@@ -425,43 +677,37 @@ final class WorkspaceBacklinkParseCache: @unchecked Sendable {
         guard let stamp = WorkspaceFiles.fileStamp(url) else { return nil }
 
         lock.lock()
-        if var cached = entries[key] {
+        if let cached = entries[key] {
             if cached.stamp == stamp {
-                accessClock &+= 1
-                cached.lastAccess = accessClock
-                entries[key] = cached
-                let links = cached.links
+                markMostRecent(cached.node)
+                let occurrences = cached.occurrences
                 lock.unlock()
-                return Lookup(links: links, hit: true)
+                return Lookup(stamp: stamp, occurrences: occurrences, hit: true)
             }
-            entries.removeValue(forKey: key)
+            removeEntry(forKey: key)
         }
         lock.unlock()
 
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        let links = MindMapOutline.links(in: content)
+        let occurrences = MindMapOutline.linkOccurrences(in: content)
 
         // If another editor changed the file while it was being read, use this
         // parse for the current scan but do not memoize it under a stale stamp.
         guard WorkspaceFiles.fileStamp(url) == stamp else {
-            return Lookup(links: links, hit: false)
+            return Lookup(stamp: stamp, occurrences: occurrences, hit: false)
         }
 
         lock.lock()
-        accessClock &+= 1
-        if entries[key] == nil, entries.count >= capacity,
-           let oldest = entries.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key {
-            entries.removeValue(forKey: oldest)
-        }
-        entries[key] = Entry(stamp: stamp, links: links, lastAccess: accessClock)
+        insertEntry(key: key, stamp: stamp, occurrences: occurrences)
         lock.unlock()
-        return Lookup(links: links, hit: false)
+        return Lookup(stamp: stamp, occurrences: occurrences, hit: false)
     }
 
     func removeAll() {
         lock.lock()
         entries.removeAll(keepingCapacity: true)
-        accessClock = 0
+        leastRecent = nil
+        mostRecent = nil
         lock.unlock()
     }
 
@@ -493,13 +739,19 @@ enum WorkspaceBacklinks {
         target: URL,
         root: URL,
         files: [NoteItem],
+        candidateIndex suppliedCandidateIndex: WorkspaceLinkCandidateIndex? = nil,
         parseCache: WorkspaceBacklinkParseCache? = nil
     ) -> BacklinkScanResult {
         let target = target.standardizedFileURL
-        let candidates = markdownFiles(files)
-        let candidateBasenames = Dictionary(grouping: candidates) {
-            $0.deletingPathExtension().lastPathComponent
+        guard WorkspaceFiles.contains(target, in: root),
+              FileManager.default.fileExists(atPath: target.path) else {
+            return .init(backlinks: [], skippedDatalessFiles: 0)
         }
+
+        let candidateIndex = suppliedCandidateIndex
+            ?? WorkspaceLinkCandidateIndex(markdownFiles: markdownFiles(files))
+        let candidates = candidateIndex.markdownFiles
+        let candidateBasenames = candidateIndex.byBasename
         var result: [NoteBacklink] = []
         var skippedDatalessFiles = 0
 
@@ -508,27 +760,37 @@ enum WorkspaceBacklinks {
                 skippedDatalessFiles += 1
                 continue
             }
-            let links: [MindMapLink]
+            let sourceStamp: WorkspaceFileStamp
+            let occurrences: [MarkdownLinkOccurrence]
             if let parseCache {
                 guard let cached = parseCache.lookup(source) else { continue }
-                links = cached.links
+                sourceStamp = cached.stamp
+                occurrences = cached.occurrences
             } else {
-                guard let content = try? String(contentsOf: source, encoding: .utf8) else { continue }
-                links = MindMapOutline.links(in: content)
+                guard let stamp = WorkspaceFiles.fileStamp(source),
+                      let content = try? String(contentsOf: source, encoding: .utf8)
+                else { continue }
+                let parsed = MindMapOutline.linkOccurrences(in: content)
+                guard WorkspaceFiles.fileStamp(source) == stamp else { continue }
+                sourceStamp = stamp
+                occurrences = parsed
             }
 
-            var count = 0
-            for link in links {
-                guard let resolved = WorkspaceFiles.resolveLinkedTarget(
-                    link.target,
-                    from: source,
-                    in: root,
-                    candidates: candidates,
-                    candidateBasenames: candidateBasenames
-                ) else { continue }
-                if resolved.standardizedFileURL == target { count += 1 }
+            var lineCounts: [Int: Int] = [:]
+            for occurrence in occurrences where WorkspaceFiles.linkedTargetMatches(
+                occurrence.link.target,
+                from: source,
+                target: target,
+                in: root,
+                candidateBasenames: candidateBasenames
+            ) {
+                lineCounts[occurrence.lineIndex, default: 0] += 1
             }
-            if count > 0 { result.append(.init(source: source, count: count)) }
+            guard !lineCounts.isEmpty else { continue }
+            let locations = lineCounts.keys.sorted().map {
+                NoteBacklinkLocation(lineIndex: $0, count: lineCounts[$0] ?? 0)
+            }
+            result.append(.init(source: source, sourceStamp: sourceStamp, locations: locations))
         }
 
         let backlinks = result.sorted {
@@ -543,13 +805,21 @@ enum WorkspaceBacklinks {
     }
 }
 
+struct MarkdownAnchorRequest: Equatable {
+    let note: URL
+    let fragment: String
+    let sequence: UInt64
+}
+
 @MainActor
 final class NotesModel: ObservableObject {
     @Published private(set) var root: URL?
     @Published private(set) var files: [NoteItem] = []
     @Published private(set) var loadingFiles = false
-    @Published private(set) var globalFiles: [NoteItem] = []
     @Published private(set) var globalQuickOpenEntries: [NoteTreePresentation.QuickOpenEntry] = []
+    /// Compatibility/debug view only. The complete vault no longer retains a
+    /// second NoteItem array beside globalQuickOpenEntries.
+    var globalFiles: [NoteItem] { globalQuickOpenEntries.map(\.item) }
     @Published private(set) var indexingFiles = false
     @Published private(set) var globalFileIndexReady = false
     @Published private(set) var loadingNote = false
@@ -574,6 +844,7 @@ final class NotesModel: ObservableObject {
     @Published private(set) var activeMatch: SearchHit?
     @Published private(set) var matchJumpSequence = 0
     @Published private(set) var matchedQuery = ""
+    @Published private(set) var markdownAnchorRequest: MarkdownAnchorRequest?
     @Published var query = ""
     @Published private(set) var hits: [SearchHit] = []
     @Published private(set) var searching = false
@@ -615,11 +886,18 @@ final class NotesModel: ObservableObject {
     private var fileRefreshTask: Task<Void, Never>?
     private var folderLoadTask: Task<Void, Never>?
     private var pendingFolderPaths: Set<String> = []
+    private var pendingFolderQueue: [String] = []
     private var preferredFolderPath: String?
     private var loadedFolderPaths: Set<String> = []
+    private var mutationRefreshTask: Task<Void, Never>?
+    private var pendingMutationParentPaths: Set<String> = []
+    private var mutationRefreshGeneration: UInt64 = 0
     private var globalFileScanTask: Task<GlobalFileIndexSnapshot, Never>?
     private var globalFileScanGeneration: UInt64 = 0
+    private var globalFileIndexGeneration: UInt64 = 0
+    private var globalLinkCandidates = WorkspaceLinkCandidateIndex.empty
     private var knowledgeLinkTask: Task<Void, Never>?
+    private var markdownAnchorSequence: UInt64 = 0
     private var fileRefreshGeneration: UInt64 = 0
 
     var isDirty: Bool { selected != nil && draft != baseline }
@@ -762,6 +1040,7 @@ final class NotesModel: ObservableObject {
         previewPDF = nil
         previewPDFPage = nil
         previewPDFAnchor = nil
+        markdownAnchorRequest = nil
         externalTitle = nil
         externalBody = nil
         previewSource = nil
@@ -785,20 +1064,30 @@ final class NotesModel: ObservableObject {
         openNote(url)
     }
 
+    private func invalidateGlobalFileIndex() {
+        globalFileScanTask?.cancel()
+        globalFileScanTask = nil
+        globalFileIndexGeneration &+= 1
+        globalFileIndexReady = false
+        globalQuickOpenEntries = []
+        globalLinkCandidates = .empty
+        indexingFiles = false
+    }
+
     func refresh() {
         guard let root else { return }
         fileRefreshTask?.cancel()
         folderLoadTask?.cancel()
-        globalFileScanTask?.cancel()
+        mutationRefreshTask?.cancel()
         folderLoadTask = nil
-        globalFileScanTask = nil
+        mutationRefreshTask = nil
+        mutationRefreshGeneration &+= 1
         pendingFolderPaths.removeAll()
+        pendingFolderQueue.removeAll(keepingCapacity: true)
+        pendingMutationParentPaths.removeAll()
         preferredFolderPath = nil
         loadedFolderPaths.removeAll()
-        globalFiles = []
-        globalQuickOpenEntries = []
-        globalFileIndexReady = false
-        indexingFiles = false
+        invalidateGlobalFileIndex()
 
         fileRefreshGeneration &+= 1
         let generation = fileRefreshGeneration
@@ -821,6 +1110,99 @@ final class NotesModel: ObservableObject {
         startPendingFolderLoad()
     }
 
+    /// A local filesystem mutation only invalidates the global derived index and
+    /// re-reads parent directories that are currently materialized in the UI.
+    /// Directory membership still comes exclusively from a fresh filesystem scan.
+    private func scheduleFilesystemMutationRefresh(parentFolders: [URL]) {
+        guard let root else { return }
+        invalidateGlobalFileIndex()
+
+        let canonicalRoot = root.standardizedFileURL
+        let rootPath = canonicalRoot.path
+        for parent in parentFolders {
+            let normalized = parent.standardizedFileURL.path
+            guard normalized == rootPath || normalized.hasPrefix(rootPath + "/") else { continue }
+            if normalized == rootPath || loadedFolderPaths.contains(normalized) {
+                pendingMutationParentPaths.insert(normalized)
+            }
+        }
+        startPendingMutationRefresh()
+    }
+
+    private func discardLoadedSubtree(_ item: URL) {
+        let target = item.standardizedFileURL.path
+        func outside(_ path: String) -> Bool {
+            path != target && !path.hasPrefix(target + "/")
+        }
+        loadedFolderPaths = Set(loadedFolderPaths.filter(outside))
+        pendingFolderPaths = Set(pendingFolderPaths.filter(outside))
+        pendingFolderQueue.removeAll { !outside($0) }
+        pendingMutationParentPaths = Set(pendingMutationParentPaths.filter(outside))
+        if let preferredFolderPath, !outside(preferredFolderPath) {
+            self.preferredFolderPath = nil
+        }
+    }
+
+    private func startPendingMutationRefresh() {
+        guard mutationRefreshTask == nil, let root,
+              !pendingMutationParentPaths.isEmpty else { return }
+
+        let rootPath = root.standardizedFileURL.path
+        let target = pendingMutationParentPaths.min {
+            let lhsDepth = $0.split(separator: "/").count
+            let rhsDepth = $1.split(separator: "/").count
+            if lhsDepth != rhsDepth { return lhsDepth < rhsDepth }
+            return $0.localizedStandardCompare($1) == .orderedAscending
+        }!
+        pendingMutationParentPaths.remove(target)
+        let generation = mutationRefreshGeneration
+
+        mutationRefreshTask = Task { [weak self] in
+            let scanner = Task.detached(priority: .userInitiated) {
+                let folder = URL(fileURLWithPath: target, isDirectory: true).standardizedFileURL
+                return (folder, WorkspaceFiles.tree(in: folder, recursive: false))
+            }
+            let refreshed = await withTaskCancellationHandler {
+                await scanner.value
+            } onCancel: {
+                scanner.cancel()
+            }
+
+            guard let self, self.mutationRefreshGeneration == generation else { return }
+            self.mutationRefreshTask = nil
+            guard !Task.isCancelled, self.root == root else { return }
+
+            if refreshed.0.path == rootPath {
+                self.files = WorkspaceFiles.preservingLoadedChildren(
+                    refreshed.1,
+                    from: self.files
+                )
+            } else if self.loadedFolderPaths.contains(refreshed.0.path) {
+                self.files = WorkspaceFiles.replacingChildren(
+                    in: self.files,
+                    folder: refreshed.0,
+                    with: refreshed.1
+                )
+            }
+            self.startPendingMutationRefresh()
+        }
+    }
+
+    private func rebuildPendingFolderQueue(rootPath: String) {
+        let ranked = pendingFolderPaths.compactMap { path -> (path: String, depth: Int)? in
+            guard path.hasPrefix(rootPath + "/"),
+                  !loadedFolderPaths.contains(path) else { return nil }
+            return (path, path.split(separator: "/").count)
+        }
+        pendingFolderPaths = Set(ranked.map(\.path))
+        // Reverse priority order so popLast() returns shallowest, then lexical.
+        // Sorting happens only when the expanded set changes, not after every load.
+        pendingFolderQueue = ranked.sorted {
+            if $0.depth != $1.depth { return $0.depth > $1.depth }
+            return $0.path.localizedStandardCompare($1.path) == .orderedDescending
+        }.map(\.path)
+    }
+
     func loadExpandedFolders(_ paths: Set<String>) {
         guard let root else { return }
         let rootPath = root.standardizedFileURL.path
@@ -833,6 +1215,7 @@ final class NotesModel: ObservableObject {
         // Already-loaded children stay as a presentation cache for cheap reopen.
         pendingFolderPaths.formIntersection(expanded)
         pendingFolderPaths.formUnion(expanded.filter { !loadedFolderPaths.contains($0) })
+        rebuildPendingFolderQueue(rootPath: rootPath)
         if let preferredFolderPath, !expanded.contains(preferredFolderPath) {
             self.preferredFolderPath = nil
         }
@@ -847,7 +1230,11 @@ final class NotesModel: ObservableObject {
         guard normalized.hasPrefix(rootPath + "/"),
               !loadedFolderPaths.contains(normalized) else { return }
         preferredFolderPath = normalized
-        pendingFolderPaths.insert(normalized)
+        if pendingFolderPaths.insert(normalized).inserted {
+            // Direct user disclosure is immediately eligible even before the
+            // SwiftUI expanded-set callback rebuilds the background queue.
+            pendingFolderQueue.append(normalized)
+        }
         startPendingFolderLoad()
     }
 
@@ -856,28 +1243,29 @@ final class NotesModel: ObservableObject {
               !pendingFolderPaths.isEmpty else { return }
 
         let rootPath = root.standardizedFileURL.path
-        let candidates = pendingFolderPaths.filter {
-            $0.hasPrefix(rootPath + "/") && !loadedFolderPaths.contains($0)
+        var target: String?
+        if let preferred = preferredFolderPath,
+           pendingFolderPaths.contains(preferred),
+           preferred.hasPrefix(rootPath + "/"),
+           !loadedFolderPaths.contains(preferred) {
+            pendingFolderPaths.remove(preferred)
+            target = preferred
+            preferredFolderPath = nil
         }
-        guard !candidates.isEmpty else {
+
+        while target == nil, let candidate = pendingFolderQueue.popLast() {
+            guard pendingFolderPaths.remove(candidate) != nil,
+                  candidate.hasPrefix(rootPath + "/"),
+                  !loadedFolderPaths.contains(candidate) else { continue }
+            target = candidate
+        }
+
+        guard let target else {
             pendingFolderPaths.removeAll()
+            pendingFolderQueue.removeAll(keepingCapacity: true)
             preferredFolderPath = nil
             return
         }
-
-        let target: String
-        if let preferred = preferredFolderPath, candidates.contains(preferred) {
-            target = preferred
-            preferredFolderPath = nil
-        } else {
-            target = candidates.min {
-                let lhsDepth = $0.split(separator: "/").count
-                let rhsDepth = $1.split(separator: "/").count
-                if lhsDepth != rhsDepth { return lhsDepth < rhsDepth }
-                return $0.localizedStandardCompare($1) == .orderedAscending
-            }!
-        }
-        pendingFolderPaths.remove(target)
 
         let generation = fileRefreshGeneration
         folderLoadTask = Task { [weak self] in
@@ -907,24 +1295,41 @@ final class NotesModel: ObservableObject {
         }
     }
 
-    private func completeWorkspaceFiles() async -> [NoteItem] {
-        guard let root else { return [] }
-        if globalFileIndexReady { return globalFiles }
+    private func ensureGlobalFileIndex() async -> Bool {
+        guard let root else { return false }
+        if globalFileIndexReady { return true }
 
-        let generation = fileRefreshGeneration
+        let generation = globalFileIndexGeneration
         let scan: Task<GlobalFileIndexSnapshot, Never>
         if let current = globalFileScanTask, globalFileScanGeneration == generation {
             scan = current
         } else {
             indexingFiles = true
             let task = Task.detached(priority: .utility) {
-                let files = WorkspaceFiles.flatFiles(in: root)
-                guard !Task.isCancelled else {
-                    return GlobalFileIndexSnapshot(files: files, quickOpenEntries: [])
+                var quickOpenEntries: [NoteTreePresentation.QuickOpenEntry] = []
+                var markdownFiles: [URL] = []
+                var insertionOrder = 0
+
+                WorkspaceFiles.visitFlatFiles(in: root) { url in
+                    let item = NoteItem(url: url, children: nil)
+                    quickOpenEntries.append(.init(item: item, insertionOrder: insertionOrder))
+                    insertionOrder += 1
+                    if item.isMarkdown {
+                        markdownFiles.append(url)
+                    }
                 }
+
+                guard !Task.isCancelled else {
+                    return GlobalFileIndexSnapshot(
+                        quickOpenEntries: [],
+                        linkCandidates: .empty
+                    )
+                }
+
+                NoteTreePresentation.sortQuickOpenEntries(&quickOpenEntries)
                 return GlobalFileIndexSnapshot(
-                    files: files,
-                    quickOpenEntries: NoteTreePresentation.quickOpenEntries(files)
+                    quickOpenEntries: quickOpenEntries,
+                    linkCandidates: WorkspaceLinkCandidateIndex(markdownFiles: markdownFiles)
                 )
             }
             globalFileScanTask = task
@@ -933,23 +1338,23 @@ final class NotesModel: ObservableObject {
         }
 
         let snapshot = await scan.value
-        guard self.root == root, fileRefreshGeneration == generation else { return [] }
+        guard self.root == root, globalFileIndexGeneration == generation else { return false }
         // Publish readiness before the derived entries so the SwiftUI receive path
         // can swap from shallow/local results to the complete index immediately.
         globalFileIndexReady = true
-        globalFiles = snapshot.files
         globalQuickOpenEntries = snapshot.quickOpenEntries
+        globalLinkCandidates = snapshot.linkCandidates
         indexingFiles = false
         if globalFileScanGeneration == generation {
             globalFileScanTask = nil
         }
-        return snapshot.files
+        return true
     }
 
     func prepareGlobalFileIndex() {
         guard root != nil, !globalFileIndexReady else { return }
         Task { [weak self] in
-            _ = await self?.completeWorkspaceFiles()
+            _ = await self?.ensureGlobalFileIndex()
         }
     }
 
@@ -1002,6 +1407,7 @@ final class NotesModel: ObservableObject {
         pdfPage: Int? = nil,
         pdfAnchor: PDFSourceAnchor? = nil
     ) {
+        markdownAnchorRequest = nil
         guard let root, WorkspaceFiles.contains(url, in: root) else {
             message = AppLanguage.current.text("File is outside the selected workspace."); return
         }
@@ -1269,10 +1675,17 @@ final class NotesModel: ObservableObject {
         backlinkTask = Task { [weak self] in
             guard let self else { return }
             let snapshot: [NoteItem]
+            let candidateIndex: WorkspaceLinkCandidateIndex?
             if let suppliedFiles {
                 snapshot = suppliedFiles
+                candidateIndex = nil
             } else {
-                snapshot = await self.completeWorkspaceFiles()
+                guard await self.ensureGlobalFileIndex() else {
+                    self.loadingBacklinks = false
+                    return
+                }
+                snapshot = []
+                candidateIndex = self.globalLinkCandidates
             }
             guard !Task.isCancelled, self.root == root else { return }
 
@@ -1282,6 +1695,7 @@ final class NotesModel: ObservableObject {
                     target: note,
                     root: root,
                     files: snapshot,
+                    candidateIndex: candidateIndex,
                     parseCache: parseCache
                 )
             }.value
@@ -1399,7 +1813,8 @@ final class NotesModel: ObservableObject {
     func newNote(named name: String? = nil, in parentFolder: URL? = nil,
                  navigationDecision: UnsavedNoteDecision? = nil,
                  initialContent: String? = nil,
-                 preservePDFPreview: Bool = false) -> URL? {
+                 preservePDFPreview: Bool = false,
+                 activateAfterCreation: Bool = true) -> URL? {
         guard let root else {
             message = AppLanguage.current.text("Choose a notes folder before creating a note."); return nil
         }
@@ -1427,7 +1842,9 @@ final class NotesModel: ObservableObject {
         guard WorkspaceFiles.contains(url, in: root) else {
             message = AppLanguage.current.text("Invalid note path."); return nil
         }
-        guard confirmLeavingNote(decision: navigationDecision) else { return nil }
+        if activateAfterCreation {
+            guard confirmLeavingNote(decision: navigationDecision) else { return nil }
+        }
 
         // O_EXCL prevents overwriting an existing file even if another app
         // creates the same name between the availability check and the write.
@@ -1442,8 +1859,10 @@ final class NotesModel: ObservableObject {
             let content = initialContent ?? (name == nil ? "" : "# \(url.deletingPathExtension().lastPathComponent)\n\n")
             try handle.write(contentsOf: Data(content.utf8))
             try handle.close()
-            refresh()
-            loadNote(url, preservePDFPreview: preservePDFPreview)
+            scheduleFilesystemMutationRefresh(parentFolders: [folder])
+            if activateAfterCreation {
+                loadNote(url, preservePDFPreview: preservePDFPreview)
+            }
             return url
         } catch {
             try? handle.close()
@@ -1498,6 +1917,26 @@ final class NotesModel: ObservableObject {
         }
     }
 
+    private func requestMarkdownAnchor(_ fragment: String, note: URL) {
+        let clean = fragment.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        markdownAnchorSequence &+= 1
+        markdownAnchorRequest = MarkdownAnchorRequest(
+            note: note.standardizedFileURL,
+            fragment: clean,
+            sequence: markdownAnchorSequence
+        )
+    }
+
+    private func requestMarkdownAnchorIfNavigationStarted(_ fragment: String?, note: URL) {
+        guard let fragment else { return }
+        let target = note.standardizedFileURL
+        guard selected?.standardizedFileURL == target
+                || requestedNote?.standardizedFileURL == target
+        else { return }
+        requestMarkdownAnchor(fragment, note: target)
+    }
+
     @discardableResult
     func openKnowledgeLink(_ target: String) -> Bool {
         let value = target.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1514,14 +1953,25 @@ final class NotesModel: ObservableObject {
             return false
         }
 
+        if value.hasPrefix("#"),
+           ["md", "markdown"].contains(selected.pathExtension.lowercased()),
+           let fragment = WorkspaceFiles.knowledgeFragment(in: value) {
+            requestMarkdownAnchor(fragment, note: selected)
+            message = nil
+            return true
+        }
+
         // Exact relative/root paths remain immediate. Basename fallback must only
         // use a complete vault candidate set; a partially expanded sidebar can
         // otherwise make an ambiguous basename look unique.
-        let candidates = globalFileIndexReady
-            ? globalFiles.filter(\.isMarkdown).map { $0.url.standardizedFileURL }
-            : []
+        let candidates = globalFileIndexReady ? globalLinkCandidates.markdownFiles : []
+        let candidateBasenames = globalFileIndexReady ? globalLinkCandidates.byBasename : [:]
         if let resolved = WorkspaceFiles.resolveLinkedTarget(
-            value, from: selected, in: root, candidates: candidates
+            value,
+            from: selected,
+            in: root,
+            candidates: candidates,
+            candidateBasenames: candidateBasenames
         ) {
             openResolvedKnowledgeLink(value, resolved: resolved)
             return true
@@ -1536,18 +1986,22 @@ final class NotesModel: ObservableObject {
         message = AppLanguage.current.text("Scanning files…")
         knowledgeLinkTask = Task { [weak self] in
             guard let self else { return }
-            let allFiles = await self.completeWorkspaceFiles()
+            let indexReady = await self.ensureGlobalFileIndex()
             guard !Task.isCancelled,
                   self.root == root,
                   self.selected == sourceNote else { return }
+            guard indexReady else {
+                self.message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
+                return
+            }
 
-            let markdownCandidates = allFiles.filter(\.isMarkdown)
-                .map { $0.url.standardizedFileURL }
+            let candidateIndex = self.globalLinkCandidates
             guard let resolved = WorkspaceFiles.resolveLinkedTarget(
                 value,
                 from: sourceNote,
                 in: root,
-                candidates: markdownCandidates
+                candidates: candidateIndex.markdownFiles,
+                candidateBasenames: candidateIndex.byBasename
             ) else {
                 self.message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
                 return
@@ -1561,33 +2015,43 @@ final class NotesModel: ObservableObject {
 
     private func openResolvedKnowledgeLink(_ value: String, resolved: URL) {
         let linkURL = URL(string: value)
-        let anchor = resolved.pathExtension.lowercased() == "pdf"
-            ? linkURL.flatMap(PDFPageReference.anchor(from:))
-            : nil
-        let page = resolved.pathExtension.lowercased() == "pdf"
-            ? anchor?.page ?? linkURL.flatMap(PDFPageReference.page(from:))
-            : nil
+        let isPDF = resolved.pathExtension.lowercased() == "pdf"
+        let anchor = isPDF ? linkURL.flatMap(PDFPageReference.anchor(from:)) : nil
+        let page = isPDF ? anchor?.page ?? linkURL.flatMap(PDFPageReference.page(from:)) : nil
+        let fragment = isPDF ? nil : WorkspaceFiles.knowledgeFragment(in: value)
         openFile(resolved, pdfPage: page, pdfAnchor: anchor)
+        requestMarkdownAnchorIfNavigationStarted(fragment, note: resolved)
     }
 
     func openInternalLink(_ url: URL) -> Bool {
-        guard let root, let selected,
-              let resolved = WorkspaceFiles.resolve(url, from: selected, in: root) else { return false }
+        guard let root, let selected else { return false }
+        let fragment = url.fragment?.removingPercentEncoding ?? url.fragment
+        if url.path.isEmpty,
+           let fragment,
+           !fragment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           ["md", "markdown"].contains(selected.pathExtension.lowercased()) {
+            requestMarkdownAnchor(fragment, note: selected)
+            message = nil
+            return true
+        }
+
+        guard let resolved = WorkspaceFiles.resolve(url, from: selected, in: root) else { return false }
         if resolved.pathExtension.isEmpty {
             let markdown = resolved.appendingPathExtension("md")
             if FileManager.default.fileExists(atPath: markdown.path) {
                 openFile(markdown)
+                requestMarkdownAnchorIfNavigationStarted(fragment, note: markdown)
                 return true
             }
         }
         guard FileManager.default.fileExists(atPath: resolved.path) else { return false }
-        let anchor = resolved.pathExtension.lowercased() == "pdf"
-            ? PDFPageReference.anchor(from: url)
-            : nil
-        let page = resolved.pathExtension.lowercased() == "pdf"
-            ? anchor?.page ?? PDFPageReference.page(from: url)
-            : nil
+        let isPDF = resolved.pathExtension.lowercased() == "pdf"
+        let anchor = isPDF ? PDFPageReference.anchor(from: url) : nil
+        let page = isPDF ? anchor?.page ?? PDFPageReference.page(from: url) : nil
         openFile(resolved, pdfPage: page, pdfAnchor: anchor)
+        if !isPDF {
+            requestMarkdownAnchorIfNavigationStarted(fragment, note: resolved)
+        }
         return true
     }
 
@@ -1614,6 +2078,12 @@ final class NotesModel: ObservableObject {
             message = AppLanguage.current.text("Only existing files inside the notes folder can be moved to Trash.")
             return nil
         }
+        var targetInfo = Darwin.stat()
+        guard target.path.withCString({ Darwin.lstat($0, &targetInfo) }) == 0 else {
+            message = AppLanguage.current.text("The original file is no longer available.")
+            return nil
+        }
+        let targetIsDirectory = (targetInfo.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR)
         let affectsCurrent = isInside(selected, item: target) || isInside(previewPDF, item: target)
         if affectsCurrent && !confirmLeavingNote(decision: navigationDecision) { return nil }
 
@@ -1643,7 +2113,10 @@ final class NotesModel: ObservableObject {
                 NoteNavigationStore.removePath(target, in: root)
                 reloadNavigationPreferences()
             }
-            refresh()
+            if targetIsDirectory { discardLoadedSubtree(target) }
+            scheduleFilesystemMutationRefresh(
+                parentFolders: [target.deletingLastPathComponent()]
+            )
             message = nil
             return destination as URL?
         } catch {
@@ -1709,7 +2182,15 @@ final class NotesModel: ObservableObject {
             }
             NoteNavigationStore.replacePath(target, with: destination, in: root)
             reloadNavigationPreferences()
-            refresh()
+            if isFolder {
+                // Directory rename rebases every descendant identity, so retain
+                // the conservative full refresh for correctness.
+                refresh()
+            } else {
+                scheduleFilesystemMutationRefresh(
+                    parentFolders: [target.deletingLastPathComponent()]
+                )
+            }
             message = nil
             return destination
         } catch {
@@ -1747,7 +2228,7 @@ final class NotesModel: ObservableObject {
 
         do {
             try FileManager.default.copyItem(at: target, to: destination)
-            refresh()
+            scheduleFilesystemMutationRefresh(parentFolders: [folder])
             message = nil
             return destination
         } catch {
@@ -1811,7 +2292,15 @@ final class NotesModel: ObservableObject {
             }
             NoteNavigationStore.replacePath(target, with: destination, in: root)
             reloadNavigationPreferences()
-            refresh()
+            if targetIsDirectory {
+                // Directory moves recursively rebase descendant paths; do not
+                // maintain a second in-memory path authority for that case.
+                refresh()
+            } else {
+                scheduleFilesystemMutationRefresh(
+                    parentFolders: [target.deletingLastPathComponent(), folder]
+                )
+            }
             message = nil
             return destination
         } catch {

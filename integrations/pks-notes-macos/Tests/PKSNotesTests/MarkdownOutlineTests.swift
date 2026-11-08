@@ -36,5 +36,38 @@ final class MarkdownOutlineTests: XCTestCase {
         let ns = source as NSString
         XCTAssertTrue(ns.substring(from: headings[0].utf16Offset).hasPrefix("# 标题"))
         XCTAssertTrue(ns.substring(from: headings[1].utf16Offset).hasPrefix("## Next"))
+        XCTAssertEqual(
+            MarkdownOutline.lineRange(in: source, lineIndex: 1),
+            NSRange(location: ("😀 preface\n" as NSString).length, length: ("# 标题" as NSString).length)
+        )
+        XCTAssertNil(MarkdownOutline.lineRange(in: source, lineIndex: 99))
+    }
+
+    func testHeadingFragmentMatchesExactAndSlugWithoutSeeingFencedHeadings() {
+        let source = "# Overview\n## Café & 数据\n\n~~~markdown\n## Hidden Heading\n~~~"
+        XCTAssertEqual(
+            MarkdownOutline.heading(matchingFragment: "Overview", in: source)?.title,
+            "Overview"
+        )
+        XCTAssertEqual(
+            MarkdownOutline.heading(matchingFragment: "cafe-数据", in: source)?.title,
+            "Café & 数据"
+        )
+        XCTAssertEqual(
+            MarkdownOutline.heading(
+                matchingFragment: "Caf%C3%A9%20%26%20%E6%95%B0%E6%8D%AE",
+                in: source
+            )?.title,
+            "Café & 数据"
+        )
+        XCTAssertNil(MarkdownOutline.heading(matchingFragment: "hidden-heading", in: source))
+    }
+
+    func testLinkableHeadingsOmitAmbiguousDuplicateTitles() {
+        let source = "# Overview\n## Detail\n## DETAIL\n### Unique"
+        XCTAssertEqual(
+            MarkdownOutline.linkableHeadings(in: source).map(\.title),
+            ["Overview", "Unique"]
+        )
     }
 }

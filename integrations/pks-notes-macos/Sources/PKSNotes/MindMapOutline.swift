@@ -123,16 +123,8 @@ enum MindMapOutline {
     /// Node IDs are canonical Markdown line indexes. Convert them to native UTF-16
     /// ranges only at the editor boundary so Mind Map never owns a second position model.
     static func sourceLineRange(in markdown: String, nodeID: Int) -> NSRange? {
-        guard nodeID >= 0 else { return nil }
-        let lines = markdown.components(separatedBy: "\n")
-        guard lines.indices.contains(nodeID),
-              nodes(in: markdown).contains(where: { $0.id == nodeID }) else { return nil }
-
-        var location = 0
-        for index in 0..<nodeID {
-            location += (lines[index] as NSString).length + 1
-        }
-        return NSRange(location: location, length: (lines[nodeID] as NSString).length)
+        guard nodes(in: markdown).contains(where: { $0.id == nodeID }) else { return nil }
+        return MarkdownOutline.lineRange(in: markdown, lineIndex: nodeID)
     }
 
     /// Resolve an editor caret/selection position to the nearest preceding outline node.
@@ -252,25 +244,136 @@ struct MindMapLink: Equatable {
     let target: String
 }
 
+struct MarkdownLinkOccurrence: Equatable {
+    let link: MindMapLink
+    let lineIndex: Int
+}
+
+struct MindMapNodePresentation: Equatable {
+    let title: String
+    let links: [MindMapLink]
+}
+
 extension MindMapOutline {
+    private struct ParsedLink {
+        let range: NSRange
+        let link: MindMapLink
+    }
+
+    private static func parsedLinks(in title: String) -> [ParsedLink] {
+        var parsed: [ParsedLink] = []
+        let fullRange = NSRange(title.startIndex..<title.endIndex, in: title)
+
+        for match in wikiLinkRegex.matches(in: title, range: fullRange) {
+            guard let labelRange = Range(match.range(at: 1), in: title) else { continue }
+            let raw = String(title[labelRange])
+            let parts = raw.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+            let target = String(parts[0]).trimmingCharacters(in: .whitespaces)
+            let label = parts.count == 2 ? String(parts[1]) : target
+            guard !target.isEmpty else { continue }
+            parsed.append(.init(range: match.range(at: 0), link: .init(label: label, target: target)))
+        }
+
+        for match in markdownLinkRegex.matches(in: title, range: fullRange) {
+            guard let labelRange = Range(match.range(at: 1), in: title),
+                  let targetRange = Range(match.range(at: 2), in: title) else { continue }
+            parsed.append(.init(
+                range: match.range(at: 0),
+                link: .init(
+                    label: String(title[labelRange]),
+                    target: String(title[targetRange])
+                )
+            ))
+        }
+
+        return parsed
+    }
+
     static func links(in title: String) -> [MindMapLink] {
-        var links: [MindMapLink] = []
-        let range = NSRange(title.startIndex..<title.endIndex, in: title)
-        for (index, regex) in [wikiLinkRegex, markdownLinkRegex].enumerated() {
-            for match in regex.matches(in: title, range: range) {
-                guard let labelRange = Range(match.range(at: 1), in: title) else { continue }
-                let raw = String(title[labelRange])
-                if index == 0 {
-                    let parts = raw.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
-                    let target = String(parts[0]).trimmingCharacters(in: .whitespaces)
-                    let label = parts.count == 2 ? String(parts[1]) : target
-                    if !target.isEmpty { links.append(.init(label: label, target: target)) }
-                } else if let targetRange = Range(match.range(at: 2), in: title) {
-                    links.append(.init(label: raw, target: String(title[targetRange])))
-                }
+        parsedLinks(in: title).map(\.link)
+    }
+
+    /// Preserve every Markdown link occurrence and its canonical source line.
+    /// Backlinks reuse this parse result; there is no second occurrence index.
+    static func linkOccurrences(in markdown: String) -> [MarkdownLinkOccurrence] {
+        var result: [MarkdownLinkOccurrence] = []
+        for (lineIndex, line) in markdown.components(separatedBy: "\n").enumerated() {
+            guard line.contains("["), line.contains("]") else { continue }
+            for link in links(in: line) {
+                result.append(.init(link: link, lineIndex: lineIndex))
             }
         }
-        return links
+        return result
+    }
+
+    /// Derive display-only node text from canonical Markdown. Links remain stored
+    /// only in the source line; the Mind Map replaces markup with human labels.
+    static func presentation(for title: String) -> MindMapNodePresentation {
+        let parsed = parsedLinks(in: title).sorted { lhs, rhs in
+            if lhs.range.location != rhs.range.location {
+                return lhs.range.location < rhs.range.location
+            }
+            return lhs.range.length > rhs.range.length
+        }
+        guard !parsed.isEmpty else {
+            return .init(title: title, links: [])
+        }
+
+        let nsTitle = title as NSString
+        var rendered = ""
+        var cursor = 0
+        for item in parsed where item.range.location >= cursor {
+            if item.range.location > cursor {
+                rendered += nsTitle.substring(
+                    with: NSRange(location: cursor, length: item.range.location - cursor)
+                )
+            }
+            rendered += item.link.label
+            cursor = NSMaxRange(item.range)
+        }
+        if cursor < nsTitle.length {
+            rendered += nsTitle.substring(from: cursor)
+        }
+
+        let clean = rendered.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .init(title: clean.isEmpty ? title : clean, links: parsed.map(\.link))
+    }
+
+    /// Add one canonical WikiLink to an existing structural node. The source
+    /// Markdown line remains the only persistence authority.
+    static func appendWikiLink(
+        in source: String,
+        nodeID: Int,
+        target: String,
+        label: String
+    ) -> String? {
+        let cleanTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTarget.isEmpty,
+              !cleanTarget.contains("|"),
+              !cleanTarget.contains("]"),
+              !cleanTarget.contains("\n"),
+              !cleanTarget.contains("\r"),
+              let context = editContext(in: source, nodeID: nodeID)
+        else { return nil }
+
+        if links(in: context.node.title).contains(where: { $0.target == cleanTarget }) {
+            return source
+        }
+
+        let cleanLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let labelIsSafe = !cleanLabel.isEmpty
+            && !cleanLabel.contains("|")
+            && !cleanLabel.contains("]")
+            && !cleanLabel.contains("\n")
+            && !cleanLabel.contains("\r")
+        let markup = labelIsSafe
+            ? "[[\(cleanTarget)|\(cleanLabel)]]"
+            : "[[\(cleanTarget)]]"
+
+        var lines = context.lines
+        let separator = lines[nodeID].hasSuffix(" ") ? "" : " "
+        lines[nodeID] += separator + markup
+        return lines.joined(separator: "\n")
     }
 }
 
@@ -366,17 +469,20 @@ extension MindMapOutline {
         var seen: Set<String> = []
         var fenceMarker: Character?
 
-        for line in markdown.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+        for line in markdown.split(omittingEmptySubsequences: false, whereSeparator: { $0.isNewline }) {
+            let trimmed = line.drop(while: { $0.isWhitespace })
             if let marker = trimmed.first, marker == "\u{60}" || marker == "~",
                trimmed.prefix(while: { $0 == marker }).count >= 3 {
                 if fenceMarker == nil { fenceMarker = marker }
                 else if fenceMarker == marker { fenceMarker = nil }
                 continue
             }
-            guard fenceMarker == nil else { continue }
+            guard fenceMarker == nil,
+                  line.contains("["), line.contains("]") else { continue }
 
-            for link in links(in: line) {
+            // Convert only candidate lines. Most prose lines never allocate a
+            // standalone String and never enter either link regex.
+            for link in links(in: String(line)) {
                 let key = link.target + "\u{0}" + link.label
                 if seen.insert(key).inserted { result.append(link) }
             }

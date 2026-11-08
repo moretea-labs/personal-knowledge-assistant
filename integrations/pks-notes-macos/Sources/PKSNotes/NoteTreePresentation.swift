@@ -40,10 +40,10 @@ enum NoteTreePresentation {
         let insertionOrder: Int
         var id: String { item.id }
 
-        fileprivate init(item: NoteItem, foldedName: String, foldedFolder: String, insertionOrder: Int) {
+        init(item: NoteItem, insertionOrder: Int) {
             self.item = item
-            self.foldedName = foldedName
-            self.foldedFolder = foldedFolder
+            self.foldedName = NoteTreePresentation.fold(item.name)
+            self.foldedFolder = NoteTreePresentation.fold(item.url.deletingLastPathComponent().path)
             self.insertionOrder = insertionOrder
         }
     }
@@ -52,32 +52,49 @@ enum NoteTreePresentation {
     /// folding and sorting the full match set on every Quick Open keystroke.
     /// Build one buffer directly so a large flat vault does not allocate an
     /// openable-files copy, a tuple map, and a second mapped result array.
-    static func quickOpenEntries(_ items: [NoteItem]) -> [QuickOpenEntry] {
+    static func quickOpenEntries(
+        _ items: [NoteItem],
+        prioritizedFiles: [URL] = []
+    ) -> [QuickOpenEntry] {
         var entries: [QuickOpenEntry] = []
-        entries.reserveCapacity(items.count)
+        entries.reserveCapacity(items.count + prioritizedFiles.count)
+        var seenPaths: Set<String> = []
+        seenPaths.reserveCapacity(items.count + prioritizedFiles.count)
+
+        func appendFile(_ item: NoteItem) {
+            let path = item.url.standardizedFileURL.path
+            guard seenPaths.insert(path).inserted else { return }
+            entries.append(QuickOpenEntry(item: item, insertionOrder: entries.count))
+        }
+
+        // Current/recent/favorite notes are already-known navigation targets.
+        // Seeding them adds no recursive filesystem I/O and makes deep notes
+        // searchable while the complete-vault utility scan is still running.
+        prioritizedFiles.forEach {
+            appendFile(NoteItem(url: $0.standardizedFileURL, children: nil))
+        }
 
         func visit(_ item: NoteItem) {
             if let children = item.children {
                 children.forEach(visit)
                 return
             }
-            entries.append(
-                QuickOpenEntry(
-                    item: item,
-                    foldedName: fold(item.name),
-                    foldedFolder: fold(item.url.deletingLastPathComponent().path),
-                    insertionOrder: entries.count
-                )
-            )
+            appendFile(item)
         }
 
         items.forEach(visit)
+        sortQuickOpenEntries(&entries)
+        return entries
+    }
+
+    static func sortQuickOpenEntries(_ entries: inout [QuickOpenEntry]) {
         entries.sort { lhs, rhs in
-            let comparison = lhs.item.name.localizedStandardCompare(rhs.item.name)
-            if comparison != .orderedSame { return comparison == .orderedAscending }
+            let foldedComparison = lhs.foldedName.localizedStandardCompare(rhs.foldedName)
+            if foldedComparison != .orderedSame { return foldedComparison == .orderedAscending }
+            let nameComparison = lhs.item.name.localizedStandardCompare(rhs.item.name)
+            if nameComparison != .orderedSame { return nameComparison == .orderedAscending }
             return lhs.insertionOrder < rhs.insertionOrder
         }
-        return entries
     }
 
     /// Show a note's folder path relative to its selected workspace.
@@ -100,31 +117,71 @@ enum NoteTreePresentation {
         let search = fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !search.isEmpty, limit > 0 else { return [] }
 
-        // Entries are already alphabetized. Keep at most the requested number
-        // of candidates per rank while scanning once, then concatenate ranks.
-        var ranked = Array(repeating: [NoteItem](), count: 4)
-        for entry in entries {
-            let rank: Int?
-            if entry.foldedName == search { rank = 0 }
-            else if entry.foldedName.hasPrefix(search) { rank = 1 }
-            else if entry.foldedName.contains(search) { rank = 2 }
-            else if entry.foldedFolder.contains(search) { rank = 3 }
-            else { rank = nil }
-
-            if let rank, ranked[rank].count < limit {
-                ranked[rank].append(entry.item)
-            }
-        }
-
         var result: [NoteItem] = []
         result.reserveCapacity(limit)
-        for bucket in ranked {
-            for item in bucket {
-                result.append(item)
-                if result.count == limit { return result }
+
+        // Entries are sorted by foldedName, so the common exact/prefix path can
+        // jump straight to the first possible match instead of scanning the vault.
+        var index = quickOpenLowerBound(entries, search: search)
+
+        // Exact names always outrank longer prefix matches.
+        while index < entries.count, entries[index].foldedName == search {
+            result.append(entries[index].item)
+            if result.count == limit { return result }
+            index += 1
+        }
+
+        while index < entries.count, entries[index].foldedName.hasPrefix(search) {
+            result.append(entries[index].item)
+            if result.count == limit { return result }
+            index += 1
+        }
+
+        // Only uncommon substring/path queries pay the complete-index scan.
+        // Gather both lower-priority ranks in one pass so a path fallback does
+        // not traverse a large vault a second time.
+        let remaining = limit - result.count
+        var nameSubstringMatches: [NoteItem] = []
+        var folderMatches: [NoteItem] = []
+        nameSubstringMatches.reserveCapacity(remaining)
+        folderMatches.reserveCapacity(remaining)
+
+        for entry in entries {
+            if entry.foldedName.hasPrefix(search) { continue }
+
+            if entry.foldedName.contains(search) {
+                nameSubstringMatches.append(entry.item)
+                if nameSubstringMatches.count == remaining {
+                    result.append(contentsOf: nameSubstringMatches)
+                    return result
+                }
+            } else if entry.foldedFolder.contains(search), folderMatches.count < remaining {
+                folderMatches.append(entry.item)
             }
         }
+
+        result.append(contentsOf: nameSubstringMatches)
+        if result.count == limit { return result }
+
+        for item in folderMatches {
+            result.append(item)
+            if result.count == limit { break }
+        }
         return result
+    }
+
+    private static func quickOpenLowerBound(_ entries: [QuickOpenEntry], search: String) -> Int {
+        var lower = 0
+        var upper = entries.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if entries[middle].foldedName.localizedStandardCompare(search) == .orderedAscending {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+        return lower
     }
 
     static func quickOpen(_ files: [NoteItem], query: String, limit: Int = 24) -> [NoteItem] {

@@ -366,6 +366,7 @@ struct NotesWindow: View {
     @State private var outgoingLinks: [MindMapLink] = []
     @State private var visibleTreeRows: [NoteTreePresentation.Row] = []
     @State private var quickOpenEntries: [NoteTreePresentation.QuickOpenEntry] = []
+    @State private var quickOpenMatches: [NoteItem] = []
     @State private var showingQuickOpen = false
     @State private var showingBacklinks = false
     @State private var showingProUpsell = false
@@ -373,13 +374,25 @@ struct NotesWindow: View {
     @State private var quickOpenIndex = 0
     @State private var pdfCaptureRequest: PDFCaptureRequest?
     @State private var pdfCaptureCommentary = ""
+    @State private var mindMapLinkNodeID: Int?
+    @State private var mindMapLinkSectionMode = false
+    @State private var mindMapSectionTarget: URL?
+    @State private var mindMapSectionHeadings: [MarkdownOutlineHeading] = []
+    @State private var loadingMindMapSectionHeadings = false
 
-    private var quickOpenMatches: [NoteItem] {
-        let matches = NoteTreePresentation.quickOpen(quickOpenEntries, query: quickOpenQuery)
-        guard pdfCaptureRequest != nil else { return matches }
-        return matches.filter {
-            !$0.isFolder && ["md", "markdown"].contains($0.url.pathExtension.lowercased())
-        }
+    private var localQuickOpenPriorityURLs: [URL] {
+        var urls: [URL] = []
+        if let selected = model.selected { urls.append(selected) }
+        urls.append(contentsOf: model.recentNotes)
+        urls.append(contentsOf: model.favoriteNotes.prefix(32))
+        return urls
+    }
+
+    private func localQuickOpenEntries(_ files: [NoteItem]) -> [NoteTreePresentation.QuickOpenEntry] {
+        NoteTreePresentation.quickOpenEntries(
+            files,
+            prioritizedFiles: localQuickOpenPriorityURLs
+        )
     }
 
     private var pdfCapturePreviewText: String? {
@@ -419,6 +432,9 @@ struct NotesWindow: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarTab: SidebarTab = .notes
     @State private var pendingEditorFocus: URL?
+    @State private var pendingBacklinkNote: URL?
+    @State private var pendingBacklinkLine: Int?
+    @State private var pendingBacklinkStamp: WorkspaceFileStamp?
     @State private var pendingMindMapOpen: URL?
     @State private var renameCandidate: URL?
     @State private var renameValue = ""
@@ -583,15 +599,16 @@ struct NotesWindow: View {
                                                                     : "No notes link to this PDF yet."))
                                 } else {
                                     ForEach(model.backlinks) { backlink in
-                                        relationshipButton(
-                                            title: backlink.title,
-                                            detail: backlink.count > 1
-                                                ? "\(backlink.count) \(language.text("references"))"
-                                                : language.text("1 reference"),
-                                            symbol: "arrow.turn.up.left"
-                                        ) {
-                                            showingBacklinks = false
-                                            model.openFile(backlink.source)
+                                        ForEach(backlink.locations) { location in
+                                            relationshipButton(
+                                                title: backlink.title,
+                                                detail: location.count > 1
+                                                    ? "L\(location.lineIndex + 1) · \(location.count) \(language.text("references"))"
+                                                    : "L\(location.lineIndex + 1)",
+                                                symbol: "arrow.turn.up.left"
+                                            ) {
+                                                openBacklinkLocation(backlink, location: location)
+                                            }
                                         }
                                     }
                                 }
@@ -712,11 +729,7 @@ struct NotesWindow: View {
             // Keep typing responsive. Large notes make a full heading pass
             // measurably expensive, so require a longer idle window before doing
             // this derived outline work.
-            let bytes = input.utf8.count
-            let delay: Duration = bytes >= 5_000_000 ? .milliseconds(1_200)
-                : bytes >= 1_000_000 ? .milliseconds(700)
-                : bytes >= 250_000 ? .milliseconds(320)
-                : .milliseconds(140)
+            let delay = markdownDerivedWorkDelay(forUTF8Bytes: input.utf8.count)
             do { try await Task.sleep(for: delay) }
             catch { return }
             let scanner = Task.detached(priority: .utility) {
@@ -740,6 +753,12 @@ struct NotesWindow: View {
             }
             let input = model.draft
             let revision = model.draftRevision
+            do {
+                try await Task.sleep(
+                    for: markdownDerivedWorkDelay(forUTF8Bytes: input.utf8.count)
+                )
+            } catch { return }
+            guard !Task.isCancelled else { return }
             let scanner = Task.detached(priority: .utility) {
                 MindMapOutline.knowledgeLinks(in: input)
             }
@@ -751,14 +770,32 @@ struct NotesWindow: View {
         }
         .onReceive(model.$files) { files in
             visibleTreeRows = NoteTreePresentation.visibleRows(files, expandedPaths: expandedFolderPaths)
-            if !model.globalFileIndexReady {
-                quickOpenEntries = NoteTreePresentation.quickOpenEntries(files)
+            if showingQuickOpen, !model.globalFileIndexReady {
+                // Folding/sorting the local tree is useful only while Quick Open is
+                // visible. Directory expansion and file mutations should not pay this
+                // derived-work cost in the background.
+                quickOpenEntries = localQuickOpenEntries(files)
+                rebuildQuickOpenMatches()
             }
-            model.loadExpandedFolders(expandedFolderPaths)
         }
         .onReceive(model.$globalQuickOpenEntries) { entries in
-            guard model.globalFileIndexReady else { return }
-            quickOpenEntries = entries
+            guard showingQuickOpen else { return }
+            if model.globalFileIndexReady {
+                quickOpenEntries = entries
+            } else {
+                // A local filesystem mutation invalidates only the full-vault
+                // projection. Keep an open picker useful immediately from the loaded tree.
+                quickOpenEntries = localQuickOpenEntries(model.files)
+            }
+            rebuildQuickOpenMatches()
+        }
+        .onChange(of: quickOpenQuery) { _, _ in
+            guard showingQuickOpen else { return }
+            rebuildQuickOpenMatches()
+            requestGlobalQuickOpenIndexIfNeeded()
+        }
+        .onChange(of: model.indexingFiles) { _, indexing in
+            if !indexing { requestGlobalQuickOpenIndexIfNeeded() }
         }
         .onChange(of: expandedFolderPaths) { _, expanded in
             visibleTreeRows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expanded)
@@ -788,10 +825,26 @@ struct NotesWindow: View {
                 expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: note, in: root))
                 treeCursorPath = note.path
             }
-            if note == pendingEditorFocus, note != nil {
+            if note == pendingBacklinkNote,
+               let line = pendingBacklinkLine,
+               let expectedStamp = pendingBacklinkStamp {
+                pendingBacklinkNote = nil
+                pendingBacklinkLine = nil
+                pendingBacklinkStamp = nil
+                guard let note,
+                      WorkspaceFiles.fileStamp(note) == expectedStamp else {
+                    model.message = language.text("Link target not available in this workspace.")
+                    return
+                }
+                revealMarkdownLineIndex(line)
+            } else if note == pendingEditorFocus, note != nil {
                 pendingEditorFocus = nil
                 mode = .edit
                 Task { @MainActor in editorFocused = true }
+            } else if note != nil && !openAsMap {
+                // Existing Markdown always opens in Preview. Edit is an explicit
+                // per-note action; only the New Note path carries editor intent.
+                mode = .read
             }
         }
         .sheet(isPresented: $showingQuickOpen) {
@@ -824,6 +877,13 @@ struct NotesWindow: View {
             .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
             .frame(width: NotesGeometry.toolbarTarget, height: NotesGeometry.toolbarTarget)
             .contentShape(Rectangle())
+    }
+
+    private func markdownDerivedWorkDelay(forUTF8Bytes bytes: Int) -> Duration {
+        bytes >= 5_000_000 ? .milliseconds(1_200)
+            : bytes >= 1_000_000 ? .milliseconds(700)
+            : bytes >= 250_000 ? .milliseconds(320)
+            : .milliseconds(140)
     }
 
     private func switchReadingMode(to choice: ReadingMode) {
@@ -922,13 +982,75 @@ struct NotesWindow: View {
         }
     }
 
+    private func rebuildQuickOpenMatches() {
+        let matches = NoteTreePresentation.quickOpen(quickOpenEntries, query: quickOpenQuery)
+        if pdfCaptureRequest != nil || mindMapLinkNodeID != nil {
+            quickOpenMatches = matches.filter { item in
+                guard !item.isFolder,
+                      ["md", "markdown"].contains(item.url.pathExtension.lowercased())
+                else { return false }
+                if mindMapLinkNodeID != nil, let selected = model.selected,
+                   item.url.standardizedFileURL == selected.standardizedFileURL {
+                    return false
+                }
+                return true
+            }
+        } else {
+            quickOpenMatches = matches
+        }
+        quickOpenIndex = quickOpenMatches.isEmpty
+            ? 0
+            : min(quickOpenIndex, quickOpenMatches.count - 1)
+    }
+
+    private func requestGlobalQuickOpenIndexIfNeeded() {
+        guard showingQuickOpen,
+              !quickOpenQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !model.globalFileIndexReady,
+              !model.indexingFiles else { return }
+        model.prepareGlobalFileIndex()
+    }
+
+    private func prepareQuickOpenPresentation() {
+        quickOpenEntries = model.globalFileIndexReady
+            ? model.globalQuickOpenEntries
+            : localQuickOpenEntries(model.files)
+        rebuildQuickOpenMatches()
+        // Opening the picker itself must not recurse through a large/iCloud vault.
+        // Current/recent/local entries are ready immediately; the complete utility
+        // scan begins only after a non-empty query expresses full-library intent.
+        showingQuickOpen = true
+    }
+
+    private func resetMindMapLinkState() {
+        mindMapLinkNodeID = nil
+        mindMapLinkSectionMode = false
+        mindMapSectionTarget = nil
+        mindMapSectionHeadings = []
+        loadingMindMapSectionHeadings = false
+    }
+
     private func openQuickPicker() {
         pdfCaptureRequest = nil
         pdfCaptureCommentary = ""
+        resetMindMapLinkState()
         quickOpenQuery = ""
         quickOpenIndex = 0
-        model.prepareGlobalFileIndex()
-        showingQuickOpen = true
+        prepareQuickOpenPresentation()
+    }
+
+    private func beginMindMapLink(nodeID: Int, section: Bool = false) {
+        guard model.selected != nil else { return }
+        pdfCaptureRequest = nil
+        pdfCaptureCommentary = ""
+        mindMapLinkNodeID = nodeID
+        mindMapLinkSectionMode = section
+        mindMapSectionTarget = nil
+        mindMapSectionHeadings = []
+        loadingMindMapSectionHeadings = false
+        quickOpenQuery = ""
+        quickOpenIndex = 0
+        prepareQuickOpenPresentation()
     }
 
     private func beginPDFCapture(
@@ -937,6 +1059,7 @@ struct NotesWindow: View {
         selectedText: String?,
         anchor: PDFSourceAnchor?
     ) {
+        resetMindMapLinkState()
         pdfCaptureRequest = PDFCaptureRequest(
             pdf: pdf,
             page: page,
@@ -946,14 +1069,15 @@ struct NotesWindow: View {
         pdfCaptureCommentary = ""
         quickOpenQuery = ""
         quickOpenIndex = 0
-        model.prepareGlobalFileIndex()
-        showingQuickOpen = true
+        prepareQuickOpenPresentation()
     }
 
     private func closeQuickPicker() {
         showingQuickOpen = false
+        quickOpenMatches = []
         pdfCaptureRequest = nil
         pdfCaptureCommentary = ""
+        resetMindMapLinkState()
     }
 
     private func savePDFCapture(to studyNote: URL) {
@@ -977,13 +1101,187 @@ struct NotesWindow: View {
         }
     }
 
+    private func openBacklinkLocation(
+        _ backlink: NoteBacklink,
+        location: NoteBacklinkLocation
+    ) {
+        let source = backlink.source.standardizedFileURL
+        guard WorkspaceFiles.fileStamp(source) == backlink.sourceStamp,
+              !(model.selected?.standardizedFileURL == source && model.isDirty) else {
+            model.message = language.text("Link target not available in this workspace.")
+            return
+        }
+
+        showingBacklinks = false
+        pendingBacklinkNote = source
+        pendingBacklinkLine = location.lineIndex
+        pendingBacklinkStamp = backlink.sourceStamp
+        model.openFile(source)
+
+        if model.selected?.standardizedFileURL != source, !model.loadingNote {
+            pendingBacklinkNote = nil
+            pendingBacklinkLine = nil
+            pendingBacklinkStamp = nil
+            return
+        }
+
+        if model.selected?.standardizedFileURL == source, !model.loadingNote {
+            pendingBacklinkNote = nil
+            pendingBacklinkLine = nil
+            pendingBacklinkStamp = nil
+            guard WorkspaceFiles.fileStamp(source) == backlink.sourceStamp else {
+                model.message = language.text("Link target not available in this workspace.")
+                return
+            }
+            revealMarkdownLineIndex(location.lineIndex)
+        }
+    }
+
     private func openQuickMatch(_ item: NoteItem) {
+        if let nodeID = mindMapLinkNodeID {
+            if mindMapLinkSectionMode {
+                prepareMindMapSectionTarget(nodeID: nodeID, target: item.url)
+            } else {
+                connectMindMapNode(nodeID, to: item.url)
+            }
+            return
+        }
         if pdfCaptureRequest != nil {
             savePDFCapture(to: item.url)
             return
         }
         closeQuickPicker()
         model.openFile(item.url)
+    }
+
+    private func connectMindMapNode(_ nodeID: Int, to target: URL, heading: String? = nil) {
+        guard let root = model.root,
+              let selected = model.selected,
+              target.standardizedFileURL != selected.standardizedFileURL
+        else {
+            model.message = AppLanguage.current.text("Link target not available in this workspace.")
+            return
+        }
+
+        let wikiTarget: String?
+        if let heading {
+            wikiTarget = WorkspaceFiles.canonicalWikiTarget(for: target, in: root, heading: heading)
+        } else {
+            wikiTarget = WorkspaceFiles.canonicalWikiTarget(for: target, in: root)
+        }
+        let noteName = target.deletingPathExtension().lastPathComponent
+        let label = heading.map { "\(noteName) · \($0)" } ?? noteName
+        guard let wikiTarget,
+              let updated = MindMapOutline.appendWikiLink(
+                in: model.draft,
+                nodeID: nodeID,
+                target: wikiTarget,
+                label: label
+              )
+        else {
+            model.message = AppLanguage.current.text("Link target not available in this workspace.")
+            return
+        }
+
+        model.draft = updated
+        mindMapSelectionLine = nodeID
+        closeQuickPicker()
+        model.message = nil
+    }
+
+    private func createLinkedNoteFromMindMap(nodeID: Int) {
+        guard let root = model.root,
+              let sourceNote = model.selected?.standardizedFileURL,
+              sourceNote.pathExtension.lowercased() == "md"
+                || sourceNote.pathExtension.lowercased() == "markdown"
+        else {
+            model.message = language.text("Could not create a linked note from this node.")
+            return
+        }
+
+        if model.isDirty {
+            model.save()
+            guard !model.isDirty else { return }
+        }
+
+        guard let node = MindMapOutline.nodes(in: model.draft).first(where: { $0.id == nodeID }) else {
+            model.message = language.text("Could not create a linked note from this node.")
+            return
+        }
+        let title = MindMapOutline.presentation(for: node.title).title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let folder = sourceNote.deletingLastPathComponent()
+        guard !title.isEmpty,
+              let filename = WorkspaceFiles.nextAvailableNoteName(basedOn: title, in: folder)
+        else {
+            model.message = language.text("Could not create a linked note from this node.")
+            return
+        }
+
+        let target = folder.appendingPathComponent(filename).standardizedFileURL
+        guard let wikiTarget = WorkspaceFiles.canonicalWikiTarget(for: target, in: root),
+              let updated = MindMapOutline.appendWikiLink(
+                in: model.draft,
+                nodeID: nodeID,
+                target: wikiTarget,
+                label: title
+              )
+        else {
+            model.message = language.text("Could not create a linked note from this node.")
+            return
+        }
+
+        guard let created = model.newNote(
+            named: filename,
+            in: folder,
+            initialContent: "# \(title)\n\n",
+            activateAfterCreation: false
+        ) else { return }
+
+        model.draft = updated
+        model.save()
+        mindMapSelectionLine = nodeID
+        guard !model.isDirty else { return }
+        model.message = "\(language.text("Created linked note")): \(created.deletingPathExtension().lastPathComponent)"
+    }
+
+    private func prepareMindMapSectionTarget(nodeID: Int, target: URL) {
+        guard let root = model.root else { return }
+        let expectedTarget = target.standardizedFileURL
+        mindMapSectionTarget = expectedTarget
+        mindMapSectionHeadings = []
+        loadingMindMapSectionHeadings = true
+        quickOpenFocused = false
+
+        Task { @MainActor in
+            let headings = await Task.detached(priority: .userInitiated) {
+                WorkspaceFiles.linkableMarkdownHeadings(at: expectedTarget, in: root)
+            }.value
+            guard mindMapLinkNodeID == nodeID,
+                  mindMapLinkSectionMode,
+                  mindMapSectionTarget?.standardizedFileURL == expectedTarget else { return }
+
+            loadingMindMapSectionHeadings = false
+            guard let headings else {
+                model.message = language.text("Could not read headings from this note.")
+                return
+            }
+            model.message = nil
+            mindMapSectionHeadings = headings
+        }
+    }
+
+    private func backToMindMapLinkTargetPicker() {
+        mindMapSectionTarget = nil
+        mindMapSectionHeadings = []
+        loadingMindMapSectionHeadings = false
+        quickOpenQuery = ""
+        quickOpenIndex = 0
+        rebuildQuickOpenMatches()
+        Task { @MainActor in
+            await Task.yield()
+            quickOpenFocused = true
+        }
     }
 
     private func createNoteFromPDFCapture() {
@@ -1015,10 +1313,33 @@ struct NotesWindow: View {
         mode = .edit
     }
 
+    @ViewBuilder
     private var quickOpenSheet: some View {
+        if let target = mindMapSectionTarget, let nodeID = mindMapLinkNodeID {
+            mindMapSectionPicker(nodeID: nodeID, target: target)
+        } else {
+            quickOpenFilePicker
+        }
+    }
+
+    private var quickOpenFilePicker: some View {
         let matches = quickOpenMatches
         let selectedPreview = pdfCapturePreviewText
+        let linkingMindMapNode = mindMapLinkNodeID != nil
+        let markdownOnly = pdfCaptureRequest != nil || linkingMindMapNode
         return VStack(alignment: .leading, spacing: 0) {
+            if linkingMindMapNode {
+                Label(
+                    language.text(mindMapLinkSectionMode
+                                  ? "Link selected node to section"
+                                  : "Link selected node to note"),
+                    systemImage: "link.badge.plus"
+                )
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
+                    .padding(.bottom, 4)
+            }
             if let capture = pdfCaptureRequest {
                 HStack(spacing: 10) {
                     Label(
@@ -1084,7 +1405,7 @@ struct NotesWindow: View {
                     .frame(width: NotesGeometry.treeIconWidth)
                     .foregroundStyle(.secondary)
                 TextField(
-                    language.text(pdfCaptureRequest == nil ? "Search files…" : "Search Markdown notes…"),
+                    language.text(markdownOnly ? "Search Markdown notes…" : "Search files…"),
                     text: $quickOpenQuery
                 )
                     .textFieldStyle(.plain)
@@ -1129,13 +1450,19 @@ struct NotesWindow: View {
                         Text(language.text("Scanning files…"))
                     } else {
                         Text(language.text(
-                            pdfCaptureRequest != nil
+                            linkingMindMapNode
                                 ? (quickOpenQuery.isEmpty
-                                   ? "Choose a Markdown note for this PDF page."
+                                   ? (mindMapLinkSectionMode
+                                      ? "Choose a Markdown note to link a section."
+                                      : "Choose a Markdown note to link this node.")
                                    : "No Markdown notes match your search.")
-                                : (quickOpenQuery.isEmpty
-                                   ? "Type a name to find a note in your library."
-                                   : "No files match your search.")
+                                : (pdfCaptureRequest != nil
+                                   ? (quickOpenQuery.isEmpty
+                                      ? "Choose a Markdown note for this PDF page."
+                                      : "No Markdown notes match your search.")
+                                   : (quickOpenQuery.isEmpty
+                                      ? "Type a name to find a note in your library."
+                                      : "No files match your search."))
                         ))
                     }
                 }
@@ -1196,6 +1523,7 @@ struct NotesWindow: View {
                 620,
                 (matches.isEmpty ? 176 : min(470, max(238, CGFloat(matches.count) * 54 + 83)))
                     + (pdfCaptureRequest == nil ? 0 : (selectedPreview == nil ? 104 : 148))
+                    + (linkingMindMapNode ? 44 : 0)
             )
         )
         .background(Color(nsColor: .windowBackgroundColor))
@@ -1208,6 +1536,104 @@ struct NotesWindow: View {
                 quickOpenFocused = true
             }
         }
+    }
+
+    private func mindMapSectionPicker(nodeID: Int, target: URL) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Button {
+                    backToMindMapLinkTargetPicker()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .frame(width: NotesGeometry.toolbarTarget, height: NotesGeometry.toolbarTarget)
+                }
+                .buttonStyle(.plain)
+                .help(language.text("Back"))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(language.text("Link Section"))
+                        .font(.subheadline.weight(.semibold))
+                    Text(target.deletingPathExtension().lastPathComponent)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    closeQuickPicker()
+                } label: {
+                    Image(systemName: "xmark")
+                        .frame(width: NotesGeometry.toolbarTarget, height: NotesGeometry.toolbarTarget)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            Divider().opacity(0.45)
+
+            if loadingMindMapSectionHeadings {
+                VStack(spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(language.text("Reading headings…"))
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if mindMapSectionHeadings.isEmpty {
+                VStack(spacing: 12) {
+                    Text(language.text("This note has no unique headings to link."))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Button(language.text("Link Whole Note Instead")) {
+                        connectMindMapNode(nodeID, to: target)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(mindMapSectionHeadings) { heading in
+                            Button {
+                                connectMindMapNode(nodeID, to: target, heading: heading.title)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "number")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(.tertiary)
+                                        .frame(width: NotesGeometry.treeIconWidth)
+                                    Text(heading.title)
+                                        .font(.system(size: 14))
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text("H\(heading.level)")
+                                        .font(.caption2.monospacedDigit())
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .padding(.leading, CGFloat(max(0, heading.level - 1)) * 10)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("pks-mind-map-section-\(heading.id)")
+                        }
+                    }
+                    .padding(8)
+                }
+            }
+        }
+        .frame(
+            width: 560,
+            height: min(560, max(230, CGFloat(max(1, mindMapSectionHeadings.count)) * 44 + 92))
+        )
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     /// Bear/Panda-inspired quiet navigation tint. Editorial content retains its own
@@ -2071,6 +2497,9 @@ struct NotesWindow: View {
                 selectedID: $mindMapSelectionLine,
                 revision: model.draftRevision,
                 openLink: { target in _ = model.openKnowledgeLink(target) },
+                connectNote: { nodeID in beginMindMapLink(nodeID: nodeID) },
+                connectSection: { nodeID in beginMindMapLink(nodeID: nodeID, section: true) },
+                createLinkedNote: { nodeID in createLinkedNoteFromMindMap(nodeID: nodeID) },
                 revealSource: { line in revealMarkdownLine(line) },
                 importOutline: { markdown, name in
                     // Import into a new note rather than overwriting the active note.
@@ -2208,9 +2637,17 @@ struct NotesWindow: View {
     }
 
     private func revealMarkdownLine(_ line: Int) {
+        guard MindMapOutline.sourceLineRange(in: model.draft, nodeID: line) != nil else { return }
+        revealMarkdownLineIndex(line)
+    }
+
+    private func revealMarkdownLineIndex(_ line: Int) {
         guard model.selected != nil,
-              let range = MindMapOutline.sourceLineRange(in: model.draft, nodeID: line) else { return }
-        mindMapSelectionLine = line
+              let range = MarkdownOutline.lineRange(in: model.draft, lineIndex: line) else {
+            model.message = language.text("Link target not available in this workspace.")
+            return
+        }
+        mindMapSelectionLine = MindMapOutline.nodeID(atUTF16Offset: range.location, in: model.draft)
         showingMindMap = false
         mode = .edit
         Task { @MainActor in

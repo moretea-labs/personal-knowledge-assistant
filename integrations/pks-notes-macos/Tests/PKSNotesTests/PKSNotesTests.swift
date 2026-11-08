@@ -60,6 +60,16 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(MarkdownSection.targetIndex(in: pieces.map(\.source),
                                                   headingPath: hit.headingPath,
                                                   snippet: hit.snippet, query: "Search"), 1)
+
+        let anchored = await Task.detached {
+            MarkdownPreviewParsing.prepare(
+                source,
+                match: nil,
+                anchorFragment: "%E7%AC%AC%E4%BA%8C%E8%8A%82"
+            )
+        }.value
+        XCTAssertEqual(anchored.count, 2)
+        XCTAssertEqual(anchored.map(\.source.heading), ["Overview", "第二节"])
     }
 
     @MainActor
@@ -311,6 +321,25 @@ final class PKSNotesTests: XCTestCase {
                        "Progressive loading should expose top-level folders before recursive scanning.")
     }
 
+    func testLinkCandidateIndexPrecomputesMarkdownFilesAndBasenames() {
+        let root = URL(fileURLWithPath: "/tmp/pks-link-candidates")
+        let a = root.appendingPathComponent("A/Same.md")
+        let b = root.appendingPathComponent("B/Same.markdown")
+        let pdf = root.appendingPathComponent("Book.pdf")
+        let files = [
+            NoteItem(url: a, children: nil),
+            NoteItem(url: b, children: nil),
+            NoteItem(url: pdf, children: nil)
+        ]
+
+        let index = WorkspaceLinkCandidateIndex(
+            markdownFiles: WorkspaceBacklinks.markdownFiles(files)
+        )
+        XCTAssertEqual(Set(index.markdownFiles), Set([a.standardizedFileURL, b.standardizedFileURL]))
+        XCTAssertEqual(Set(index.byBasename["Same"] ?? []), Set([a.standardizedFileURL, b.standardizedFileURL]))
+        XCTAssertNil(index.byBasename["Book"])
+    }
+
     func testFlatVaultScanAndLoadedSubtreeReplacement() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -339,6 +368,14 @@ final class PKSNotesTests: XCTestCase {
         ]))
         XCTAssertFalse(flat.contains(where: \.isFolder))
 
+        var visited: [URL] = []
+        WorkspaceFiles.visitFlatFiles(in: root) { visited.append($0.standardizedFileURL) }
+        XCTAssertEqual(
+            Set(visited),
+            Set(flat.map { $0.url.standardizedFileURL }),
+            "The shared flat visitor must preserve the compatibility flatFiles scan."
+        )
+
         let shallowRoot = WorkspaceFiles.tree(in: root, recursive: false)
         let parentChildren = WorkspaceFiles.tree(in: parent, recursive: false)
         let withParent = WorkspaceFiles.replacingChildren(
@@ -363,6 +400,172 @@ final class PKSNotesTests: XCTestCase {
         let reloadedParent = try XCTUnwrap(withNested.first(where: { $0.url == parent }))
         let loadedNested = try XCTUnwrap(reloadedParent.children?.first(where: { $0.url == nested }))
         XCTAssertEqual(loadedNested.children?.map(\.name), ["Deep"])
+    }
+
+    func testShallowReconciliationPreservesLoadedDescendants() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let parent = root.appendingPathComponent("Parent", isDirectory: true)
+        let nested = parent.appendingPathComponent("Nested", isDirectory: true)
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let deep = nested.appendingPathComponent("Deep.md")
+        try "# Deep".write(to: deep, atomically: true, encoding: .utf8)
+
+        let shallowRoot = WorkspaceFiles.tree(in: root, recursive: false)
+        let withParent = WorkspaceFiles.replacingChildren(
+            in: shallowRoot,
+            folder: parent,
+            with: WorkspaceFiles.tree(in: parent, recursive: false)
+        )
+        let fullyLoaded = WorkspaceFiles.replacingChildren(
+            in: withParent,
+            folder: nested,
+            with: WorkspaceFiles.tree(in: nested, recursive: false)
+        )
+
+        let newRoot = root.appendingPathComponent("New.md")
+        try "# New".write(to: newRoot, atomically: true, encoding: .utf8)
+        let reconciled = WorkspaceFiles.preservingLoadedChildren(
+            WorkspaceFiles.tree(in: root, recursive: false),
+            from: fullyLoaded
+        )
+
+        XCTAssertNotNil(reconciled.first(where: { $0.url == newRoot }))
+        let loadedParent = try XCTUnwrap(reconciled.first(where: { $0.url == parent }))
+        let loadedNested = try XCTUnwrap(
+            loadedParent.children?.first(where: { $0.url == nested })
+        )
+        XCTAssertEqual(loadedNested.children?.map(\.url), [deep])
+    }
+
+    @MainActor
+    func testLocalMutationKeepsLoadedTreeAndLazilyInvalidatesGlobalIndex() async throws {
+        func find(_ url: URL, in items: [NoteItem]) -> NoteItem? {
+            for item in items {
+                if item.url.standardizedFileURL == url.standardizedFileURL { return item }
+                if let children = item.children, let match = find(url, in: children) {
+                    return match
+                }
+            }
+            return nil
+        }
+
+        let defaults = UserDefaults.standard
+        let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let priorWorkspace { defaults.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let parent = root.appendingPathComponent("Parent", isDirectory: true)
+        let nested = parent.appendingPathComponent("Nested", isDirectory: true)
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let deep = nested.appendingPathComponent("Deep.md")
+        try "# Deep".write(to: deep, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<200 {
+            if !model.loadingFiles { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.loadExpandedFolder(parent)
+        for _ in 0..<200 {
+            if find(nested, in: model.files) != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.loadExpandedFolder(nested)
+        for _ in 0..<200 {
+            if find(deep, in: model.files) != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        model.prepareGlobalFileIndex()
+        for _ in 0..<300 {
+            if model.globalFileIndexReady { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(model.globalFileIndexReady)
+
+        let created = try XCTUnwrap(model.newNote(named: "Root New", in: root))
+        for _ in 0..<200 {
+            if find(created, in: model.files) != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertNotNil(find(created, in: model.files))
+        XCTAssertNotNil(find(deep, in: model.files),
+                        "A root-level mutation must not discard loaded descendants.")
+        XCTAssertFalse(model.globalFileIndexReady,
+                       "The complete index should become stale, not rebuild eagerly.")
+
+        model.prepareGlobalFileIndex()
+        for _ in 0..<300 {
+            if model.globalFileIndexReady { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(model.globalFileIndexReady)
+        XCTAssertTrue(model.globalFiles.contains { $0.url.standardizedFileURL == created.standardizedFileURL })
+    }
+
+    @MainActor
+    func testBatchExpandedFolderSchedulerLoadsManyPathsWithoutRepeatedRefeed() async throws {
+        let defaults = UserDefaults.standard
+        let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let priorWorkspace { defaults.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        var expanded: Set<String> = []
+        var expectedNotes: [URL] = []
+        for index in 0..<24 {
+            let folder = root.appendingPathComponent(String(format: "Folder-%02d", index), isDirectory: true)
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            let note = folder.appendingPathComponent("Note.md")
+            try "# \(index)".write(to: note, atomically: true, encoding: .utf8)
+            expanded.insert(folder.path)
+            expectedNotes.append(note.standardizedFileURL)
+        }
+
+        func flatten(_ items: [NoteItem]) -> Set<URL> {
+            var urls: Set<URL> = []
+            func visit(_ nodes: [NoteItem]) {
+                for item in nodes {
+                    if let children = item.children { visit(children) }
+                    else { urls.insert(item.url.standardizedFileURL) }
+                }
+            }
+            visit(items)
+            return urls
+        }
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<200 where model.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.loadExpandedFolders(expanded)
+
+        for _ in 0..<600 {
+            let loaded = flatten(model.files)
+            if expectedNotes.allSatisfy(loaded.contains) { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        let loaded = flatten(model.files)
+        XCTAssertTrue(expectedNotes.allSatisfy(loaded.contains))
     }
 
     @MainActor
@@ -524,6 +727,84 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertFalse(model.loadingNote)
     }
 
+    func testCanonicalWikiTargetIsRootRelativeEncodedAndRoundTrips() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = root.appendingPathComponent("Reference Notes", isDirectory: true)
+        let target = folder.appendingPathComponent("Design #1.md")
+        let source = root.appendingPathComponent("Current.md")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "# Target".write(to: target, atomically: true, encoding: .utf8)
+        try "# Current".write(to: source, atomically: true, encoding: .utf8)
+        defer { try? fm.removeItem(at: root) }
+
+        let wikiTarget = try XCTUnwrap(WorkspaceFiles.canonicalWikiTarget(for: target, in: root))
+        XCTAssertEqual(wikiTarget, "/Reference%20Notes/Design%20%231")
+        XCTAssertEqual(
+            WorkspaceFiles.resolveKnowledgeTarget(wikiTarget, from: source, in: root),
+            target.standardizedFileURL
+        )
+
+        try "# Overview\n## Café & 数据\n## Duplicate\n## duplicate".write(
+            to: target,
+            atomically: true,
+            encoding: .utf8
+        )
+        let sectionTarget = try XCTUnwrap(
+            WorkspaceFiles.canonicalWikiTarget(for: target, in: root, heading: "Café & 数据")
+        )
+        XCTAssertEqual(
+            sectionTarget,
+            "/Reference%20Notes/Design%20%231#Caf%C3%A9%20&%20%E6%95%B0%E6%8D%AE"
+        )
+        XCTAssertEqual(WorkspaceFiles.knowledgeFragment(in: sectionTarget), "Café & 数据")
+        XCTAssertEqual(
+            WorkspaceFiles.resolveKnowledgeTarget(sectionTarget, from: source, in: root),
+            target.standardizedFileURL
+        )
+        XCTAssertEqual(
+            WorkspaceFiles.linkableMarkdownHeadings(at: target, in: root)?.map(\.title),
+            ["Overview", "Café & 数据"]
+        )
+    }
+
+    @MainActor
+    func testMarkdownLinkHeadingFragmentProducesPreviewAnchorRequest() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let previous { defaults.set(previous, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let current = root.appendingPathComponent("Current.md")
+        let target = root.appendingPathComponent("Target.md")
+        try "# Current".write(to: current, atomically: true, encoding: .utf8)
+        try "# Intro\n\n## Details\nBody".write(to: target, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(current)
+        await waitForNote(model, current)
+
+        XCTAssertTrue(model.openInternalLink(URL(string: "Target.md#Details")!))
+        await waitForNote(model, target)
+        let first = try XCTUnwrap(model.markdownAnchorRequest)
+        XCTAssertEqual(first.note.standardizedFileURL, target.standardizedFileURL)
+        XCTAssertEqual(first.fragment, "Details")
+
+        XCTAssertTrue(model.openKnowledgeLink("#Intro"))
+        let second = try XCTUnwrap(model.markdownAnchorRequest)
+        XCTAssertEqual(second.note.standardizedFileURL, target.standardizedFileURL)
+        XCTAssertEqual(second.fragment, "Intro")
+        XCTAssertGreaterThan(second.sequence, first.sequence)
+    }
+
     func testQuickOpenSearchIsDerivedRankedAndIncludesNestedFiles() {
         let root = URL(fileURLWithPath: "/tmp/pks-quickopen")
         let docs = root.appendingPathComponent("Documents")
@@ -572,6 +853,58 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(matches.count, 24)
         XCTAssertEqual(matches.first?.name, "Note 0000")
         XCTAssertEqual(matches.last?.name, "Note 0023")
+    }
+
+    func testQuickOpenPrefixRangeKeepsRankingAndDiacriticFolding() {
+        let root = URL(fileURLWithPath: "/tmp/pks-quickopen-prefix")
+        let files = [
+            NoteItem(url: root.appendingPathComponent("Álpha.md"), children: nil),
+            NoteItem(url: root.appendingPathComponent("Alpha Notes.md"), children: nil),
+            NoteItem(url: root.appendingPathComponent("My Alpha.md"), children: nil),
+            NoteItem(url: root.appendingPathComponent("Archive/Alpha Folder/Other.md"), children: nil),
+            NoteItem(url: root.appendingPathComponent("Zulu.md"), children: nil)
+        ]
+        let entries = NoteTreePresentation.quickOpenEntries(files)
+
+        XCTAssertEqual(
+            NoteTreePresentation.quickOpen(entries, query: "alpha", limit: 2).map(\.name),
+            ["Álpha", "Alpha Notes"],
+            "Prefix matches should satisfy the bounded result before substring/path fallback."
+        )
+        XCTAssertEqual(
+            NoteTreePresentation.quickOpen(entries, query: "alpha").map(\.name),
+            ["Álpha", "Alpha Notes", "My Alpha", "Other"],
+            "Name substring matches must stay ahead of folder-path matches."
+        )
+        XCTAssertEqual(
+            NoteTreePresentation.quickOpen(entries, query: "my alpha").first?.name,
+            "My Alpha",
+            "Name substring fallback must remain available."
+        )
+        XCTAssertEqual(
+            NoteTreePresentation.quickOpen(entries, query: "alpha folder").first?.name,
+            "Other",
+            "Folder substring fallback must remain available."
+        )
+    }
+
+    func testQuickOpenLocalSeedIncludesDeepKnownNotesWithoutDuplicates() {
+        let root = URL(fileURLWithPath: "/tmp/pks-quickopen-seed")
+        let visible = root.appendingPathComponent("Visible.md")
+        let deepRecent = root.appendingPathComponent("Archive/2026/Deep Recent.md")
+        let tree = [NoteItem(url: visible, children: nil)]
+
+        let entries = NoteTreePresentation.quickOpenEntries(
+            tree,
+            prioritizedFiles: [deepRecent, visible]
+        )
+
+        XCTAssertEqual(entries.count, 2, "Known navigation URLs must not duplicate loaded tree items.")
+        XCTAssertEqual(
+            NoteTreePresentation.quickOpen(entries, query: "deep recent").first?.url,
+            deepRecent.standardizedFileURL,
+            "A deep recent/favorite note should be searchable before its folder is expanded."
+        )
     }
 
     func testFolderExpansionShowsOnlyVisibleDescendants() {
@@ -732,6 +1065,61 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: child.appendingPathComponent("Untitled 2.md").path
         ))
+    }
+
+    @MainActor
+    func testInactiveNewNoteCreationKeepsCurrentMarkdownAuthority() async throws {
+        let defaults = UserDefaults.standard
+        let previousRoot = defaults.string(forKey: "PKSNotesWorkspace")
+        let previousNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let previousRoot { defaults.set(previousRoot, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousNote { defaults.set(previousNote, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let current = root.appendingPathComponent("Map.md")
+        try "# Map\n- Topic".write(to: current, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(current)
+        await waitForNote(model, current)
+
+        let created = try XCTUnwrap(model.newNote(
+            named: "Topic.md",
+            in: root,
+            initialContent: "# Topic\n\n",
+            activateAfterCreation: false
+        ))
+
+        XCTAssertEqual(model.selected?.standardizedFileURL, current.standardizedFileURL)
+        XCTAssertEqual(model.draft, "# Map\n- Topic")
+        XCTAssertFalse(model.loadingNote)
+        XCTAssertEqual(try String(contentsOf: created, encoding: .utf8), "# Topic\n\n")
+
+        let target = try XCTUnwrap(WorkspaceFiles.canonicalWikiTarget(for: created, in: root))
+        let updated = try XCTUnwrap(MindMapOutline.appendWikiLink(
+            in: model.draft,
+            nodeID: 1,
+            target: target,
+            label: "Topic"
+        ))
+        model.draft = updated
+        model.save()
+
+        XCTAssertFalse(model.isDirty)
+        XCTAssertEqual(
+            try String(contentsOf: current, encoding: .utf8),
+            "# Map\n- Topic [[/Topic|Topic]]"
+        )
+        XCTAssertEqual(model.selected?.standardizedFileURL, current.standardizedFileURL)
     }
 
     @MainActor
@@ -1590,7 +1978,16 @@ extension PKSNotesTests {
         )
 
         let found = WorkspaceBacklinks.find(target: pdf, root: root, files: WorkspaceFiles.tree(in: root))
-        XCTAssertEqual(found, [NoteBacklink(source: note.standardizedFileURL, count: 2)])
+        XCTAssertEqual(found.count, 1)
+        XCTAssertEqual(found.first?.source, note.standardizedFileURL)
+        XCTAssertEqual(found.first?.count, 2)
+        XCTAssertEqual(
+            found.first?.locations,
+            [
+                NoteBacklinkLocation(lineIndex: 1, count: 1),
+                NoteBacklinkLocation(lineIndex: 2, count: 1)
+            ]
+        )
     }
 
     @MainActor
@@ -1831,6 +2228,64 @@ extension PKSNotesTests {
 
 
 extension PKSNotesTests {
+    func testTargetSpecificBacklinkResolutionPreservesExactBasenamePDFAndSymlinkRules() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let nested = root.appendingPathComponent("Nested", isDirectory: true)
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let source = root.appendingPathComponent("Source.md")
+        let target = nested.appendingPathComponent("Target.md")
+        let pdf = root.appendingPathComponent("Book.pdf")
+        let alias = root.appendingPathComponent("Alias.md")
+        try "# Source".write(to: source, atomically: true, encoding: .utf8)
+        try "# Target".write(to: target, atomically: true, encoding: .utf8)
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+        try fm.createSymbolicLink(at: alias, withDestinationURL: target)
+
+        let candidates = WorkspaceBacklinks.markdownFiles(WorkspaceFiles.tree(in: root))
+        let basenames = Dictionary(grouping: candidates) {
+            $0.deletingPathExtension().lastPathComponent
+        }
+
+        XCTAssertTrue(WorkspaceFiles.linkedTargetMatches(
+            "Nested/Target.md#section",
+            from: source,
+            target: target,
+            in: root,
+            candidateBasenames: basenames
+        ))
+        XCTAssertTrue(WorkspaceFiles.linkedTargetMatches(
+            "Target",
+            from: source,
+            target: target,
+            in: root,
+            candidateBasenames: basenames
+        ))
+        XCTAssertTrue(WorkspaceFiles.linkedTargetMatches(
+            "/Book.pdf#page=2",
+            from: source,
+            target: pdf,
+            in: root,
+            candidateBasenames: basenames
+        ))
+        XCTAssertFalse(WorkspaceFiles.linkedTargetMatches(
+            "Alias.md",
+            from: source,
+            target: target,
+            in: root,
+            candidateBasenames: basenames
+        ), "A symlink alias is not present in the secure candidate index.")
+        XCTAssertFalse(WorkspaceFiles.linkedTargetMatches(
+            "../Outside.md",
+            from: source,
+            target: target,
+            in: root,
+            candidateBasenames: basenames
+        ))
+    }
+
     func testBacklinkScanResultAndBasenameLookupStayDerived() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1868,10 +2323,82 @@ extension PKSNotesTests {
             files: tree,
             parseCache: cache
         )
-        XCTAssertEqual(scan.backlinks, [NoteBacklink(source: source.standardizedFileURL, count: 2)])
+        XCTAssertEqual(scan.backlinks.count, 1)
+        XCTAssertEqual(scan.backlinks.first?.source, source.standardizedFileURL)
+        XCTAssertEqual(scan.backlinks.first?.count, 2)
+        XCTAssertEqual(
+            scan.backlinks.first?.locations,
+            [
+                NoteBacklinkLocation(lineIndex: 0, count: 1),
+                NoteBacklinkLocation(lineIndex: 1, count: 1)
+            ]
+        )
         XCTAssertEqual(scan.skippedDatalessFiles, 0)
         XCTAssertEqual(cache.entryCount, 2)
         XCTAssertFalse(WorkspaceFiles.isDataless(source))
+    }
+
+    func testKnowledgeLinksKeepLargePlainTextAndFencedCodeCheapAndCorrect() {
+        let plain = Array(repeating: "ordinary prose without any link syntax", count: 2_000)
+            .joined(separator: "\n")
+        let markdown = """
+        \(plain)
+        ~~~swift
+        [[Ignored]]
+        [Ignored too](/Ignored.md)
+        ~~~
+        [[Kept|Visible]]
+        [Again](/Kept.md)
+        """
+
+        XCTAssertEqual(
+            MindMapOutline.knowledgeLinks(in: markdown),
+            [
+                MindMapLink(label: "Visible", target: "Kept"),
+                MindMapLink(label: "Again", target: "/Kept.md")
+            ]
+        )
+    }
+
+    func testBacklinkOccurrencesGroupMultipleReferencesOnTheSameSourceLine() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let target = root.appendingPathComponent("Beta.md")
+        let source = root.appendingPathComponent("Source.md")
+        try "# Beta".write(to: target, atomically: true, encoding: .utf8)
+        try "[B](/Beta.md) and [B2](/Beta.md)\n[B3](/Beta.md)".write(
+            to: source,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let files = [
+            NoteItem(url: source, children: nil),
+            NoteItem(url: target, children: nil)
+        ]
+        let index = WorkspaceLinkCandidateIndex(markdownFiles: [source, target])
+        let scan = WorkspaceBacklinks.scan(
+            target: target,
+            root: root,
+            files: files,
+            candidateIndex: index,
+            parseCache: WorkspaceBacklinkParseCache(capacity: 4)
+        )
+
+        let backlink = try XCTUnwrap(scan.backlinks.first)
+        XCTAssertEqual(backlink.source, source.standardizedFileURL)
+        XCTAssertEqual(backlink.sourceStamp, WorkspaceFiles.fileStamp(source))
+        XCTAssertEqual(backlink.count, 3)
+        XCTAssertEqual(
+            backlink.locations,
+            [
+                NoteBacklinkLocation(lineIndex: 0, count: 2),
+                NoteBacklinkLocation(lineIndex: 1, count: 1)
+            ]
+        )
     }
 
     func testBacklinkParseCacheReusesUnchangedLinksAndInvalidatesReplacement() throws {
@@ -1887,6 +2414,7 @@ extension PKSNotesTests {
         let first = try XCTUnwrap(cache.lookup(source))
         XCTAssertFalse(first.hit)
         XCTAssertEqual(first.links.map(\.target), ["/Alpha.md"])
+        XCTAssertEqual(first.occurrences.map(\.lineIndex), [0])
         XCTAssertEqual(cache.entryCount, 1)
 
         let second = try XCTUnwrap(cache.lookup(source))
@@ -1899,6 +2427,7 @@ extension PKSNotesTests {
         let third = try XCTUnwrap(cache.lookup(source))
         XCTAssertFalse(third.hit)
         XCTAssertEqual(third.links.map(\.target), ["/Beta.md"])
+        XCTAssertEqual(third.occurrences.map(\.lineIndex), [0])
         XCTAssertEqual(cache.entryCount, 1)
 
         let another = root.appendingPathComponent("Another.md")
@@ -1906,7 +2435,13 @@ extension PKSNotesTests {
         try "[A](/A.md)".write(to: another, atomically: true, encoding: .utf8)
         try "[T](/T.md)".write(to: thirdFile, atomically: true, encoding: .utf8)
         _ = cache.lookup(another)
+        XCTAssertTrue(try XCTUnwrap(cache.lookup(source)).hit,
+                      "Touching Source should make it the most recently used entry.")
         _ = cache.lookup(thirdFile)
+        XCTAssertTrue(try XCTUnwrap(cache.lookup(source)).hit,
+                      "The most recently used entry must survive capacity eviction.")
+        XCTAssertFalse(try XCTUnwrap(cache.lookup(another)).hit,
+                       "The least recently used entry should be evicted in O(1).")
         XCTAssertLessThanOrEqual(cache.entryCount, 2)
 
         cache.removeAll()

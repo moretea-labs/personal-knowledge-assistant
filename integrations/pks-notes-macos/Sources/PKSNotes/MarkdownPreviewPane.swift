@@ -10,14 +10,18 @@ struct ParsedMarkdownSection: Identifiable {
 }
 
 enum MarkdownPreviewParsing {
-    static func prepare(_ text: String, match: SearchHit?) -> [ParsedMarkdownSection] {
+    static func prepare(
+        _ text: String,
+        match: SearchHit?,
+        anchorFragment: String? = nil
+    ) -> [ParsedMarkdownSection] {
         // A single giant Markdown view lays out the entire document on the main thread.
         // Large notes without shared reference definitions can be split at headings:
         // LazyVStack then constructs only the nearby section views. Keep whole-document
         // parsing for reference links and footnotes (e.g. [ref]: or [^note]:) because
         // their definitions may be used in another section.
         let lazySections = text.utf8.count >= 12_000 && !text.contains("]:")
-        let parts = match != nil || lazySections
+        let parts = match != nil || anchorFragment != nil || lazySections
             ? MarkdownSection.sections(in: text)
             : [MarkdownSection(id: 0, heading: nil, markdown: text)]
         return parts.map { ParsedMarkdownSection(source: $0, content: MarkdownContent($0.markdown)) }
@@ -55,10 +59,20 @@ struct MarkdownPreviewPane: View {
         let identity: String
         let revision: UInt64
         let matchID: String?
+        let anchorSequence: UInt64?
         let live: Bool
     }
 
     @State private var renderedRevision = 0
+    @State private var preparedAnchorSequence: UInt64?
+    @State private var lastAnchorJumpSequence: UInt64?
+
+    private var anchorRequest: MarkdownAnchorRequest? {
+        guard let request = model.markdownAnchorRequest,
+              request.note.standardizedFileURL.path == identity
+        else { return nil }
+        return request
+    }
 
     private var rendered: [ParsedMarkdownSection] {
         guard let cache,
@@ -104,21 +118,31 @@ struct MarkdownPreviewPane: View {
                     .padding(.vertical, 36)
                 }
             }
-            .onAppear { jumpToMatch(scroll) }
+            .onAppear { jumpToNavigation(scroll) }
             .onChange(of: renderedRevision) { _, _ in
-                jumpToMatch(scroll)
+                jumpToNavigation(scroll)
             }
             .onChange(of: model.matchJumpSequence) { _, _ in
-                jumpToMatch(scroll)
+                jumpToNavigation(scroll)
+            }
+            .onChange(of: model.markdownAnchorRequest?.sequence) { _, _ in
+                jumpToNavigation(scroll)
             }
         }
         .background(theme.canvas)
         .accessibilityIdentifier("pks-markdown-preview")
-        .task(id: RenderKey(identity: identity, revision: revision,
-                            matchID: model.activeMatch?.id, live: live)) {
+        .task(id: RenderKey(
+            identity: identity,
+            revision: revision,
+            matchID: model.activeMatch?.id,
+            anchorSequence: anchorRequest?.sequence,
+            live: live
+        )) {
             let match = model.activeMatch
             let matchID = match?.id
-            guard cache?.matches(identity: identity, revision: revision, matchID: matchID) != true
+            let anchor = anchorRequest
+            guard anchor != nil
+                    || cache?.matches(identity: identity, revision: revision, matchID: matchID) != true
             else { return }
 
             // Only debounce edits to the *same* open document. First preview has no artificial delay.
@@ -131,15 +155,48 @@ struct MarkdownPreviewPane: View {
             let documentID = identity
             let documentRevision = revision
             let parser = Task.detached(priority: .userInitiated) {
-                MarkdownPreviewParsing.prepare(input, match: match)
+                MarkdownPreviewParsing.prepare(
+                    input,
+                    match: match,
+                    anchorFragment: anchor?.fragment
+                )
             }
             defer { parser.cancel() }
             let sections = await parser.value
             guard !Task.isCancelled else { return }
+            preparedAnchorSequence = anchor?.sequence
             cache = MarkdownPreviewSnapshot(identity: documentID, revision: documentRevision,
                                             matchID: matchID, sections: sections)
             renderedRevision &+= 1
         }
+    }
+
+    private func jumpToNavigation(_ scroll: ScrollViewProxy) {
+        if jumpToAnchor(scroll) { return }
+        jumpToMatch(scroll)
+    }
+
+    @discardableResult
+    private func jumpToAnchor(_ scroll: ScrollViewProxy) -> Bool {
+        guard let request = anchorRequest else { return false }
+        if lastAnchorJumpSequence == request.sequence { return true }
+        guard preparedAnchorSequence == request.sequence else { return true }
+
+        guard let heading = MarkdownOutline.heading(
+            matchingFragment: request.fragment,
+            in: source
+        ), rendered.contains(where: { $0.id == heading.sectionID }) else {
+            lastAnchorJumpSequence = request.sequence
+            model.message = language.text("Heading not found in linked note.")
+            return true
+        }
+
+        lastAnchorJumpSequence = request.sequence
+        model.message = nil
+        withAnimation(.easeInOut(duration: 0.18)) {
+            scroll.scrollTo(heading.sectionID, anchor: .top)
+        }
+        return true
     }
 
     private func jumpToMatch(_ scroll: ScrollViewProxy) {
