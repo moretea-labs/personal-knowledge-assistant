@@ -302,20 +302,13 @@ struct NotesWindow: View {
     @State private var outgoingLinks: [MindMapLink] = []
     @State private var visibleTreeRows: [NoteTreePresentation.Row] = []
     @State private var quickOpenEntries: [NoteTreePresentation.QuickOpenEntry] = []
+    @State private var quickOpenMatches: [NoteItem] = []
     @State private var showingQuickOpen = false
     @State private var showingBacklinks = false
     @State private var quickOpenQuery = ""
     @State private var quickOpenIndex = 0
     @State private var pdfCaptureRequest: PDFCaptureRequest?
     @State private var pdfCaptureCommentary = ""
-
-    private var quickOpenMatches: [NoteItem] {
-        let matches = NoteTreePresentation.quickOpen(quickOpenEntries, query: quickOpenQuery)
-        guard pdfCaptureRequest != nil else { return matches }
-        return matches.filter {
-            !$0.isFolder && ["md", "markdown"].contains($0.url.pathExtension.lowercased())
-        }
-    }
 
     private var pdfCapturePreviewText: String? {
         guard let text = pdfCaptureRequest?.selectedText?
@@ -659,6 +652,7 @@ struct NotesWindow: View {
                 // visible. Directory expansion and file mutations should not pay this
                 // derived-work cost in the background.
                 quickOpenEntries = NoteTreePresentation.quickOpenEntries(files)
+                rebuildQuickOpenMatches()
             }
             model.loadExpandedFolders(expandedFolderPaths)
         }
@@ -671,6 +665,10 @@ struct NotesWindow: View {
                 // projection. Keep an open picker useful immediately from the loaded tree.
                 quickOpenEntries = NoteTreePresentation.quickOpenEntries(model.files)
             }
+            rebuildQuickOpenMatches()
+        }
+        .onChange(of: quickOpenQuery) { _, _ in
+            if showingQuickOpen { rebuildQuickOpenMatches() }
         }
         .onChange(of: expandedFolderPaths) { _, expanded in
             visibleTreeRows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expanded)
@@ -841,10 +839,25 @@ struct NotesWindow: View {
         }
     }
 
+    private func rebuildQuickOpenMatches() {
+        let matches = NoteTreePresentation.quickOpen(quickOpenEntries, query: quickOpenQuery)
+        if pdfCaptureRequest != nil {
+            quickOpenMatches = matches.filter {
+                !$0.isFolder && ["md", "markdown"].contains($0.url.pathExtension.lowercased())
+            }
+        } else {
+            quickOpenMatches = matches
+        }
+        quickOpenIndex = quickOpenMatches.isEmpty
+            ? 0
+            : min(quickOpenIndex, quickOpenMatches.count - 1)
+    }
+
     private func prepareQuickOpenPresentation() {
         quickOpenEntries = model.globalFileIndexReady
             ? model.globalQuickOpenEntries
             : NoteTreePresentation.quickOpenEntries(model.files)
+        rebuildQuickOpenMatches()
         model.prepareGlobalFileIndex()
         showingQuickOpen = true
     }
@@ -877,6 +890,7 @@ struct NotesWindow: View {
 
     private func closeQuickPicker() {
         showingQuickOpen = false
+        quickOpenMatches = []
         pdfCaptureRequest = nil
         pdfCaptureCommentary = ""
     }
