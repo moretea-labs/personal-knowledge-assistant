@@ -252,25 +252,81 @@ struct MindMapLink: Equatable {
     let target: String
 }
 
+struct MindMapNodePresentation: Equatable {
+    let title: String
+    let links: [MindMapLink]
+}
+
 extension MindMapOutline {
-    static func links(in title: String) -> [MindMapLink] {
-        var links: [MindMapLink] = []
-        let range = NSRange(title.startIndex..<title.endIndex, in: title)
-        for (index, regex) in [wikiLinkRegex, markdownLinkRegex].enumerated() {
-            for match in regex.matches(in: title, range: range) {
-                guard let labelRange = Range(match.range(at: 1), in: title) else { continue }
-                let raw = String(title[labelRange])
-                if index == 0 {
-                    let parts = raw.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
-                    let target = String(parts[0]).trimmingCharacters(in: .whitespaces)
-                    let label = parts.count == 2 ? String(parts[1]) : target
-                    if !target.isEmpty { links.append(.init(label: label, target: target)) }
-                } else if let targetRange = Range(match.range(at: 2), in: title) {
-                    links.append(.init(label: raw, target: String(title[targetRange])))
-                }
-            }
+    private struct ParsedLink {
+        let range: NSRange
+        let link: MindMapLink
+    }
+
+    private static func parsedLinks(in title: String) -> [ParsedLink] {
+        var parsed: [ParsedLink] = []
+        let fullRange = NSRange(title.startIndex..<title.endIndex, in: title)
+
+        for match in wikiLinkRegex.matches(in: title, range: fullRange) {
+            guard let labelRange = Range(match.range(at: 1), in: title) else { continue }
+            let raw = String(title[labelRange])
+            let parts = raw.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+            let target = String(parts[0]).trimmingCharacters(in: .whitespaces)
+            let label = parts.count == 2 ? String(parts[1]) : target
+            guard !target.isEmpty else { continue }
+            parsed.append(.init(range: match.range(at: 0), link: .init(label: label, target: target)))
         }
-        return links
+
+        for match in markdownLinkRegex.matches(in: title, range: fullRange) {
+            guard let labelRange = Range(match.range(at: 1), in: title),
+                  let targetRange = Range(match.range(at: 2), in: title) else { continue }
+            parsed.append(.init(
+                range: match.range(at: 0),
+                link: .init(
+                    label: String(title[labelRange]),
+                    target: String(title[targetRange])
+                )
+            ))
+        }
+
+        return parsed
+    }
+
+    static func links(in title: String) -> [MindMapLink] {
+        parsedLinks(in: title).map(\.link)
+    }
+
+    /// Derive display-only node text from canonical Markdown. Links remain stored
+    /// only in the source line; the Mind Map replaces markup with human labels.
+    static func presentation(for title: String) -> MindMapNodePresentation {
+        let parsed = parsedLinks(in: title).sorted { lhs, rhs in
+            if lhs.range.location != rhs.range.location {
+                return lhs.range.location < rhs.range.location
+            }
+            return lhs.range.length > rhs.range.length
+        }
+        guard !parsed.isEmpty else {
+            return .init(title: title, links: [])
+        }
+
+        let nsTitle = title as NSString
+        var rendered = ""
+        var cursor = 0
+        for item in parsed where item.range.location >= cursor {
+            if item.range.location > cursor {
+                rendered += nsTitle.substring(
+                    with: NSRange(location: cursor, length: item.range.location - cursor)
+                )
+            }
+            rendered += item.link.label
+            cursor = NSMaxRange(item.range)
+        }
+        if cursor < nsTitle.length {
+            rendered += nsTitle.substring(from: cursor)
+        }
+
+        let clean = rendered.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .init(title: clean.isEmpty ? title : clean, links: parsed.map(\.link))
     }
 }
 

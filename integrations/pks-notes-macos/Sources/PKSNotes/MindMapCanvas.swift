@@ -331,6 +331,7 @@ struct MindMapCanvas: View {
 
     @ViewBuilder
     private func nodeCard(_ node: MindMapNode, hasChildren: Bool, exporting: Bool = false) -> some View {
+        let presentation = MindMapOutline.presentation(for: node.title)
         HStack(spacing: 9) {
             if hasChildren {
                 if exporting {
@@ -387,14 +388,14 @@ struct MindMapCanvas: View {
                 .help(language.text("Cancel"))
                 .accessibilityIdentifier("pks-mind-map-inline-cancel")
             } else {
-                Text(node.title)
+                Text(presentation.title)
                     .font(.system(size: node.depth == 0 ? 16 : 14,
                                   weight: node.depth == 0 ? .semibold : .medium))
                     .lineLimit(2)
             }
             Spacer(minLength: 0)
 
-            if !exporting, let link = MindMapOutline.links(in: node.title).first {
+            if !exporting, presentation.links.count == 1, let link = presentation.links.first {
                 Button {
                     openLink(link.target)
                 } label: {
@@ -405,6 +406,32 @@ struct MindMapCanvas: View {
                 .buttonStyle(.plain)
                 .help("\(language.text("Open linked note")) · \(link.label)")
                 .accessibilityLabel("\(language.text("Open linked note")) \(link.label)")
+            } else if !exporting, presentation.links.count > 1 {
+                Menu {
+                    ForEach(Array(presentation.links.enumerated()), id: \.offset) { _, link in
+                        Button {
+                            openLink(link.target)
+                        } label: {
+                            Label(link.label, systemImage: "link")
+                        }
+                        .help(link.target)
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "link")
+                        Text("\(presentation.links.count)")
+                            .font(.caption2.monospacedDigit())
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .frame(height: 22)
+                    .background(Color.primary.opacity(0.055), in: Capsule())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help(language.text("Open linked note"))
+                .accessibilityLabel("\(language.text("Open linked note")) \(presentation.links.count)")
             }
         }
         .padding(.horizontal, 13)

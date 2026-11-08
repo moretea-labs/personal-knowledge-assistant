@@ -96,6 +96,26 @@ extension MindMapOutlineTests {
         XCTAssertEqual(MindMapOutline.links(in: nodes[2].title), [.init(label: "Spec", target: "../spec.md")])
         XCTAssertEqual(MindMapOutline.rename(in: source, nodeID: 1, to: "[[Notes/Architecture]]"), "# Project\n- [[Notes/Architecture]]\n- [Spec](../spec.md)")
     }
+
+    func testNodePresentationUsesHumanLabelsAndKeepsEveryLinkInSourceOrder() {
+        let raw = "Compare [Spec](../spec.md) with [[Notes/Design|Design notes]] and [[Roadmap]]"
+        let presentation = MindMapOutline.presentation(for: raw)
+
+        XCTAssertEqual(presentation.title, "Compare Spec with Design notes and Roadmap")
+        XCTAssertEqual(
+            presentation.links,
+            [
+                .init(label: "Spec", target: "../spec.md"),
+                .init(label: "Design notes", target: "Notes/Design"),
+                .init(label: "Roadmap", target: "Roadmap")
+            ]
+        )
+        XCTAssertEqual(
+            raw,
+            "Compare [Spec](../spec.md) with [[Notes/Design|Design notes]] and [[Roadmap]]",
+            "Presentation must never mutate the canonical Markdown title."
+        )
+    }
 }
 
 
