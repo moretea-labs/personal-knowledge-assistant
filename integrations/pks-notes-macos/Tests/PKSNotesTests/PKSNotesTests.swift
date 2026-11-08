@@ -2959,4 +2959,29 @@ extension PKSNotesTests {
         await waitForNote(model, first)
         XCTAssertEqual(model.draft, "# First\nSaved")
     }
+    @MainActor
+    func testFirstOpenOfMaterializedMarkdownReadsWithoutCloudHandshake() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let first = root.appendingPathComponent("第一篇.md")
+        let expected = "# 第一篇\nHello, PKS Notes.\n"
+        try expected.write(to: first, atomically: true, encoding: .utf8)
+        XCTAssertFalse(WorkspaceFiles.isDataless(first))
+
+        let loaded = try await WorkspaceFiles.readUTF8ForOpening(first)
+        XCTAssertEqual(loaded.content, expected)
+        XCTAssertEqual(loaded.stamp, WorkspaceFiles.fileStamp(first))
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(first)
+        await waitForNote(model, first)
+        XCTAssertFalse(model.loadingNote)
+        XCTAssertEqual(model.draft, expected)
+        XCTAssertNil(model.message)
+    }
+
 }

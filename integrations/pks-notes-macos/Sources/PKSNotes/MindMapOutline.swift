@@ -257,6 +257,7 @@ struct MindMapNodePresentation: Equatable {
 extension MindMapOutline {
     private struct ParsedLink {
         let range: NSRange
+        let targetRange: NSRange
         let link: MindMapLink
     }
 
@@ -271,14 +272,29 @@ extension MindMapOutline {
             let target = String(parts[0]).trimmingCharacters(in: .whitespaces)
             let label = parts.count == 2 ? String(parts[1]) : target
             guard !target.isEmpty else { continue }
-            parsed.append(.init(range: match.range(at: 0), link: .init(label: label, target: target)))
+            let leading = String(parts[0]).prefix(while: { $0.isWhitespace }).utf16.count
+            let targetRange = NSRange(
+                location: match.range(at: 1).location + leading,
+                length: target.utf16.count
+            )
+            parsed.append(.init(
+                range: match.range(at: 0),
+                targetRange: targetRange,
+                link: .init(label: label, target: target)
+            ))
         }
 
+        let nsTitle = title as NSString
         for match in markdownLinkRegex.matches(in: title, range: fullRange) {
+            // Markdown image embeds are content, not knowledge relationships.
+            // Keep their syntax intact in node presentation and backlink scans.
+            guard match.range.location == 0
+                    || nsTitle.character(at: match.range.location - 1) != 33 else { continue }
             guard let labelRange = Range(match.range(at: 1), in: title),
                   let targetRange = Range(match.range(at: 2), in: title) else { continue }
             parsed.append(.init(
                 range: match.range(at: 0),
+                targetRange: match.range(at: 2),
                 link: .init(
                     label: String(title[labelRange]),
                     target: String(title[targetRange])
@@ -291,6 +307,31 @@ extension MindMapOutline {
 
     static func links(in title: String) -> [MindMapLink] {
         parsedLinks(in: title).map(\.link)
+    }
+
+    /// Explicit repair using the existing canonical link parser and Markdown writer.
+    /// Link labels, images, fenced code and unrelated text remain unchanged.
+    static func retargetLinks(in source: String, from oldTarget: String, to newTarget: String) -> String? {
+        guard !oldTarget.isEmpty, !newTarget.isEmpty,
+              !newTarget.contains("]"), !newTarget.contains(")"),
+              !newTarget.contains("|"), !newTarget.contains("\n"),
+              !newTarget.contains("\r") else { return nil }
+        let touched = Set(linkOccurrences(in: source)
+            .filter { $0.link.target == oldTarget }
+            .map(\.lineIndex))
+        guard !touched.isEmpty else { return nil }
+        var lines = source.components(separatedBy: "\n")
+        for lineIndex in touched {
+            let changed = NSMutableString(string: lines[lineIndex])
+            let matches = parsedLinks(in: lines[lineIndex])
+                .filter { $0.link.target == oldTarget }
+                .sorted { $0.targetRange.location > $1.targetRange.location }
+            for match in matches {
+                changed.replaceCharacters(in: match.targetRange, with: newTarget)
+            }
+            lines[lineIndex] = changed as String
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Preserve every Markdown link occurrence and its canonical source line.

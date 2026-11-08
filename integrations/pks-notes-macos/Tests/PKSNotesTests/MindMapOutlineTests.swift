@@ -98,6 +98,41 @@ extension MindMapOutlineTests {
         XCTAssertEqual(MindMapOutline.rename(in: source, nodeID: 1, to: "[[Notes/Architecture]]"), "# Project\n- [[Notes/Architecture]]\n- [Spec](../spec.md)")
     }
 
+    func testRetargetLinksPreservesLabelsImagesAndFencedExamples() {
+        let source = """
+        # Root
+        🌿 [Old path](/Notes/Old) and [[/Notes/Old|Reading]] ![Cover](/Notes/Old)
+        ~~~markdown
+        [Example](/Notes/Old)
+        ~~~
+        Unrelated /Notes/Old
+        """
+        let expected = """
+        # Root
+        🌿 [Old path](/Notes/New) and [[/Notes/New|Reading]] ![Cover](/Notes/Old)
+        ~~~markdown
+        [Example](/Notes/Old)
+        ~~~
+        Unrelated /Notes/Old
+        """
+        XCTAssertEqual(MindMapOutline.retargetLinks(
+            in: source, from: "/Notes/Old", to: "/Notes/New"
+        ), expected)
+        XCTAssertNil(MindMapOutline.retargetLinks(
+            in: source, from: "/Notes/Missing", to: "/Notes/New"
+        ))
+    }
+
+    func testMarkdownImagesDoNotBecomeKnowledgeLinks() {
+        let line = "![Cover](assets/cover.png) and [Reference](/Refs.md)"
+        XCTAssertEqual(MindMapOutline.links(in: line),
+                       [.init(label: "Reference", target: "/Refs.md")])
+        XCTAssertEqual(MindMapOutline.linkOccurrences(in: line).map(\.link.target),
+                       ["/Refs.md"])
+        XCTAssertEqual(MindMapOutline.presentation(for: line).title,
+                       "![Cover](assets/cover.png) and Reference")
+    }
+
     func testNodePresentationUsesHumanLabelsAndKeepsEveryLinkInSourceOrder() {
         let raw = "Compare [Spec](../spec.md) with [[Notes/Design|Design notes]] and [[Roadmap]]"
         let presentation = MindMapOutline.presentation(for: raw)

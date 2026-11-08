@@ -105,37 +105,44 @@ enum WorkspaceFiles {
         return root
     }
 
-    /// One File Provider hydration path for every reader. Dataless placeholders can
-    /// fail immediately with EDEADLK when consumers try to parse them directly.
+    /// Only dataless placeholders require a File Provider download. Asking for a
+    /// download of an already-materialized file can report a transient status and
+    /// turn a perfectly readable first click into a false file-open failure.
     static func hydrateUbiquitousItemIfNeeded(_ url: URL) async throws {
-        guard FileManager.default.isUbiquitousItem(at: url) else { return }
-        let keys: Set<URLResourceKey> = [.ubiquitousItemDownloadingStatusKey]
-        var status = try? url.resourceValues(forKeys: keys).ubiquitousItemDownloadingStatus
-        guard status != .current else { return }
+        guard FileManager.default.isUbiquitousItem(at: url),
+              isDataless(url) else { return }
 
         try FileManager.default.startDownloadingUbiquitousItem(at: url)
         for _ in 0..<200 {
             try Task.checkCancellation()
-            status = try? url.resourceValues(forKeys: keys).ubiquitousItemDownloadingStatus
-            if status == .current { return }
+            // On modern File Provider, the POSIX dataless flag is the actual
+            // read-readiness authority; resourceValues can lag or be absent.
+            if !isDataless(url) { return }
             try await Task.sleep(for: .milliseconds(50))
         }
         throw CocoaError(.fileReadUnknown)
     }
 
-    /// Keep hydration and content IO off the main actor, then capture the final POSIX
-    /// stamp after hydration so save/conflict detection does not mistake a download for
-    /// an external edit. A second read is allowed only when the file changed mid-read.
+    /// The file itself remains canonical. Read locally available Markdown on
+    /// the first click without an unnecessary iCloud handshake. After hydration,
+    /// allow a few short metadata-settling attempts instead of failing instantly
+    /// when File Provider updates ctime during the read.
     static func readUTF8ForOpening(_ url: URL) async throws -> (content: String, stamp: WorkspaceFileStamp) {
-        try await hydrateUbiquitousItemIfNeeded(url)
+        if isDataless(url) {
+            try await hydrateUbiquitousItemIfNeeded(url)
+        }
 
-        for _ in 0..<2 {
+        for attempt in 0..<4 {
             try Task.checkCancellation()
             guard let before = fileStamp(url) else { throw CocoaError(.fileReadNoSuchFile) }
             let content = try String(contentsOf: url, encoding: .utf8)
             guard let after = fileStamp(url) else { throw CocoaError(.fileReadNoSuchFile) }
             if before == after { return (content, after) }
+            if attempt < 3 {
+                try await Task.sleep(for: .milliseconds(40))
+            }
         }
+        // Do not accept an unstable document or disguise concurrent writes.
         throw CocoaError(.fileReadUnknown)
     }
 
@@ -927,6 +934,7 @@ final class NotesModel: ObservableObject {
     private var securityScopedFolder: URL?
     private var backlinkTask: Task<Void, Never>?
     private var backlinkParseCache = WorkspaceBacklinkParseCache()
+    private var cloudBacklinkCursor = 0
     private var relatedTask: Task<Void, Never>?
     private var fileRefreshTask: Task<Void, Never>?
     private var folderLoadTask: Task<Void, Never>?
@@ -1847,11 +1855,27 @@ final class NotesModel: ObservableObject {
         }
     }
 
-    private func refreshBacklinks(for note: URL, files suppliedFiles: [NoteItem]? = nil) {
+    /// Cloud-only backlinks remain excluded by default: opt in to a bounded
+    /// download batch instead of silently hydrating an entire large vault.
+    func loadMoreCloudBacklinks() {
+        guard !loadingBacklinks, backlinkSkippedCloudFiles > 0,
+              let target = previewPDF ?? selected else { return }
+        refreshBacklinks(for: target, hydrateCloudLimit: 6)
+    }
+
+    private func refreshBacklinks(
+        for note: URL,
+        files suppliedFiles: [NoteItem]? = nil,
+        hydrateCloudLimit: Int = 0
+    ) {
         guard let root else { return }
         backlinkTask?.cancel()
-        backlinks = []
-        backlinkSkippedCloudFiles = 0
+        if hydrateCloudLimit == 0 {
+            backlinks = []
+            backlinkSkippedCloudFiles = 0
+            cloudBacklinkCursor = 0
+        }
+        let startCursor = cloudBacklinkCursor
         loadingBacklinks = true
         backlinkTask = Task { [weak self] in
             guard let self else { return }
@@ -1871,18 +1895,42 @@ final class NotesModel: ObservableObject {
             guard !Task.isCancelled, self.root == root else { return }
 
             let parseCache = self.backlinkParseCache
-            let scan = await Task.detached(priority: .utility) {
-                WorkspaceBacklinks.scan(
+            let scanTask = Task.detached(priority: .utility) {
+                var nextCursor = startCursor
+                if hydrateCloudLimit > 0 {
+                    let sources = candidateIndex?.markdownFiles
+                        ?? WorkspaceBacklinks.markdownFiles(snapshot)
+                    var attempted = 0
+                    while nextCursor < sources.count && attempted < hydrateCloudLimit {
+                        guard !Task.isCancelled else { break }
+                        let source = sources[nextCursor]
+                        nextCursor += 1
+                        guard source != note, WorkspaceFiles.isDataless(source) else { continue }
+                        attempted += 1
+                        // One click attempts at most six downloads; a failure
+                        // stays visibly skipped, but the next click advances.
+                        try? await WorkspaceFiles.hydrateUbiquitousItemIfNeeded(source)
+                    }
+                    if nextCursor == sources.count { nextCursor = 0 }
+                }
+                let scan = WorkspaceBacklinks.scan(
                     target: note,
                     root: root,
                     files: snapshot,
                     candidateIndex: candidateIndex,
                     parseCache: parseCache
                 )
-            }.value
+                return (scan, nextCursor)
+            }
+            let (scan, nextCursor) = await withTaskCancellationHandler {
+                await scanTask.value
+            } onCancel: {
+                scanTask.cancel()
+            }
             guard !Task.isCancelled,
                   (self.selected == note || self.previewPDF == note),
                   self.root == root else { return }
+            self.cloudBacklinkCursor = nextCursor
             self.backlinks = scan.backlinks
             self.backlinkSkippedCloudFiles = scan.skippedDatalessFiles
             self.loadingBacklinks = false
@@ -2266,36 +2314,11 @@ final class NotesModel: ObservableObject {
         requestMarkdownAnchorIfNavigationStarted(fragment, note: resolved)
     }
 
+    /// Markdown preview and relationship panels use the same resolver, fallback
+    /// index, Markdown heading navigation and PDF anchor handling.
     func openInternalLink(_ url: URL) -> Bool {
-        guard let root, let selected else { return false }
-        let fragment = url.fragment?.removingPercentEncoding ?? url.fragment
-        if url.path.isEmpty,
-           let fragment,
-           !fragment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           ["md", "markdown"].contains(selected.pathExtension.lowercased()) {
-            requestMarkdownAnchor(fragment, note: selected)
-            message = nil
-            return true
-        }
-
-        guard let resolved = WorkspaceFiles.resolve(url, from: selected, in: root) else { return false }
-        if resolved.pathExtension.isEmpty {
-            let markdown = resolved.appendingPathExtension("md")
-            if FileManager.default.fileExists(atPath: markdown.path) {
-                openFile(markdown)
-                requestMarkdownAnchorIfNavigationStarted(fragment, note: markdown)
-                return true
-            }
-        }
-        guard FileManager.default.fileExists(atPath: resolved.path) else { return false }
-        let isPDF = resolved.pathExtension.lowercased() == "pdf"
-        let anchor = isPDF ? PDFPageReference.anchor(from: url) : nil
-        let page = isPDF ? anchor?.page ?? PDFPageReference.page(from: url) : nil
-        openFile(resolved, pdfPage: page, pdfAnchor: anchor)
-        if !isPDF {
-            requestMarkdownAnchorIfNavigationStarted(fragment, note: resolved)
-        }
-        return true
+        guard url.scheme == nil || url.isFileURL else { return false }
+        return openKnowledgeLink(url.relativeString)
     }
 
     /// Only owned regular files and real directories inside the active vault
