@@ -20,8 +20,8 @@ This file is the submission-copy authority for the first macOS App Store release
 
 These values must be real, public, and verified before creating the final submission:
 
-- Support URL: **REQUIRED — must lead to actual contact information**
-- Privacy Policy URL: **REQUIRED — public URL**
+- Support URL: `https://github.com/moretea-labs/personal-knowledge-assistant/blob/main/SUPPORT.md` — **VERIFIED public (HTTP 200, 2026-11-08)**
+- Privacy Policy URL: `https://github.com/moretea-labs/personal-knowledge-assistant/blob/main/PRIVACY.md` — **VERIFIED public (HTTP 200, 2026-11-08)**
 - App Review contact name: **REQUIRED**
 - App Review contact email: **REQUIRED**
 - App Review contact phone in international format: **REQUIRED**
