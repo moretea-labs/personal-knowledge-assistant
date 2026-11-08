@@ -395,6 +395,84 @@ private struct GlobalFileIndexSnapshot {
     let quickOpenEntries: [NoteTreePresentation.QuickOpenEntry]
 }
 
+/// Session-only memoization of raw outgoing Markdown links. The file itself
+/// remains authoritative: every lookup validates the existing POSIX stamp and
+/// target-specific backlink resolution is still recomputed by WorkspaceBacklinks.
+final class WorkspaceBacklinkParseCache: @unchecked Sendable {
+    struct Lookup {
+        let links: [MindMapLink]
+        let hit: Bool
+    }
+
+    private struct Entry {
+        let stamp: WorkspaceFileStamp
+        let links: [MindMapLink]
+        var lastAccess: UInt64
+    }
+
+    private let lock = NSLock()
+    private let capacity: Int
+    private var accessClock: UInt64 = 0
+    private var entries: [String: Entry] = [:]
+
+    init(capacity: Int = 1_024) {
+        self.capacity = max(1, capacity)
+    }
+
+    func lookup(_ source: URL) -> Lookup? {
+        let url = source.standardizedFileURL
+        let key = url.path
+        guard let stamp = WorkspaceFiles.fileStamp(url) else { return nil }
+
+        lock.lock()
+        if var cached = entries[key] {
+            if cached.stamp == stamp {
+                accessClock &+= 1
+                cached.lastAccess = accessClock
+                entries[key] = cached
+                let links = cached.links
+                lock.unlock()
+                return Lookup(links: links, hit: true)
+            }
+            entries.removeValue(forKey: key)
+        }
+        lock.unlock()
+
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let links = MindMapOutline.links(in: content)
+
+        // If another editor changed the file while it was being read, use this
+        // parse for the current scan but do not memoize it under a stale stamp.
+        guard WorkspaceFiles.fileStamp(url) == stamp else {
+            return Lookup(links: links, hit: false)
+        }
+
+        lock.lock()
+        accessClock &+= 1
+        if entries[key] == nil, entries.count >= capacity,
+           let oldest = entries.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key {
+            entries.removeValue(forKey: oldest)
+        }
+        entries[key] = Entry(stamp: stamp, links: links, lastAccess: accessClock)
+        lock.unlock()
+        return Lookup(links: links, hit: false)
+    }
+
+    func removeAll() {
+        lock.lock()
+        entries.removeAll(keepingCapacity: true)
+        accessClock = 0
+        lock.unlock()
+    }
+
+    var entryCount: Int {
+        lock.lock()
+        let count = entries.count
+        lock.unlock()
+        return count
+    }
+}
+
 enum WorkspaceBacklinks {
     static func markdownFiles(_ items: [NoteItem]) -> [URL] {
         var result: [URL] = []
@@ -411,7 +489,12 @@ enum WorkspaceBacklinks {
         return result
     }
 
-    static func scan(target: URL, root: URL, files: [NoteItem]) -> BacklinkScanResult {
+    static func scan(
+        target: URL,
+        root: URL,
+        files: [NoteItem],
+        parseCache: WorkspaceBacklinkParseCache? = nil
+    ) -> BacklinkScanResult {
         let target = target.standardizedFileURL
         let candidates = markdownFiles(files)
         let candidateBasenames = Dictionary(grouping: candidates) {
@@ -425,9 +508,17 @@ enum WorkspaceBacklinks {
                 skippedDatalessFiles += 1
                 continue
             }
-            guard let content = try? String(contentsOf: source, encoding: .utf8) else { continue }
+            let links: [MindMapLink]
+            if let parseCache {
+                guard let cached = parseCache.lookup(source) else { continue }
+                links = cached.links
+            } else {
+                guard let content = try? String(contentsOf: source, encoding: .utf8) else { continue }
+                links = MindMapOutline.links(in: content)
+            }
+
             var count = 0
-            for link in MindMapOutline.links(in: content) {
+            for link in links {
                 guard let resolved = WorkspaceFiles.resolveLinkedTarget(
                     link.target,
                     from: source,
@@ -519,6 +610,7 @@ final class NotesModel: ObservableObject {
     private var noteCacheOrder: [String] = []
     private var securityScopedFolder: URL?
     private var backlinkTask: Task<Void, Never>?
+    private var backlinkParseCache = WorkspaceBacklinkParseCache()
     private var relatedTask: Task<Void, Never>?
     private var fileRefreshTask: Task<Void, Never>?
     private var folderLoadTask: Task<Void, Never>?
@@ -650,13 +742,16 @@ final class NotesModel: ObservableObject {
 
         previewTask?.cancel()
         cancelNoteLoad()
+        backlinkTask?.cancel()
+        // A detached scan may still finish after cancellation. Swapping the
+        // cache object isolates any late writes to the old workspace instance.
+        backlinkParseCache = WorkspaceBacklinkParseCache()
         root = resolved
         message = nil
         UserDefaults.standard.set(resolved.path, forKey: "PKSNotesWorkspace")
         reloadNavigationPreferences()
         files = []
         backlinks = []
-        backlinkTask?.cancel()
         loadingBacklinks = false
         relatedHits = []
         relatedTask?.cancel()
@@ -1181,8 +1276,14 @@ final class NotesModel: ObservableObject {
             }
             guard !Task.isCancelled, self.root == root else { return }
 
+            let parseCache = self.backlinkParseCache
             let scan = await Task.detached(priority: .utility) {
-                WorkspaceBacklinks.scan(target: note, root: root, files: snapshot)
+                WorkspaceBacklinks.scan(
+                    target: note,
+                    root: root,
+                    files: snapshot,
+                    parseCache: parseCache
+                )
             }.value
             guard !Task.isCancelled,
                   (self.selected == note || self.previewPDF == note),
