@@ -613,11 +613,7 @@ struct NotesWindow: View {
             // Keep typing responsive. Large notes make a full heading pass
             // measurably expensive, so require a longer idle window before doing
             // this derived outline work.
-            let bytes = input.utf8.count
-            let delay: Duration = bytes >= 5_000_000 ? .milliseconds(1_200)
-                : bytes >= 1_000_000 ? .milliseconds(700)
-                : bytes >= 250_000 ? .milliseconds(320)
-                : .milliseconds(140)
+            let delay = markdownDerivedWorkDelay(forUTF8Bytes: input.utf8.count)
             do { try await Task.sleep(for: delay) }
             catch { return }
             let scanner = Task.detached(priority: .utility) {
@@ -641,6 +637,12 @@ struct NotesWindow: View {
             }
             let input = model.draft
             let revision = model.draftRevision
+            do {
+                try await Task.sleep(
+                    for: markdownDerivedWorkDelay(forUTF8Bytes: input.utf8.count)
+                )
+            } catch { return }
+            guard !Task.isCancelled else { return }
             let scanner = Task.detached(priority: .utility) {
                 MindMapOutline.knowledgeLinks(in: input)
             }
@@ -725,6 +727,13 @@ struct NotesWindow: View {
             .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
             .frame(width: NotesGeometry.toolbarTarget, height: NotesGeometry.toolbarTarget)
             .contentShape(Rectangle())
+    }
+
+    private func markdownDerivedWorkDelay(forUTF8Bytes bytes: Int) -> Duration {
+        bytes >= 5_000_000 ? .milliseconds(1_200)
+            : bytes >= 1_000_000 ? .milliseconds(700)
+            : bytes >= 250_000 ? .milliseconds(320)
+            : .milliseconds(140)
     }
 
     private func switchReadingMode(to choice: ReadingMode) {

@@ -366,17 +366,20 @@ extension MindMapOutline {
         var seen: Set<String> = []
         var fenceMarker: Character?
 
-        for line in markdown.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+        for line in markdown.split(omittingEmptySubsequences: false, whereSeparator: { $0.isNewline }) {
+            let trimmed = line.drop(while: { $0.isWhitespace })
             if let marker = trimmed.first, marker == "\u{60}" || marker == "~",
                trimmed.prefix(while: { $0 == marker }).count >= 3 {
                 if fenceMarker == nil { fenceMarker = marker }
                 else if fenceMarker == marker { fenceMarker = nil }
                 continue
             }
-            guard fenceMarker == nil else { continue }
+            guard fenceMarker == nil,
+                  line.contains("["), line.contains("]") else { continue }
 
-            for link in links(in: line) {
+            // Convert only candidate lines. Most prose lines never allocate a
+            // standalone String and never enter either link regex.
+            for link in links(in: String(line)) {
                 let key = link.target + "\u{0}" + link.label
                 if seen.insert(key).inserted { result.append(link) }
             }

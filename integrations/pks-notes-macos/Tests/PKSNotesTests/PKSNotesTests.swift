@@ -1874,6 +1874,28 @@ extension PKSNotesTests {
         XCTAssertFalse(WorkspaceFiles.isDataless(source))
     }
 
+    func testKnowledgeLinksKeepLargePlainTextAndFencedCodeCheapAndCorrect() {
+        let plain = Array(repeating: "ordinary prose without any link syntax", count: 2_000)
+            .joined(separator: "\n")
+        let markdown = """
+        \(plain)
+        ~~~swift
+        [[Ignored]]
+        [Ignored too](/Ignored.md)
+        ~~~
+        [[Kept|Visible]]
+        [Again](/Kept.md)
+        """
+
+        XCTAssertEqual(
+            MindMapOutline.knowledgeLinks(in: markdown),
+            [
+                MindMapLink(label: "Visible", target: "Kept"),
+                MindMapLink(label: "Again", target: "/Kept.md")
+            ]
+        )
+    }
+
     func testBacklinkParseCacheReusesUnchangedLinksAndInvalidatesReplacement() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
