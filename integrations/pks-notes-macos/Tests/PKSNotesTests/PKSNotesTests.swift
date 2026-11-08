@@ -825,6 +825,34 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(matches.last?.name, "Note 0023")
     }
 
+    func testQuickOpenPrefixRangeKeepsRankingAndDiacriticFolding() {
+        let root = URL(fileURLWithPath: "/tmp/pks-quickopen-prefix")
+        let files = [
+            NoteItem(url: root.appendingPathComponent("Álpha.md"), children: nil),
+            NoteItem(url: root.appendingPathComponent("Alpha Notes.md"), children: nil),
+            NoteItem(url: root.appendingPathComponent("My Alpha.md"), children: nil),
+            NoteItem(url: root.appendingPathComponent("Archive/Alpha Folder/Other.md"), children: nil),
+            NoteItem(url: root.appendingPathComponent("Zulu.md"), children: nil)
+        ]
+        let entries = NoteTreePresentation.quickOpenEntries(files)
+
+        XCTAssertEqual(
+            NoteTreePresentation.quickOpen(entries, query: "alpha", limit: 2).map(\.name),
+            ["Álpha", "Alpha Notes"],
+            "Prefix matches should satisfy the bounded result before substring/path fallback."
+        )
+        XCTAssertEqual(
+            NoteTreePresentation.quickOpen(entries, query: "my alpha").first?.name,
+            "My Alpha",
+            "Name substring fallback must remain available."
+        )
+        XCTAssertEqual(
+            NoteTreePresentation.quickOpen(entries, query: "alpha folder").first?.name,
+            "Other",
+            "Folder substring fallback must remain available."
+        )
+    }
+
     func testQuickOpenLocalSeedIncludesDeepKnownNotesWithoutDuplicates() {
         let root = URL(fileURLWithPath: "/tmp/pks-quickopen-seed")
         let visible = root.appendingPathComponent("Visible.md")

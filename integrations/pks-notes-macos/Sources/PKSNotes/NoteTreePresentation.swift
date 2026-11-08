@@ -91,8 +91,10 @@ enum NoteTreePresentation {
 
         items.forEach(visit)
         entries.sort { lhs, rhs in
-            let comparison = lhs.item.name.localizedStandardCompare(rhs.item.name)
-            if comparison != .orderedSame { return comparison == .orderedAscending }
+            let foldedComparison = lhs.foldedName.localizedStandardCompare(rhs.foldedName)
+            if foldedComparison != .orderedSame { return foldedComparison == .orderedAscending }
+            let nameComparison = lhs.item.name.localizedStandardCompare(rhs.item.name)
+            if nameComparison != .orderedSame { return nameComparison == .orderedAscending }
             return lhs.insertionOrder < rhs.insertionOrder
         }
         return entries
@@ -118,31 +120,53 @@ enum NoteTreePresentation {
         let search = fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !search.isEmpty, limit > 0 else { return [] }
 
-        // Entries are already alphabetized. Keep at most the requested number
-        // of candidates per rank while scanning once, then concatenate ranks.
-        var ranked = Array(repeating: [NoteItem](), count: 4)
-        for entry in entries {
-            let rank: Int?
-            if entry.foldedName == search { rank = 0 }
-            else if entry.foldedName.hasPrefix(search) { rank = 1 }
-            else if entry.foldedName.contains(search) { rank = 2 }
-            else if entry.foldedFolder.contains(search) { rank = 3 }
-            else { rank = nil }
-
-            if let rank, ranked[rank].count < limit {
-                ranked[rank].append(entry.item)
-            }
-        }
-
         var result: [NoteItem] = []
         result.reserveCapacity(limit)
-        for bucket in ranked {
-            for item in bucket {
-                result.append(item)
-                if result.count == limit { return result }
-            }
+
+        // Entries are sorted by foldedName, so the common exact/prefix path can
+        // jump straight to the first possible match instead of scanning the vault.
+        var index = quickOpenLowerBound(entries, search: search)
+
+        // Exact names always outrank longer prefix matches.
+        while index < entries.count, entries[index].foldedName == search {
+            result.append(entries[index].item)
+            if result.count == limit { return result }
+            index += 1
+        }
+
+        while index < entries.count, entries[index].foldedName.hasPrefix(search) {
+            result.append(entries[index].item)
+            if result.count == limit { return result }
+            index += 1
+        }
+
+        // Only uncommon substring/path queries pay the complete-index scan.
+        for entry in entries where !entry.foldedName.hasPrefix(search)
+            && entry.foldedName.contains(search) {
+            result.append(entry.item)
+            if result.count == limit { return result }
+        }
+
+        for entry in entries where !entry.foldedName.contains(search)
+            && entry.foldedFolder.contains(search) {
+            result.append(entry.item)
+            if result.count == limit { return result }
         }
         return result
+    }
+
+    private static func quickOpenLowerBound(_ entries: [QuickOpenEntry], search: String) -> Int {
+        var lower = 0
+        var upper = entries.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if entries[middle].foldedName.localizedStandardCompare(search) == .orderedAscending {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+        return lower
     }
 
     static func quickOpen(_ files: [NoteItem], query: String, limit: Int = 24) -> [NoteItem] {
