@@ -123,16 +123,8 @@ enum MindMapOutline {
     /// Node IDs are canonical Markdown line indexes. Convert them to native UTF-16
     /// ranges only at the editor boundary so Mind Map never owns a second position model.
     static func sourceLineRange(in markdown: String, nodeID: Int) -> NSRange? {
-        guard nodeID >= 0 else { return nil }
-        let lines = markdown.components(separatedBy: "\n")
-        guard lines.indices.contains(nodeID),
-              nodes(in: markdown).contains(where: { $0.id == nodeID }) else { return nil }
-
-        var location = 0
-        for index in 0..<nodeID {
-            location += (lines[index] as NSString).length + 1
-        }
-        return NSRange(location: location, length: (lines[nodeID] as NSString).length)
+        guard nodes(in: markdown).contains(where: { $0.id == nodeID }) else { return nil }
+        return MarkdownOutline.lineRange(in: markdown, lineIndex: nodeID)
     }
 
     /// Resolve an editor caret/selection position to the nearest preceding outline node.
@@ -252,6 +244,11 @@ struct MindMapLink: Equatable {
     let target: String
 }
 
+struct MarkdownLinkOccurrence: Equatable {
+    let link: MindMapLink
+    let lineIndex: Int
+}
+
 struct MindMapNodePresentation: Equatable {
     let title: String
     let links: [MindMapLink]
@@ -294,6 +291,19 @@ extension MindMapOutline {
 
     static func links(in title: String) -> [MindMapLink] {
         parsedLinks(in: title).map(\.link)
+    }
+
+    /// Preserve every Markdown link occurrence and its canonical source line.
+    /// Backlinks reuse this parse result; there is no second occurrence index.
+    static func linkOccurrences(in markdown: String) -> [MarkdownLinkOccurrence] {
+        var result: [MarkdownLinkOccurrence] = []
+        for (lineIndex, line) in markdown.components(separatedBy: "\n").enumerated() {
+            guard line.contains("["), line.contains("]") else { continue }
+            for link in links(in: line) {
+                result.append(.init(link: link, lineIndex: lineIndex))
+            }
+        }
+        return result
     }
 
     /// Derive display-only node text from canonical Markdown. Links remain stored

@@ -68,6 +68,19 @@ enum MarkdownOutline {
         return headings
     }
 
+    /// One UTF-16 line-position authority for native editor navigation.
+    static func lineRange(in source: String, lineIndex: Int) -> NSRange? {
+        guard lineIndex >= 0 else { return nil }
+        let lines = source.components(separatedBy: "\n")
+        guard lines.indices.contains(lineIndex) else { return nil }
+
+        var location = 0
+        for index in 0..<lineIndex {
+            location += (lines[index] as NSString).length + 1
+        }
+        return NSRange(location: location, length: (lines[lineIndex] as NSString).length)
+    }
+
     static func heading(matchingFragment fragment: String, in source: String) -> MarkdownOutlineHeading? {
         let decoded = (fragment.removingPercentEncoding ?? fragment)
             .trimmingCharacters(in: .whitespacesAndNewlines)

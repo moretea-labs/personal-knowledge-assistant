@@ -36,6 +36,11 @@ final class MarkdownOutlineTests: XCTestCase {
         let ns = source as NSString
         XCTAssertTrue(ns.substring(from: headings[0].utf16Offset).hasPrefix("# 标题"))
         XCTAssertTrue(ns.substring(from: headings[1].utf16Offset).hasPrefix("## Next"))
+        XCTAssertEqual(
+            MarkdownOutline.lineRange(in: source, lineIndex: 1),
+            NSRange(location: ("😀 preface\n" as NSString).length, length: ("# 标题" as NSString).length)
+        )
+        XCTAssertNil(MarkdownOutline.lineRange(in: source, lineIndex: 99))
     }
 
     func testHeadingFragmentMatchesExactAndSlugWithoutSeeingFencedHeadings() {

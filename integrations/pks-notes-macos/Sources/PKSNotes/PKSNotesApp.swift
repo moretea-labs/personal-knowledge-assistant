@@ -350,6 +350,9 @@ struct NotesWindow: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarTab: SidebarTab = .notes
     @State private var pendingEditorFocus: URL?
+    @State private var pendingBacklinkNote: URL?
+    @State private var pendingBacklinkLine: Int?
+    @State private var pendingBacklinkStamp: WorkspaceFileStamp?
     @State private var pendingMindMapOpen: URL?
     @State private var renameCandidate: URL?
     @State private var renameValue = ""
@@ -513,15 +516,16 @@ struct NotesWindow: View {
                                                                     : "No notes link to this PDF yet."))
                                 } else {
                                     ForEach(model.backlinks) { backlink in
-                                        relationshipButton(
-                                            title: backlink.title,
-                                            detail: backlink.count > 1
-                                                ? "\(backlink.count) \(language.text("references"))"
-                                                : language.text("1 reference"),
-                                            symbol: "arrow.turn.up.left"
-                                        ) {
-                                            showingBacklinks = false
-                                            model.openFile(backlink.source)
+                                        ForEach(backlink.locations) { location in
+                                            relationshipButton(
+                                                title: backlink.title,
+                                                detail: location.count > 1
+                                                    ? "L\(location.lineIndex + 1) · \(location.count) \(language.text("references"))"
+                                                    : "L\(location.lineIndex + 1)",
+                                                symbol: "arrow.turn.up.left"
+                                            ) {
+                                                openBacklinkLocation(backlink, location: location)
+                                            }
                                         }
                                     }
                                 }
@@ -722,7 +726,19 @@ struct NotesWindow: View {
                 expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: note, in: root))
                 treeCursorPath = note.path
             }
-            if note == pendingEditorFocus, note != nil {
+            if note == pendingBacklinkNote,
+               let line = pendingBacklinkLine,
+               let expectedStamp = pendingBacklinkStamp {
+                pendingBacklinkNote = nil
+                pendingBacklinkLine = nil
+                pendingBacklinkStamp = nil
+                guard let note,
+                      WorkspaceFiles.fileStamp(note) == expectedStamp else {
+                    model.message = language.text("Link target not available in this workspace.")
+                    return
+                }
+                revealMarkdownLineIndex(line)
+            } else if note == pendingEditorFocus, note != nil {
                 pendingEditorFocus = nil
                 mode = .edit
                 Task { @MainActor in editorFocused = true }
@@ -979,6 +995,42 @@ struct NotesWindow: View {
             pendingEditorFocus = nil
             mode = .edit
             Task { @MainActor in editorFocused = true }
+        }
+    }
+
+    private func openBacklinkLocation(
+        _ backlink: NoteBacklink,
+        location: NoteBacklinkLocation
+    ) {
+        let source = backlink.source.standardizedFileURL
+        guard WorkspaceFiles.fileStamp(source) == backlink.sourceStamp,
+              !(model.selected?.standardizedFileURL == source && model.isDirty) else {
+            model.message = language.text("Link target not available in this workspace.")
+            return
+        }
+
+        showingBacklinks = false
+        pendingBacklinkNote = source
+        pendingBacklinkLine = location.lineIndex
+        pendingBacklinkStamp = backlink.sourceStamp
+        model.openFile(source)
+
+        if model.selected?.standardizedFileURL != source, !model.loadingNote {
+            pendingBacklinkNote = nil
+            pendingBacklinkLine = nil
+            pendingBacklinkStamp = nil
+            return
+        }
+
+        if model.selected?.standardizedFileURL == source, !model.loadingNote {
+            pendingBacklinkNote = nil
+            pendingBacklinkLine = nil
+            pendingBacklinkStamp = nil
+            guard WorkspaceFiles.fileStamp(source) == backlink.sourceStamp else {
+                model.message = language.text("Link target not available in this workspace.")
+                return
+            }
+            revealMarkdownLineIndex(location.lineIndex)
         }
     }
 
@@ -2480,9 +2532,17 @@ struct NotesWindow: View {
     }
 
     private func revealMarkdownLine(_ line: Int) {
+        guard MindMapOutline.sourceLineRange(in: model.draft, nodeID: line) != nil else { return }
+        revealMarkdownLineIndex(line)
+    }
+
+    private func revealMarkdownLineIndex(_ line: Int) {
         guard model.selected != nil,
-              let range = MindMapOutline.sourceLineRange(in: model.draft, nodeID: line) else { return }
-        mindMapSelectionLine = line
+              let range = MarkdownOutline.lineRange(in: model.draft, lineIndex: line) else {
+            model.message = language.text("Link target not available in this workspace.")
+            return
+        }
+        mindMapSelectionLine = MindMapOutline.nodeID(atUTF16Offset: range.location, in: model.draft)
         showingMindMap = false
         mode = .edit
         Task { @MainActor in
