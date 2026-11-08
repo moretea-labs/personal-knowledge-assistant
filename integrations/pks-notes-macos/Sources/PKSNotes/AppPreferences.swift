@@ -262,6 +262,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Page": "页码",
         "Find in PDF": "在 PDF 中查找",
         "Search PDF": "搜索 PDF",
+        "No matches": "没有匹配结果",
         "Zoom Out": "缩小",
         "Actual Size": "实际大小",
         "Zoom In": "放大",

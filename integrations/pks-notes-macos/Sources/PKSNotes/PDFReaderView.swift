@@ -258,6 +258,7 @@ final class PDFReaderController: ObservableObject {
     @Published private(set) var outline: [PDFOutlineEntry] = []
     @Published private(set) var searchMatchIndex = 0
     @Published private(set) var searchMatchCount = 0
+    @Published private(set) var completedSearchQuery = ""
     @Published private(set) var isSearching = false
     @Published private(set) var invalidRequestedPage: Int?
     @Published private(set) var invalidRequestedSelection = false
@@ -525,10 +526,7 @@ final class PDFReaderController: ObservableObject {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         cancelSearch()
 
-        guard !text.isEmpty else {
-            pdfView?.currentSelection = nil
-            return
-        }
+        guard !text.isEmpty else { return }
 
         searchGeneration &+= 1
         let generation = searchGeneration
@@ -537,13 +535,22 @@ final class PDFReaderController: ObservableObject {
             let worker = Task.detached(priority: .userInitiated) {
                 document.findString(text, withOptions: .caseInsensitive)
             }
-            let matches = await worker.value
+            // Detached tasks do not inherit cancellation. Signal the worker
+            // when the query/document changes; PDFKit's synchronous findString
+            // is not forcibly preemptible, so the generation guard below
+            // remains authoritative for discarding late results.
+            let matches = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
             guard !Task.isCancelled,
                   let self,
                   self.searchGeneration == generation,
                   self.document === document else { return }
 
             self.searchMatches = matches
+            self.completedSearchQuery = text
             self.searchMatchCount = matches.count
             self.searchMatchIndex = 0
             self.isSearching = false
@@ -624,6 +631,10 @@ final class PDFReaderController: ObservableObject {
         searchTask?.cancel()
         searchTask = nil
         searchMatches.removeAll()
+        // A previous match must not remain highlighted when a different
+        // search is pending or the new query has no results.
+        pdfView?.currentSelection = nil
+        completedSearchQuery = ""
         searchMatchCount = 0
         searchMatchIndex = 0
         isSearching = false
@@ -909,6 +920,13 @@ struct NativePDFPreview: View {
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("pks-pdf-search-count")
+                } else if !controller.completedSearchQuery.isEmpty,
+                          controller.completedSearchQuery ==
+                            searchText.trimmingCharacters(in: .whitespacesAndNewlines) {
+                    Text(language.text("No matches"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("pks-pdf-search-empty")
                 }
                 Button { controller.previousSearchMatch() } label: {
                     Image(systemName: "chevron.up")
