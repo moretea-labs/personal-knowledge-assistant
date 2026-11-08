@@ -191,7 +191,7 @@ enum WorkspaceFiles {
 
     /// One filesystem-authoritative flat traversal shared by all complete-vault
     /// transient projections. Callers decide which lightweight derived buffers to keep.
-    private static func visitFlatFiles(in root: URL, _ visit: (URL) -> Void) {
+    static func visitFlatFiles(in root: URL, _ visit: (URL) -> Void) {
         var pending = [root]
         while let folder = pending.popLast() {
             guard !scanCancelled else { break }
@@ -214,22 +214,6 @@ enum WorkspaceFiles {
             result.append(NoteItem(url: url, children: nil))
         }
         return result
-    }
-
-    /// Complete-vault scan used by the global transient index. Markdown candidates
-    /// are collected during the same directory traversal instead of filtering the
-    /// complete NoteItem array in a second O(N) pass.
-    static func flatFilesAndMarkdown(in root: URL) -> (files: [NoteItem], markdownFiles: [URL]) {
-        var files: [NoteItem] = []
-        var markdownFiles: [URL] = []
-        visitFlatFiles(in: root) { url in
-            let item = NoteItem(url: url, children: nil)
-            files.append(item)
-            if item.isMarkdown {
-                markdownFiles.append(url.standardizedFileURL)
-            }
-        }
-        return (files, markdownFiles)
     }
 
     /// Reconcile one filesystem-authoritative shallow listing with already
@@ -576,10 +560,19 @@ struct WorkspaceLinkCandidateIndex: Sendable {
     let byBasename: [String: [URL]]
 
     init(markdownFiles: [URL]) {
-        self.markdownFiles = markdownFiles.map { $0.standardizedFileURL }
-        self.byBasename = Dictionary(grouping: self.markdownFiles) {
-            $0.deletingPathExtension().lastPathComponent
+        var standardized: [URL] = []
+        standardized.reserveCapacity(markdownFiles.count)
+        var grouped: [String: [URL]] = [:]
+        grouped.reserveCapacity(markdownFiles.count)
+
+        for url in markdownFiles {
+            let normalized = url.standardizedFileURL
+            standardized.append(normalized)
+            grouped[normalized.deletingPathExtension().lastPathComponent, default: []].append(normalized)
         }
+
+        self.markdownFiles = standardized
+        self.byBasename = grouped
     }
 
     static let empty = WorkspaceLinkCandidateIndex(markdownFiles: [])
@@ -1286,16 +1279,30 @@ final class NotesModel: ObservableObject {
         } else {
             indexingFiles = true
             let task = Task.detached(priority: .utility) {
-                let scan = WorkspaceFiles.flatFilesAndMarkdown(in: root)
+                var quickOpenEntries: [NoteTreePresentation.QuickOpenEntry] = []
+                var markdownFiles: [URL] = []
+                var insertionOrder = 0
+
+                WorkspaceFiles.visitFlatFiles(in: root) { url in
+                    let item = NoteItem(url: url, children: nil)
+                    quickOpenEntries.append(.init(item: item, insertionOrder: insertionOrder))
+                    insertionOrder += 1
+                    if item.isMarkdown {
+                        markdownFiles.append(url)
+                    }
+                }
+
                 guard !Task.isCancelled else {
                     return GlobalFileIndexSnapshot(
                         quickOpenEntries: [],
                         linkCandidates: .empty
                     )
                 }
+
+                NoteTreePresentation.sortQuickOpenEntries(&quickOpenEntries)
                 return GlobalFileIndexSnapshot(
-                    quickOpenEntries: NoteTreePresentation.quickOpenEntries(scan.files),
-                    linkCandidates: WorkspaceLinkCandidateIndex(markdownFiles: scan.markdownFiles)
+                    quickOpenEntries: quickOpenEntries,
+                    linkCandidates: WorkspaceLinkCandidateIndex(markdownFiles: markdownFiles)
                 )
             }
             globalFileScanTask = task

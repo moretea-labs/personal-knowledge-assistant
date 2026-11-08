@@ -40,10 +40,10 @@ enum NoteTreePresentation {
         let insertionOrder: Int
         var id: String { item.id }
 
-        fileprivate init(item: NoteItem, foldedName: String, foldedFolder: String, insertionOrder: Int) {
+        init(item: NoteItem, insertionOrder: Int) {
             self.item = item
-            self.foldedName = foldedName
-            self.foldedFolder = foldedFolder
+            self.foldedName = NoteTreePresentation.fold(item.name)
+            self.foldedFolder = NoteTreePresentation.fold(item.url.deletingLastPathComponent().path)
             self.insertionOrder = insertionOrder
         }
     }
@@ -64,14 +64,7 @@ enum NoteTreePresentation {
         func appendFile(_ item: NoteItem) {
             let path = item.url.standardizedFileURL.path
             guard seenPaths.insert(path).inserted else { return }
-            entries.append(
-                QuickOpenEntry(
-                    item: item,
-                    foldedName: fold(item.name),
-                    foldedFolder: fold(item.url.deletingLastPathComponent().path),
-                    insertionOrder: entries.count
-                )
-            )
+            entries.append(QuickOpenEntry(item: item, insertionOrder: entries.count))
         }
 
         // Current/recent/favorite notes are already-known navigation targets.
@@ -90,6 +83,11 @@ enum NoteTreePresentation {
         }
 
         items.forEach(visit)
+        sortQuickOpenEntries(&entries)
+        return entries
+    }
+
+    static func sortQuickOpenEntries(_ entries: inout [QuickOpenEntry]) {
         entries.sort { lhs, rhs in
             let foldedComparison = lhs.foldedName.localizedStandardCompare(rhs.foldedName)
             if foldedComparison != .orderedSame { return foldedComparison == .orderedAscending }
@@ -97,7 +95,6 @@ enum NoteTreePresentation {
             if nameComparison != .orderedSame { return nameComparison == .orderedAscending }
             return lhs.insertionOrder < rhs.insertionOrder
         }
-        return entries
     }
 
     /// Show a note's folder path relative to its selected workspace.

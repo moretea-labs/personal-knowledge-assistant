@@ -368,15 +368,12 @@ final class PKSNotesTests: XCTestCase {
         ]))
         XCTAssertFalse(flat.contains(where: \.isFolder))
 
-        let indexed = WorkspaceFiles.flatFilesAndMarkdown(in: root)
+        var visited: [URL] = []
+        WorkspaceFiles.visitFlatFiles(in: root) { visited.append($0.standardizedFileURL) }
         XCTAssertEqual(
-            Set(indexed.files.map { $0.url.standardizedFileURL }),
-            Set(flat.map { $0.url.standardizedFileURL })
-        )
-        XCTAssertEqual(
-            Set(indexed.markdownFiles),
-            Set([rootNote, parentNote, deepNote].map(\.standardizedFileURL)),
-            "Complete-vault index scan should collect Markdown candidates in the same traversal."
+            Set(visited),
+            Set(flat.map { $0.url.standardizedFileURL }),
+            "The shared flat visitor must preserve the compatibility flatFiles scan."
         )
 
         let shallowRoot = WorkspaceFiles.tree(in: root, recursive: false)
