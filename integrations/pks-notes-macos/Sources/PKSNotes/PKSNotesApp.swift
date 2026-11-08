@@ -378,6 +378,7 @@ struct NotesWindow: View {
     @State private var pdfCaptureCommentary = ""
     @State private var loadedPDFDocument: PDFDocument?
     @State private var loadedPDFURL: URL?
+    @State private var compactStudyShowsNote = false
     @StateObject private var pdfReaderController = PDFReaderController()
     @State private var mindMapLinkNodeID: Int?
     @State private var mindMapLinkSectionMode = false
@@ -1180,6 +1181,8 @@ struct NotesWindow: View {
         ) else { return }
 
         closeQuickPicker()
+        // In narrow windows, show the citation in the note immediately.
+        compactStudyShowsNote = true
         pendingEditorFocus = studyNote
         model.openStudyNote(studyNote)
         if model.selected == studyNote {
@@ -2221,6 +2224,9 @@ struct NotesWindow: View {
                     treeRevealRequest = nil
                 }
                 .focusable(sidebarTab == .notes)
+                // The row highlight already conveys keyboard focus. Avoid
+                // a second large blue rectangle around the entire file tree.
+                .focusEffectDisabled()
                 .focused($treeFocused)
                 .onMoveCommand { direction in
                     guard sidebarTab == .notes else { return }
@@ -2622,11 +2628,48 @@ struct NotesWindow: View {
     private var reader: some View {
         if let url = model.previewPDF {
             if let note = model.selected, model.externalBody == nil {
-                HSplitView {
-                    pdfReader(url)
-                        .frame(minWidth: 330)
-                    studyNotePane(note)
-                        .frame(minWidth: 280, idealWidth: 400)
+                // Never squeeze a PDF into a thin third column beside the sidebar.
+                // Small windows show one full-width surface; larger windows provide
+                // a balanced, user-resizable PDF + note workspace.
+                GeometryReader { geometry in
+                    if geometry.size.width >= 820 {
+                        HSplitView {
+                            pdfReader(url)
+                                .frame(minWidth: 420, idealWidth: geometry.size.width * 0.55)
+                            studyNotePane(note)
+                                .frame(minWidth: 340, idealWidth: geometry.size.width * 0.45)
+                        }
+                    } else {
+                        VStack(spacing: 0) {
+                            HStack(spacing: 12) {
+                                Picker("", selection: $compactStudyShowsNote) {
+                                    Text("PDF").tag(false)
+                                    Text(language.text("Study Note")).tag(true)
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+                                .frame(width: 224)
+                                .accessibilityIdentifier("pks-study-compact-picker")
+                                Spacer(minLength: 0)
+                                Text(compactStudyShowsNote
+                                     ? note.deletingPathExtension().lastPathComponent
+                                     : url.lastPathComponent)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(height: 42)
+                            .background(theme.canvas)
+                            Divider()
+
+                            if compactStudyShowsNote {
+                                studyNotePane(note)
+                            } else {
+                                pdfReader(url)
+                            }
+                        }
+                    }
                 }
                 .accessibilityIdentifier("pks-study-workspace")
             } else {
@@ -2708,6 +2751,18 @@ struct NotesWindow: View {
                         .accessibilityLabel(language.text("Save"))
                 }
                 Button {
+                    mode = mode == .read ? .edit : .read
+                    if mode == .edit {
+                        Task { @MainActor in editorFocused = true }
+                    }
+                } label: {
+                    Image(systemName: mode == .read ? "square.and.pencil" : "book")
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .help(language.text(mode == .read ? "Edit" : "Read"))
+                .accessibilityIdentifier("pks-study-note-mode-toggle")
+                Button {
                     model.closePDFPreview()
                     mode = .edit
                     Task { @MainActor in editorFocused = true }
@@ -2726,7 +2781,13 @@ struct NotesWindow: View {
             .background(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
 
             Divider()
-            editor
+            // Study notes honor the normal Markdown reading mode. Do not
+            // silently force raw source in an otherwise read-only session.
+            if mode == .read {
+                renderedNote
+            } else {
+                editor
+            }
         }
         .background(theme.canvas)
         .accessibilityIdentifier("pks-study-note-pane")

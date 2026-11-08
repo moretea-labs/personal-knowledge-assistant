@@ -725,7 +725,44 @@ struct NativePDFPreview: View {
     }
 
     private var readerToolbar: some View {
-        HStack(spacing: 8) {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                pdfOutlineControls
+                Divider().frame(height: 18)
+                pdfNavigationControls
+                pdfCaptureControls
+                Spacer(minLength: 12)
+                pdfSearchControls
+                Divider().frame(height: 18)
+                pdfZoomControls
+            }
+            .padding(.horizontal, 12)
+            .frame(minWidth: 860, minHeight: 38)
+
+            // A narrow PDF column gets two readable tool rows, never an
+            // overflowing single row of invisible / compressed controls.
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    pdfOutlineControls
+                    pdfNavigationControls
+                    Spacer(minLength: 0)
+                    pdfCaptureControls
+                }
+                .frame(height: 36)
+                HStack(spacing: 8) {
+                    pdfSearchControls
+                    Spacer(minLength: 0)
+                    pdfZoomControls
+                }
+                .frame(height: 36)
+            }
+            .padding(.horizontal, 12)
+        }
+        .controlSize(.small)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var pdfOutlineControls: some View {
             Menu {
                 if controller.outline.isEmpty {
                     Text(language.text("No document outline"))
@@ -746,9 +783,13 @@ struct NativePDFPreview: View {
             .disabled(controller.outline.isEmpty)
             .help(language.text("Document Outline"))
             .accessibilityIdentifier("pks-pdf-outline")
+            // AppKit menus otherwise claim leftover toolbar width and
+            // squeeze page/search controls at the split-pane threshold.
+            .frame(width: 24, height: 26)
+    }
 
-            Divider().frame(height: 18)
-
+    private var pdfNavigationControls: some View {
+        HStack(spacing: 8) {
             Button { controller.goPrevious() } label: {
                 Image(systemName: "chevron.left")
             }
@@ -782,7 +823,11 @@ struct NativePDFPreview: View {
             .disabled(controller.pageCount == 0 || controller.currentPageIndex >= controller.pageCount - 1)
             .help(language.text("Next Page"))
             .accessibilityIdentifier("pks-pdf-next-page")
+        }
+    }
 
+    private var pdfCaptureControls: some View {
+        HStack(spacing: 8) {
             Button {
                 let selectedText = controller.selectedText()
                 let anchor = controller.selectedSourceAnchor()
@@ -811,9 +856,10 @@ struct NativePDFPreview: View {
                                 ? "PDF page link copied"
                                 : "Copy PDF page link"))
             .accessibilityIdentifier("pks-pdf-copy-page-link")
+        }
+    }
 
-            Spacer(minLength: 12)
-
+    private var pdfSearchControls: some View {
             HStack(spacing: 5) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -858,9 +904,10 @@ struct NativePDFPreview: View {
             .padding(.horizontal, 8)
             .frame(height: 26)
             .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 7))
+    }
 
-            Divider().frame(height: 18)
-
+    private var pdfZoomControls: some View {
+        HStack(spacing: 8) {
             Button { controller.zoomOut() } label: {
                 Image(systemName: "minus.magnifyingglass")
             }
@@ -892,10 +939,6 @@ struct NativePDFPreview: View {
             .help(language.text("Fit Width"))
             .accessibilityIdentifier("pks-pdf-fit-width")
         }
-        .controlSize(.small)
-        .padding(.horizontal, 12)
-        .frame(height: 38)
-        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private func copyCurrentPageReference() {
