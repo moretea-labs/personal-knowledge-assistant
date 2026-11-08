@@ -1760,7 +1760,8 @@ final class NotesModel: ObservableObject {
     func newNote(named name: String? = nil, in parentFolder: URL? = nil,
                  navigationDecision: UnsavedNoteDecision? = nil,
                  initialContent: String? = nil,
-                 preservePDFPreview: Bool = false) -> URL? {
+                 preservePDFPreview: Bool = false,
+                 activateAfterCreation: Bool = true) -> URL? {
         guard let root else {
             message = AppLanguage.current.text("Choose a notes folder before creating a note."); return nil
         }
@@ -1788,7 +1789,9 @@ final class NotesModel: ObservableObject {
         guard WorkspaceFiles.contains(url, in: root) else {
             message = AppLanguage.current.text("Invalid note path."); return nil
         }
-        guard confirmLeavingNote(decision: navigationDecision) else { return nil }
+        if activateAfterCreation {
+            guard confirmLeavingNote(decision: navigationDecision) else { return nil }
+        }
 
         // O_EXCL prevents overwriting an existing file even if another app
         // creates the same name between the availability check and the write.
@@ -1804,7 +1807,9 @@ final class NotesModel: ObservableObject {
             try handle.write(contentsOf: Data(content.utf8))
             try handle.close()
             scheduleFilesystemMutationRefresh(parentFolders: [folder])
-            loadNote(url, preservePDFPreview: preservePDFPreview)
+            if activateAfterCreation {
+                loadNote(url, preservePDFPreview: preservePDFPreview)
+            }
             return url
         } catch {
             try? handle.close()

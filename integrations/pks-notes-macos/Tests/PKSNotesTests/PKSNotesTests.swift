@@ -1027,6 +1027,61 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
+    func testInactiveNewNoteCreationKeepsCurrentMarkdownAuthority() async throws {
+        let defaults = UserDefaults.standard
+        let previousRoot = defaults.string(forKey: "PKSNotesWorkspace")
+        let previousNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let previousRoot { defaults.set(previousRoot, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousNote { defaults.set(previousNote, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let current = root.appendingPathComponent("Map.md")
+        try "# Map\n- Topic".write(to: current, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(current)
+        await waitForNote(model, current)
+
+        let created = try XCTUnwrap(model.newNote(
+            named: "Topic.md",
+            in: root,
+            initialContent: "# Topic\n\n",
+            activateAfterCreation: false
+        ))
+
+        XCTAssertEqual(model.selected?.standardizedFileURL, current.standardizedFileURL)
+        XCTAssertEqual(model.draft, "# Map\n- Topic")
+        XCTAssertFalse(model.loadingNote)
+        XCTAssertEqual(try String(contentsOf: created, encoding: .utf8), "# Topic\n\n")
+
+        let target = try XCTUnwrap(WorkspaceFiles.canonicalWikiTarget(for: created, in: root))
+        let updated = try XCTUnwrap(MindMapOutline.appendWikiLink(
+            in: model.draft,
+            nodeID: 1,
+            target: target,
+            label: "Topic"
+        ))
+        model.draft = updated
+        model.save()
+
+        XCTAssertFalse(model.isDirty)
+        XCTAssertEqual(
+            try String(contentsOf: current, encoding: .utf8),
+            "# Map\n- Topic [[/Topic|Topic]]"
+        )
+        XCTAssertEqual(model.selected?.standardizedFileURL, current.standardizedFileURL)
+    }
+
+    @MainActor
     func testRenameAndTrashPreserveOriginalDataAndCurrentNoteSafety() async throws {
         let defaults = UserDefaults.standard
         let oldVault = defaults.string(forKey: "PKSNotesWorkspace")

@@ -11,6 +11,7 @@ struct MindMapCanvas: View {
     let openLink: (String) -> Void
     let connectNote: (Int) -> Void
     let connectSection: (Int) -> Void
+    let createLinkedNote: (Int) -> Void
     let revealSource: (Int) -> Void
     let importOutline: (String, String) -> Bool
     @State private var renameTitle = ""
@@ -223,6 +224,10 @@ struct MindMapCanvas: View {
                 }
                 Button(language.text("Link Section"), systemImage: "text.badge.plus") {
                     if let selectedID { connectSection(selectedID) }
+                }
+                Divider()
+                Button(language.text("Create Linked Note"), systemImage: "doc.badge.plus") {
+                    if let selectedID { createLinkedNote(selectedID) }
                 }
             } label: {
                 Label(language.text("Link"), systemImage: "link.badge.plus")
@@ -500,6 +505,10 @@ struct MindMapCanvas: View {
             Button(language.text("Link Section"), systemImage: "text.badge.plus") {
                 selectedID = node.id
                 connectSection(node.id)
+            }
+            Button(language.text("Create Linked Note"), systemImage: "doc.badge.plus") {
+                selectedID = node.id
+                createLinkedNote(node.id)
             }
             Button(language.text("Show in Markdown"), systemImage: "text.cursor") {
                 selectedID = node.id

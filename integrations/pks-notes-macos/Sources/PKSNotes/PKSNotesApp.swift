@@ -1019,6 +1019,62 @@ struct NotesWindow: View {
         model.message = nil
     }
 
+    private func createLinkedNoteFromMindMap(nodeID: Int) {
+        guard let root = model.root,
+              let sourceNote = model.selected?.standardizedFileURL,
+              sourceNote.pathExtension.lowercased() == "md"
+                || sourceNote.pathExtension.lowercased() == "markdown"
+        else {
+            model.message = language.text("Could not create a linked note from this node.")
+            return
+        }
+
+        if model.isDirty {
+            model.save()
+            guard !model.isDirty else { return }
+        }
+
+        guard let node = MindMapOutline.nodes(in: model.draft).first(where: { $0.id == nodeID }) else {
+            model.message = language.text("Could not create a linked note from this node.")
+            return
+        }
+        let title = MindMapOutline.presentation(for: node.title).title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let folder = sourceNote.deletingLastPathComponent()
+        guard !title.isEmpty,
+              let filename = WorkspaceFiles.nextAvailableNoteName(basedOn: title, in: folder)
+        else {
+            model.message = language.text("Could not create a linked note from this node.")
+            return
+        }
+
+        let target = folder.appendingPathComponent(filename).standardizedFileURL
+        guard let wikiTarget = WorkspaceFiles.canonicalWikiTarget(for: target, in: root),
+              let updated = MindMapOutline.appendWikiLink(
+                in: model.draft,
+                nodeID: nodeID,
+                target: wikiTarget,
+                label: title
+              )
+        else {
+            model.message = language.text("Could not create a linked note from this node.")
+            return
+        }
+
+        guard let created = model.newNote(
+            named: filename,
+            in: folder,
+            initialContent: "# \(title)\n\n",
+            activateAfterCreation: false
+        ) else { return }
+
+        model.draft = updated
+        model.save()
+        mindMapSelectionLine = nodeID
+        guard !model.isDirty else { return }
+        model.message = "\(language.text("Created linked note")): \(created.deletingPathExtension().lastPathComponent)"
+    }
+
     private func prepareMindMapSectionTarget(nodeID: Int, target: URL) {
         guard let root = model.root else { return }
         let expectedTarget = target.standardizedFileURL
@@ -2271,6 +2327,7 @@ struct NotesWindow: View {
                 openLink: { target in _ = model.openKnowledgeLink(target) },
                 connectNote: { nodeID in beginMindMapLink(nodeID: nodeID) },
                 connectSection: { nodeID in beginMindMapLink(nodeID: nodeID, section: true) },
+                createLinkedNote: { nodeID in createLinkedNoteFromMindMap(nodeID: nodeID) },
                 revealSource: { line in revealMarkdownLine(line) },
                 importOutline: { markdown, name in
                     // Import into a new note rather than overwriting the active note.
