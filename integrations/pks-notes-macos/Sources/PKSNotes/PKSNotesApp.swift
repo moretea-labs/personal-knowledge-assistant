@@ -468,7 +468,7 @@ struct NotesWindow: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
+                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil && !showingMindMap {
                     HStack(spacing: 2) {
                         ForEach(ReadingMode.allCases, id: \.self) { choice in
                             Button {
@@ -1564,53 +1564,65 @@ struct NotesWindow: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(matches.indices, id: \.self) { i in
-                            let item = matches[i]
-                            Button {
-                                openQuickMatch(item)
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: item.iconName)
-                                        .font(.system(size: NotesGeometry.symbolSize))
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: NotesGeometry.treeIconWidth)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(item.name)
-                                            .font(.system(size: 14, weight: i == quickOpenIndex ? .semibold : .regular))
-                                            .foregroundStyle(.primary)
-                                            .lineLimit(1)
-                                        Text(NoteTreePresentation.quickOpenFolder(for: item.url, in: model.root))
-                                            .font(.system(size: 11))
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 2) {
+                            ForEach(matches.indices, id: \.self) { i in
+                                let item = matches[i]
+                                Button {
+                                    openQuickMatch(item)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: item.iconName)
+                                            .font(.system(size: NotesGeometry.symbolSize))
                                             .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                            .truncationMode(.middle)
-                                            .help(NoteTreePresentation.quickOpenFolder(for: item.url, in: model.root))
+                                            .frame(width: NotesGeometry.treeIconWidth)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(item.name)
+                                                .font(.system(size: 14, weight: i == quickOpenIndex ? .semibold : .regular))
+                                                .foregroundStyle(.primary)
+                                                .lineLimit(1)
+                                            Text(NoteTreePresentation.quickOpenFolder(for: item.url, in: model.root))
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
+                                                .help(NoteTreePresentation.quickOpenFolder(for: item.url, in: model.root))
+                                        }
+                                        Spacer()
+                                        if i == quickOpenIndex {
+                                            Image(systemName: "return")
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.tertiary)
+                                        }
                                     }
-                                    Spacer()
-                                    if i == quickOpenIndex {
-                                        Image(systemName: "return")
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(.tertiary)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        i == quickOpenIndex ? theme.linkColor.opacity(0.12) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 8)
+                                    )
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .onHover { hovering in
+                                    if hovering {
+                                        quickOpenIndex = i
+                                        model.prefetchFile(item.url)
                                     }
                                 }
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background(
-                                    i == quickOpenIndex ? theme.linkColor.opacity(0.12) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 8)
-                                )
-                                .contentShape(Rectangle())
+                                .id(i)
+                                .accessibilityIdentifier("pks-quick-open-\(item.id)")
                             }
-                            .buttonStyle(.plain)
-                            .onHover { hovering in
-                                if hovering { model.prefetchFile(item.url) }
-                            }
-                            .accessibilityIdentifier("pks-quick-open-\(item.id)")
+                        }
+                        .padding(8)
+                    }
+                    .onChange(of: quickOpenIndex) { _, index in
+                        guard matches.indices.contains(index) else { return }
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            proxy.scrollTo(index, anchor: .center)
                         }
                     }
-                    .padding(8)
                 }
             }
         }
@@ -2229,6 +2241,11 @@ struct NotesWindow: View {
                         if let item = rows.first(where: { $0.id == next.path })?.item,
                            item.isMarkdown || item.isPDF {
                             model.prefetchFile(item.url)
+                        }
+                        // Scroll after folder expansion yields its visible rows.
+                        Task { @MainActor in
+                            await Task.yield()
+                            treeRevealRequest = next.path
                         }
                     }
                 }
