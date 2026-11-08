@@ -412,9 +412,27 @@ struct BacklinkScanResult: Equatable {
     let skippedDatalessFiles: Int
 }
 
+/// Transient projection of the complete vault file index for link resolution.
+/// Markdown/filesystem data remains authoritative; this only removes repeated
+/// O(N) filter/map/grouping work from every backlink scan and link activation.
+struct WorkspaceLinkCandidateIndex: Sendable {
+    let markdownFiles: [URL]
+    let byBasename: [String: [URL]]
+
+    init(markdownFiles: [URL]) {
+        self.markdownFiles = markdownFiles.map { $0.standardizedFileURL }
+        self.byBasename = Dictionary(grouping: self.markdownFiles) {
+            $0.deletingPathExtension().lastPathComponent
+        }
+    }
+
+    static let empty = WorkspaceLinkCandidateIndex(markdownFiles: [])
+}
+
 private struct GlobalFileIndexSnapshot {
     let files: [NoteItem]
     let quickOpenEntries: [NoteTreePresentation.QuickOpenEntry]
+    let linkCandidates: WorkspaceLinkCandidateIndex
 }
 
 /// Session-only memoization of raw outgoing Markdown links. The file itself
@@ -426,19 +444,67 @@ final class WorkspaceBacklinkParseCache: @unchecked Sendable {
         let hit: Bool
     }
 
+    private final class Node {
+        let key: String
+        weak var previous: Node?
+        var next: Node?
+
+        init(key: String) {
+            self.key = key
+        }
+    }
+
     private struct Entry {
         let stamp: WorkspaceFileStamp
         let links: [MindMapLink]
-        var lastAccess: UInt64
+        let node: Node
     }
 
     private let lock = NSLock()
     private let capacity: Int
-    private var accessClock: UInt64 = 0
     private var entries: [String: Entry] = [:]
+    private var leastRecent: Node?
+    private var mostRecent: Node?
 
     init(capacity: Int = 1_024) {
         self.capacity = max(1, capacity)
+    }
+
+    private func unlink(_ node: Node) {
+        let previous = node.previous
+        let next = node.next
+        previous?.next = next
+        next?.previous = previous
+        if leastRecent === node { leastRecent = next }
+        if mostRecent === node { mostRecent = previous }
+        node.previous = nil
+        node.next = nil
+    }
+
+    private func markMostRecent(_ node: Node) {
+        guard mostRecent !== node else { return }
+        unlink(node)
+        node.previous = mostRecent
+        mostRecent?.next = node
+        mostRecent = node
+        if leastRecent == nil { leastRecent = node }
+    }
+
+    private func removeEntry(forKey key: String) {
+        guard let removed = entries.removeValue(forKey: key) else { return }
+        unlink(removed.node)
+    }
+
+    private func insertEntry(key: String, stamp: WorkspaceFileStamp, links: [MindMapLink]) {
+        if entries[key] == nil, entries.count >= capacity, let victim = leastRecent {
+            removeEntry(forKey: victim.key)
+        }
+        if let existing = entries[key] {
+            unlink(existing.node)
+        }
+        let node = Node(key: key)
+        entries[key] = Entry(stamp: stamp, links: links, node: node)
+        markMostRecent(node)
     }
 
     func lookup(_ source: URL) -> Lookup? {
@@ -447,16 +513,14 @@ final class WorkspaceBacklinkParseCache: @unchecked Sendable {
         guard let stamp = WorkspaceFiles.fileStamp(url) else { return nil }
 
         lock.lock()
-        if var cached = entries[key] {
+        if let cached = entries[key] {
             if cached.stamp == stamp {
-                accessClock &+= 1
-                cached.lastAccess = accessClock
-                entries[key] = cached
+                markMostRecent(cached.node)
                 let links = cached.links
                 lock.unlock()
                 return Lookup(links: links, hit: true)
             }
-            entries.removeValue(forKey: key)
+            removeEntry(forKey: key)
         }
         lock.unlock()
 
@@ -470,12 +534,7 @@ final class WorkspaceBacklinkParseCache: @unchecked Sendable {
         }
 
         lock.lock()
-        accessClock &+= 1
-        if entries[key] == nil, entries.count >= capacity,
-           let oldest = entries.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key {
-            entries.removeValue(forKey: oldest)
-        }
-        entries[key] = Entry(stamp: stamp, links: links, lastAccess: accessClock)
+        insertEntry(key: key, stamp: stamp, links: links)
         lock.unlock()
         return Lookup(links: links, hit: false)
     }
@@ -483,7 +542,8 @@ final class WorkspaceBacklinkParseCache: @unchecked Sendable {
     func removeAll() {
         lock.lock()
         entries.removeAll(keepingCapacity: true)
-        accessClock = 0
+        leastRecent = nil
+        mostRecent = nil
         lock.unlock()
     }
 
@@ -515,13 +575,14 @@ enum WorkspaceBacklinks {
         target: URL,
         root: URL,
         files: [NoteItem],
+        candidateIndex suppliedCandidateIndex: WorkspaceLinkCandidateIndex? = nil,
         parseCache: WorkspaceBacklinkParseCache? = nil
     ) -> BacklinkScanResult {
         let target = target.standardizedFileURL
-        let candidates = markdownFiles(files)
-        let candidateBasenames = Dictionary(grouping: candidates) {
-            $0.deletingPathExtension().lastPathComponent
-        }
+        let candidateIndex = suppliedCandidateIndex
+            ?? WorkspaceLinkCandidateIndex(markdownFiles: markdownFiles(files))
+        let candidates = candidateIndex.markdownFiles
+        let candidateBasenames = candidateIndex.byBasename
         var result: [NoteBacklink] = []
         var skippedDatalessFiles = 0
 
@@ -645,6 +706,7 @@ final class NotesModel: ObservableObject {
     private var globalFileScanTask: Task<GlobalFileIndexSnapshot, Never>?
     private var globalFileScanGeneration: UInt64 = 0
     private var globalFileIndexGeneration: UInt64 = 0
+    private var globalLinkCandidates = WorkspaceLinkCandidateIndex.empty
     private var knowledgeLinkTask: Task<Void, Never>?
     private var fileRefreshGeneration: UInt64 = 0
 
@@ -818,6 +880,7 @@ final class NotesModel: ObservableObject {
         globalFileIndexReady = false
         globalFiles = []
         globalQuickOpenEntries = []
+        globalLinkCandidates = .empty
         indexingFiles = false
     }
 
@@ -1032,11 +1095,19 @@ final class NotesModel: ObservableObject {
             let task = Task.detached(priority: .utility) {
                 let files = WorkspaceFiles.flatFiles(in: root)
                 guard !Task.isCancelled else {
-                    return GlobalFileIndexSnapshot(files: files, quickOpenEntries: [])
+                    return GlobalFileIndexSnapshot(
+                        files: files,
+                        quickOpenEntries: [],
+                        linkCandidates: .empty
+                    )
                 }
+                let linkCandidates = WorkspaceLinkCandidateIndex(
+                    markdownFiles: WorkspaceBacklinks.markdownFiles(files)
+                )
                 return GlobalFileIndexSnapshot(
                     files: files,
-                    quickOpenEntries: NoteTreePresentation.quickOpenEntries(files)
+                    quickOpenEntries: NoteTreePresentation.quickOpenEntries(files),
+                    linkCandidates: linkCandidates
                 )
             }
             globalFileScanTask = task
@@ -1051,6 +1122,7 @@ final class NotesModel: ObservableObject {
         globalFileIndexReady = true
         globalFiles = snapshot.files
         globalQuickOpenEntries = snapshot.quickOpenEntries
+        globalLinkCandidates = snapshot.linkCandidates
         indexingFiles = false
         if globalFileScanGeneration == generation {
             globalFileScanTask = nil
@@ -1381,10 +1453,13 @@ final class NotesModel: ObservableObject {
         backlinkTask = Task { [weak self] in
             guard let self else { return }
             let snapshot: [NoteItem]
+            let candidateIndex: WorkspaceLinkCandidateIndex?
             if let suppliedFiles {
                 snapshot = suppliedFiles
+                candidateIndex = nil
             } else {
                 snapshot = await self.completeWorkspaceFiles()
+                candidateIndex = self.globalFileIndexReady ? self.globalLinkCandidates : nil
             }
             guard !Task.isCancelled, self.root == root else { return }
 
@@ -1394,6 +1469,7 @@ final class NotesModel: ObservableObject {
                     target: note,
                     root: root,
                     files: snapshot,
+                    candidateIndex: candidateIndex,
                     parseCache: parseCache
                 )
             }.value
@@ -1629,11 +1705,14 @@ final class NotesModel: ObservableObject {
         // Exact relative/root paths remain immediate. Basename fallback must only
         // use a complete vault candidate set; a partially expanded sidebar can
         // otherwise make an ambiguous basename look unique.
-        let candidates = globalFileIndexReady
-            ? globalFiles.filter(\.isMarkdown).map { $0.url.standardizedFileURL }
-            : []
+        let candidates = globalFileIndexReady ? globalLinkCandidates.markdownFiles : []
+        let candidateBasenames = globalFileIndexReady ? globalLinkCandidates.byBasename : [:]
         if let resolved = WorkspaceFiles.resolveLinkedTarget(
-            value, from: selected, in: root, candidates: candidates
+            value,
+            from: selected,
+            in: root,
+            candidates: candidates,
+            candidateBasenames: candidateBasenames
         ) {
             openResolvedKnowledgeLink(value, resolved: resolved)
             return true
@@ -1653,13 +1732,17 @@ final class NotesModel: ObservableObject {
                   self.root == root,
                   self.selected == sourceNote else { return }
 
-            let markdownCandidates = allFiles.filter(\.isMarkdown)
-                .map { $0.url.standardizedFileURL }
+            let candidateIndex = self.globalFileIndexReady
+                ? self.globalLinkCandidates
+                : WorkspaceLinkCandidateIndex(
+                    markdownFiles: WorkspaceBacklinks.markdownFiles(allFiles)
+                )
             guard let resolved = WorkspaceFiles.resolveLinkedTarget(
                 value,
                 from: sourceNote,
                 in: root,
-                candidates: markdownCandidates
+                candidates: candidateIndex.markdownFiles,
+                candidateBasenames: candidateIndex.byBasename
             ) else {
                 self.message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
                 return

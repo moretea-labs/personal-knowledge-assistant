@@ -311,6 +311,25 @@ final class PKSNotesTests: XCTestCase {
                        "Progressive loading should expose top-level folders before recursive scanning.")
     }
 
+    func testLinkCandidateIndexPrecomputesMarkdownFilesAndBasenames() {
+        let root = URL(fileURLWithPath: "/tmp/pks-link-candidates")
+        let a = root.appendingPathComponent("A/Same.md")
+        let b = root.appendingPathComponent("B/Same.markdown")
+        let pdf = root.appendingPathComponent("Book.pdf")
+        let files = [
+            NoteItem(url: a, children: nil),
+            NoteItem(url: b, children: nil),
+            NoteItem(url: pdf, children: nil)
+        ]
+
+        let index = WorkspaceLinkCandidateIndex(
+            markdownFiles: WorkspaceBacklinks.markdownFiles(files)
+        )
+        XCTAssertEqual(Set(index.markdownFiles), Set([a.standardizedFileURL, b.standardizedFileURL]))
+        XCTAssertEqual(Set(index.byBasename["Same"] ?? []), Set([a.standardizedFileURL, b.standardizedFileURL]))
+        XCTAssertNil(index.byBasename["Book"])
+    }
+
     func testFlatVaultScanAndLoadedSubtreeReplacement() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -2040,7 +2059,13 @@ extension PKSNotesTests {
         try "[A](/A.md)".write(to: another, atomically: true, encoding: .utf8)
         try "[T](/T.md)".write(to: thirdFile, atomically: true, encoding: .utf8)
         _ = cache.lookup(another)
+        XCTAssertTrue(try XCTUnwrap(cache.lookup(source)).hit,
+                      "Touching Source should make it the most recently used entry.")
         _ = cache.lookup(thirdFile)
+        XCTAssertTrue(try XCTUnwrap(cache.lookup(source)).hit,
+                      "The most recently used entry must survive capacity eviction.")
+        XCTAssertFalse(try XCTUnwrap(cache.lookup(another)).hit,
+                       "The least recently used entry should be evicted in O(1).")
         XCTAssertLessThanOrEqual(cache.entryCount, 2)
 
         cache.removeAll()
