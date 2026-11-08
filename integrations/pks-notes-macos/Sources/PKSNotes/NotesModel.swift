@@ -1107,7 +1107,7 @@ final class NotesModel: ObservableObject {
         var info = Darwin.stat()
         guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0,
               (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else { return }
-        openNote(url)
+        openNote(url, reportFailure: false)
     }
 
     private func invalidateGlobalFileIndex() {
@@ -1557,12 +1557,17 @@ final class NotesModel: ObservableObject {
         }
     }
 
-    func openNote(_ url: URL, navigationDecision: UnsavedNoteDecision? = nil) {
+    func openNote(_ url: URL, navigationDecision: UnsavedNoteDecision? = nil,
+                  reportFailure: Bool = true) {
         guard let root, WorkspaceFiles.contains(url, in: root),
               ["md", "markdown"].contains(url.pathExtension.lowercased()) else {
-            message = AppLanguage.current.text("Only Markdown files inside the selected workspace can be edited."); return
+            if reportFailure {
+                message = AppLanguage.current.text("Only Markdown files inside the selected workspace can be edited.")
+            }
+            return
         }
-        openValidatedNote(url, navigationDecision: navigationDecision, preservePDFPreview: false)
+        openValidatedNote(url, navigationDecision: navigationDecision,
+                          preservePDFPreview: false, reportFailure: reportFailure)
     }
 
     /// Loads one Markdown note beside the active PDF while keeping the canonical
@@ -1583,7 +1588,8 @@ final class NotesModel: ObservableObject {
     private func openValidatedNote(
         _ url: URL,
         navigationDecision: UnsavedNoteDecision?,
-        preservePDFPreview: Bool
+        preservePDFPreview: Bool,
+        reportFailure: Bool = true
     ) {
         if requestedNote == url { return }
         if selected == url {
@@ -1592,7 +1598,7 @@ final class NotesModel: ObservableObject {
             return
         }
         guard confirmLeavingNote(decision: navigationDecision) else { return }
-        loadNote(url, preservePDFPreview: preservePDFPreview)
+        loadNote(url, preservePDFPreview: preservePDFPreview, reportFailure: reportFailure)
     }
 
     private func cancelNoteLoad() {
@@ -1640,7 +1646,8 @@ final class NotesModel: ObservableObject {
         filePrefetchPath = nil
     }
 
-    private func loadNote(_ url: URL, preservePDFPreview: Bool = false) {
+    private func loadNote(_ url: URL, preservePDFPreview: Bool = false,
+                          reportFailure: Bool = true) {
         cancelNoteLoad()
         previewTask?.cancel()
         requestedNote = url
@@ -1684,7 +1691,8 @@ final class NotesModel: ObservableObject {
             } catch {
                 guard !Task.isCancelled else { return }
                 await self?.failOpeningNote(url, identity: identity,
-                                            reason: error.localizedDescription)
+                                            reason: error.localizedDescription,
+                                            reportFailure: reportFailure)
             }
         }
     }
@@ -1872,10 +1880,13 @@ final class NotesModel: ObservableObject {
         }
     }
 
-    private func failOpeningNote(_ url: URL, identity: UUID, reason: String) {
+    private func failOpeningNote(_ url: URL, identity: UUID, reason: String,
+                                 reportFailure: Bool = true) {
         guard requestedNote == url, loadIdentity == identity else { return }
         cancelNoteLoad()
-        message = "\(AppLanguage.current.text("Cannot open the note")): \(reason)"
+        if reportFailure {
+            message = "\(AppLanguage.current.text("Cannot open the note")): \(reason)"
+        }
     }
 
     func save() {

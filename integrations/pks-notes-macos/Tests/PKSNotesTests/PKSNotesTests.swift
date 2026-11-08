@@ -948,6 +948,42 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertFalse(model.loadingNote)
     }
 
+    @MainActor
+    func testAutomaticRestoreFailureIsSilentButExplicitOpenStillReportsError() async throws {
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        let previousNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let previousWorkspace { defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousNote { defaults.set(previousNote, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let invalid = folder.appendingPathComponent("dataless-like.md")
+        try Data([0xFF, 0xFE, 0xFD]).write(to: invalid)
+        defaults.set(invalid.path, forKey: "PKSNotesLastOpenedMarkdown")
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(folder))
+        for _ in 0..<100 where model.loadingNote {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNil(model.selected)
+        XCTAssertFalse(model.loadingNote)
+        XCTAssertNil(model.message)
+
+        model.openNote(invalid)
+        for _ in 0..<100 where model.loadingNote {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNil(model.selected)
+        XCTAssertTrue(model.message?.contains(AppLanguage.current.text("Cannot open the note")) == true)
+    }
+
     func testCanonicalWikiTargetIsRootRelativeEncodedAndRoundTrips() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
