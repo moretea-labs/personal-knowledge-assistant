@@ -152,6 +152,7 @@ struct MindMapCanvas: View {
     @Environment(\.notesLanguage) private var language
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(MindMapVisualStyle.defaultsKey) private var mapStyleID = MindMapVisualStyle.classic.rawValue
+    @AppStorage(MindMapLayoutDensity.defaultsKey) private var layoutDensityID = MindMapLayoutDensity.standard.rawValue
     @Binding var source: String
     @Binding var selectedID: Int?
     let revision: UInt64
@@ -183,6 +184,10 @@ struct MindMapCanvas: View {
 
     private var mapStyle: MindMapVisualStyle {
         MindMapVisualStyle(rawValue: mapStyleID) ?? .classic
+    }
+
+    private var layoutDensity: MindMapLayoutDensity {
+        MindMapLayoutDensity(rawValue: layoutDensityID) ?? .standard
     }
 
     private struct ActionAvailabilityKey: Hashable {
@@ -326,6 +331,9 @@ struct MindMapCanvas: View {
             }
         }
         .onChange(of: collapsed) { _, _ in
+            rebuildVisibleLayout()
+        }
+        .onChange(of: layoutDensityID) { _, _ in
             rebuildVisibleLayout()
         }
         .task(id: ActionAvailabilityKey(revision: revision, selectedID: selectedID)) {
@@ -477,6 +485,20 @@ struct MindMapCanvas: View {
                         }
                     }
                     .accessibilityIdentifier("pks-mind-map-style-\(style.rawValue)")
+                }
+                Divider()
+                Text(language.text("Layout Density"))
+                ForEach(MindMapLayoutDensity.allCases) { density in
+                    Button {
+                        layoutDensityID = density.rawValue
+                        requestCanvasFocus()
+                    } label: {
+                        Label(language.text(density.label), systemImage: density.symbol)
+                        if layoutDensity == density {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                    .accessibilityIdentifier("pks-mind-map-density-\(density.rawValue)")
                 }
                 Divider()
                 Text(language.text("Appearance applies to all mind maps."))
@@ -1053,7 +1075,7 @@ struct MindMapCanvas: View {
     private func exportPNG() {
         guard !nodes.isEmpty else { return }
         // Export the complete Markdown outline, independent of the user's collapsed viewport.
-        let layout = MindMapSpatialLayout.layout(nodes)
+        let layout = MindMapSpatialLayout.layout(nodes, density: layoutDensity)
         let size = layout.size
         guard size.width * size.height <= 20_000_000 else {
             interchangeError = language.text("This map is too large for a single PNG. Try PDF.")
@@ -1076,7 +1098,7 @@ struct MindMapCanvas: View {
 
     private func exportPDF() {
         guard !nodes.isEmpty else { return }
-        let layout = MindMapSpatialLayout.layout(nodes)
+        let layout = MindMapSpatialLayout.layout(nodes, density: layoutDensity)
         let size = layout.size
         let content = spatialCanvas(layout, exporting: true)
             .background(Color.white)
@@ -1118,7 +1140,7 @@ struct MindMapCanvas: View {
             return true
         }
         visible = filtered
-        mapLayout = MindMapSpatialLayout.layout(filtered)
+        mapLayout = MindMapSpatialLayout.layout(filtered, density: layoutDensity)
     }
 
     private func fitToContent(viewport: CGSize) {

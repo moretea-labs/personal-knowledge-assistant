@@ -1,5 +1,37 @@
 import CoreGraphics
 
+/// Visual spacing is an app preference, not a second node/document authority.
+enum MindMapLayoutDensity: String, CaseIterable, Identifiable {
+    case compact, standard, spacious
+
+    static let defaultsKey = "PKSNotesMindMapDensity"
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .compact: "Compact"
+        case .standard: "Standard"
+        case .spacious: "Spacious"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .compact: "rectangle.compress.vertical"
+        case .standard: "rectangle"
+        case .spacious: "rectangle.expand.vertical"
+        }
+    }
+
+    var scale: CGFloat {
+        switch self {
+        case .compact: 0.86
+        case .standard: 1
+        case .spacious: 1.18
+        }
+    }
+}
+
 struct MindMapPlacement: Identifiable, Equatable {
     let node: MindMapNode
     let parentID: Int?
@@ -15,12 +47,16 @@ struct MindMapLayoutSnapshot: Equatable {
 }
 
 enum MindMapSpatialLayout {
-    private static let margin: CGFloat = 42
-    private static let columnStride: CGFloat = 270
-    private static let siblingGap: CGFloat = 24
-    private static let rootGap: CGFloat = 40
-
-    static func layout(_ nodes: [MindMapNode]) -> MindMapLayoutSnapshot {
+    static func layout(
+        _ nodes: [MindMapNode],
+        density: MindMapLayoutDensity = .standard
+    ) -> MindMapLayoutSnapshot {
+        // Keep node dimensions and connector spacing from a single layout
+        // scale so compact maps never overlap and exports match the canvas.
+        let margin: CGFloat = 42 * density.scale
+        let columnStride: CGFloat = 270 * density.scale
+        let siblingGap: CGFloat = 24 * density.scale
+        let rootGap: CGFloat = 40 * density.scale
         guard !nodes.isEmpty else {
             return .init(placements: [], size: CGSize(width: 560, height: 320))
         }
@@ -46,8 +82,8 @@ enum MindMapSpatialLayout {
 
         func nodeSize(_ node: MindMapNode) -> CGSize {
             node.depth == 0
-                ? CGSize(width: 230, height: 58)
-                : CGSize(width: 210, height: 50)
+                ? CGSize(width: 230 * density.scale, height: 58 * density.scale)
+                : CGSize(width: 210 * density.scale, height: 50 * density.scale)
         }
 
         var heightCache: [Int: CGFloat] = [:]
