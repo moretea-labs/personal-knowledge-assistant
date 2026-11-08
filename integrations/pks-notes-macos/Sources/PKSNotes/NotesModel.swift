@@ -533,12 +533,21 @@ enum WorkspaceFiles {
     }
 }
 
+struct NoteBacklinkLocation: Identifiable, Equatable {
+    let lineIndex: Int
+    let count: Int
+
+    var id: Int { lineIndex }
+}
+
 struct NoteBacklink: Identifiable, Equatable {
     let source: URL
-    let count: Int
+    let sourceStamp: WorkspaceFileStamp
+    let locations: [NoteBacklinkLocation]
 
     var id: String { source.path }
     var title: String { source.deletingPathExtension().lastPathComponent }
+    var count: Int { locations.reduce(0) { $0 + $1.count } }
 }
 
 struct BacklinkScanResult: Equatable {
@@ -573,8 +582,11 @@ private struct GlobalFileIndexSnapshot {
 /// target-specific backlink resolution is still recomputed by WorkspaceBacklinks.
 final class WorkspaceBacklinkParseCache: @unchecked Sendable {
     struct Lookup {
-        let links: [MindMapLink]
+        let stamp: WorkspaceFileStamp
+        let occurrences: [MarkdownLinkOccurrence]
         let hit: Bool
+
+        var links: [MindMapLink] { occurrences.map(\.link) }
     }
 
     private final class Node {
@@ -589,7 +601,7 @@ final class WorkspaceBacklinkParseCache: @unchecked Sendable {
 
     private struct Entry {
         let stamp: WorkspaceFileStamp
-        let links: [MindMapLink]
+        let occurrences: [MarkdownLinkOccurrence]
         let node: Node
     }
 
@@ -628,7 +640,11 @@ final class WorkspaceBacklinkParseCache: @unchecked Sendable {
         unlink(removed.node)
     }
 
-    private func insertEntry(key: String, stamp: WorkspaceFileStamp, links: [MindMapLink]) {
+    private func insertEntry(
+        key: String,
+        stamp: WorkspaceFileStamp,
+        occurrences: [MarkdownLinkOccurrence]
+    ) {
         if entries[key] == nil, entries.count >= capacity, let victim = leastRecent {
             removeEntry(forKey: victim.key)
         }
@@ -636,7 +652,7 @@ final class WorkspaceBacklinkParseCache: @unchecked Sendable {
             unlink(existing.node)
         }
         let node = Node(key: key)
-        entries[key] = Entry(stamp: stamp, links: links, node: node)
+        entries[key] = Entry(stamp: stamp, occurrences: occurrences, node: node)
         markMostRecent(node)
     }
 
@@ -649,27 +665,27 @@ final class WorkspaceBacklinkParseCache: @unchecked Sendable {
         if let cached = entries[key] {
             if cached.stamp == stamp {
                 markMostRecent(cached.node)
-                let links = cached.links
+                let occurrences = cached.occurrences
                 lock.unlock()
-                return Lookup(links: links, hit: true)
+                return Lookup(stamp: stamp, occurrences: occurrences, hit: true)
             }
             removeEntry(forKey: key)
         }
         lock.unlock()
 
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        let links = MindMapOutline.links(in: content)
+        let occurrences = MindMapOutline.linkOccurrences(in: content)
 
         // If another editor changed the file while it was being read, use this
         // parse for the current scan but do not memoize it under a stale stamp.
         guard WorkspaceFiles.fileStamp(url) == stamp else {
-            return Lookup(links: links, hit: false)
+            return Lookup(stamp: stamp, occurrences: occurrences, hit: false)
         }
 
         lock.lock()
-        insertEntry(key: key, stamp: stamp, links: links)
+        insertEntry(key: key, stamp: stamp, occurrences: occurrences)
         lock.unlock()
-        return Lookup(links: links, hit: false)
+        return Lookup(stamp: stamp, occurrences: occurrences, hit: false)
     }
 
     func removeAll() {
@@ -729,26 +745,37 @@ enum WorkspaceBacklinks {
                 skippedDatalessFiles += 1
                 continue
             }
-            let links: [MindMapLink]
+            let sourceStamp: WorkspaceFileStamp
+            let occurrences: [MarkdownLinkOccurrence]
             if let parseCache {
                 guard let cached = parseCache.lookup(source) else { continue }
-                links = cached.links
+                sourceStamp = cached.stamp
+                occurrences = cached.occurrences
             } else {
-                guard let content = try? String(contentsOf: source, encoding: .utf8) else { continue }
-                links = MindMapOutline.links(in: content)
+                guard let stamp = WorkspaceFiles.fileStamp(source),
+                      let content = try? String(contentsOf: source, encoding: .utf8)
+                else { continue }
+                let parsed = MindMapOutline.linkOccurrences(in: content)
+                guard WorkspaceFiles.fileStamp(source) == stamp else { continue }
+                sourceStamp = stamp
+                occurrences = parsed
             }
 
-            var count = 0
-            for link in links where WorkspaceFiles.linkedTargetMatches(
-                link.target,
+            var lineCounts: [Int: Int] = [:]
+            for occurrence in occurrences where WorkspaceFiles.linkedTargetMatches(
+                occurrence.link.target,
                 from: source,
                 target: target,
                 in: root,
                 candidateBasenames: candidateBasenames
             ) {
-                count += 1
+                lineCounts[occurrence.lineIndex, default: 0] += 1
             }
-            if count > 0 { result.append(.init(source: source, count: count)) }
+            guard !lineCounts.isEmpty else { continue }
+            let locations = lineCounts.keys.sorted().map {
+                NoteBacklinkLocation(lineIndex: $0, count: lineCounts[$0] ?? 0)
+            }
+            result.append(.init(source: source, sourceStamp: sourceStamp, locations: locations))
         }
 
         let backlinks = result.sorted {

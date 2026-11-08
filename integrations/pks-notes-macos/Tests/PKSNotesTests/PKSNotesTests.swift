@@ -1970,7 +1970,16 @@ extension PKSNotesTests {
         )
 
         let found = WorkspaceBacklinks.find(target: pdf, root: root, files: WorkspaceFiles.tree(in: root))
-        XCTAssertEqual(found, [NoteBacklink(source: note.standardizedFileURL, count: 2)])
+        XCTAssertEqual(found.count, 1)
+        XCTAssertEqual(found.first?.source, note.standardizedFileURL)
+        XCTAssertEqual(found.first?.count, 2)
+        XCTAssertEqual(
+            found.first?.locations,
+            [
+                NoteBacklinkLocation(lineIndex: 1, count: 1),
+                NoteBacklinkLocation(lineIndex: 2, count: 1)
+            ]
+        )
     }
 
     @MainActor
@@ -2306,7 +2315,16 @@ extension PKSNotesTests {
             files: tree,
             parseCache: cache
         )
-        XCTAssertEqual(scan.backlinks, [NoteBacklink(source: source.standardizedFileURL, count: 2)])
+        XCTAssertEqual(scan.backlinks.count, 1)
+        XCTAssertEqual(scan.backlinks.first?.source, source.standardizedFileURL)
+        XCTAssertEqual(scan.backlinks.first?.count, 2)
+        XCTAssertEqual(
+            scan.backlinks.first?.locations,
+            [
+                NoteBacklinkLocation(lineIndex: 0, count: 1),
+                NoteBacklinkLocation(lineIndex: 1, count: 1)
+            ]
+        )
         XCTAssertEqual(scan.skippedDatalessFiles, 0)
         XCTAssertEqual(cache.entryCount, 2)
         XCTAssertFalse(WorkspaceFiles.isDataless(source))
@@ -2334,6 +2352,47 @@ extension PKSNotesTests {
         )
     }
 
+    func testBacklinkOccurrencesGroupMultipleReferencesOnTheSameSourceLine() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let target = root.appendingPathComponent("Beta.md")
+        let source = root.appendingPathComponent("Source.md")
+        try "# Beta".write(to: target, atomically: true, encoding: .utf8)
+        try "[B](/Beta.md) and [B2](/Beta.md)\n[B3](/Beta.md)".write(
+            to: source,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let files = [
+            NoteItem(url: source, children: nil),
+            NoteItem(url: target, children: nil)
+        ]
+        let index = WorkspaceLinkCandidateIndex(markdownFiles: [source, target])
+        let scan = WorkspaceBacklinks.scan(
+            target: target,
+            root: root,
+            files: files,
+            candidateIndex: index,
+            parseCache: WorkspaceBacklinkParseCache(capacity: 4)
+        )
+
+        let backlink = try XCTUnwrap(scan.backlinks.first)
+        XCTAssertEqual(backlink.source, source.standardizedFileURL)
+        XCTAssertEqual(backlink.sourceStamp, WorkspaceFiles.fileStamp(source))
+        XCTAssertEqual(backlink.count, 3)
+        XCTAssertEqual(
+            backlink.locations,
+            [
+                NoteBacklinkLocation(lineIndex: 0, count: 2),
+                NoteBacklinkLocation(lineIndex: 1, count: 1)
+            ]
+        )
+    }
+
     func testBacklinkParseCacheReusesUnchangedLinksAndInvalidatesReplacement() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -2347,6 +2406,7 @@ extension PKSNotesTests {
         let first = try XCTUnwrap(cache.lookup(source))
         XCTAssertFalse(first.hit)
         XCTAssertEqual(first.links.map(\.target), ["/Alpha.md"])
+        XCTAssertEqual(first.occurrences.map(\.lineIndex), [0])
         XCTAssertEqual(cache.entryCount, 1)
 
         let second = try XCTUnwrap(cache.lookup(source))
@@ -2359,6 +2419,7 @@ extension PKSNotesTests {
         let third = try XCTUnwrap(cache.lookup(source))
         XCTAssertFalse(third.hit)
         XCTAssertEqual(third.links.map(\.target), ["/Beta.md"])
+        XCTAssertEqual(third.occurrences.map(\.lineIndex), [0])
         XCTAssertEqual(cache.entryCount, 1)
 
         let another = root.appendingPathComponent("Another.md")
