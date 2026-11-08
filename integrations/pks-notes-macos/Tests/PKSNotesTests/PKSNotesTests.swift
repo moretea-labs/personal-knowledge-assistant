@@ -868,8 +868,10 @@ final class PKSNotesTests: XCTestCase {
 
         let target = root.appendingPathComponent("Target.md")
         let deep = deepFolder.appendingPathComponent("Source.md")
+        let deepPDF = deepFolder.appendingPathComponent("Source.pdf")
         try "# Target".write(to: target, atomically: true, encoding: .utf8)
         try "[Target](/Target.md)".write(to: deep, atomically: true, encoding: .utf8)
+        try Data("%PDF-1.4\n%%EOF".utf8).write(to: deepPDF)
 
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(root))
@@ -885,9 +887,24 @@ final class PKSNotesTests: XCTestCase {
         }
         XCTAssertTrue(model.globalFileIndexReady)
         XCTAssertTrue(model.globalFiles.contains { $0.url.standardizedFileURL == deep.standardizedFileURL })
+        let sourceMatches = NoteTreePresentation.quickOpen(model.globalQuickOpenEntries, query: "source")
+        XCTAssertTrue(sourceMatches.contains { $0.url.standardizedFileURL == deep.standardizedFileURL })
+        XCTAssertTrue(sourceMatches.contains { $0.url.standardizedFileURL == deepPDF.standardizedFileURL })
+
+        // External/iCloud mutations do not pass through NotesModel's writer. The
+        // cached snapshot stays unchanged until Quick Open explicitly requests its
+        // one-shot fallback refresh after a zero-result query.
+        let latePDF = deepFolder.appendingPathComponent("Late Arrival.pdf")
+        try Data("%PDF-1.4\n%%EOF".utf8).write(to: latePDF)
+        XCTAssertTrue(NoteTreePresentation.quickOpen(model.globalQuickOpenEntries, query: "late arrival").isEmpty)
+        model.refreshGlobalFileIndex()
+        for _ in 0..<300 where !model.globalFileIndexReady {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(model.globalFileIndexReady)
         XCTAssertEqual(
-            NoteTreePresentation.quickOpen(model.globalQuickOpenEntries, query: "source").first?.url.standardizedFileURL,
-            deep.standardizedFileURL
+            NoteTreePresentation.quickOpen(model.globalQuickOpenEntries, query: "late arrival").first?.url.standardizedFileURL,
+            latePDF.standardizedFileURL
         )
 
         // A new model proves backlinks themselves can trigger the complete scan
