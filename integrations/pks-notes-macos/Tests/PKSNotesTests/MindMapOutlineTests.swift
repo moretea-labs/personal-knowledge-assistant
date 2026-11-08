@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import PKSNotes
 
@@ -353,5 +354,71 @@ extension MindMapOutlineTests {
                 .init(label: "Beta", target: "Nested/Beta.md")
             ]
         )
+    }
+}
+
+extension MindMapOutlineTests {
+    func testKeyboardCommandsCoverNavigationCreationEditingAndZoomWithoutModifierLeakage() {
+        let cases: [(KeyEquivalent, EventModifiers, MindMapKeyboard.Command)] = [
+            (.upArrow, [], .previous),
+            (.downArrow, [], .next),
+            (.leftArrow, [], .parentOrCollapse),
+            (.rightArrow, [], .childOrExpand),
+            (.tab, [], .addChild),
+            (.tab, .shift, .promote),
+            (.return, [], .addSibling),
+            ("e", [], .rename),
+            (.space, [], .toggleBranch),
+            (.delete, [], .deleteLeaf),
+            (.delete, .command, .deleteBranch),
+            ("0", .command, .fit),
+            ("-", .command, .zoomOut),
+            ("=", .command, .zoomIn),
+            ("+", [.command, .shift], .zoomIn),
+            (.escape, [], .clearSelection)
+        ]
+        for (key, modifiers, expected) in cases {
+            XCTAssertEqual(
+                MindMapKeyboard.command(for: key, modifiers: modifiers),
+                expected, "Unexpected shortcut command for key \(key)"
+            )
+        }
+        XCTAssertNil(MindMapKeyboard.command(for: .tab, modifiers: .command))
+        XCTAssertNil(MindMapKeyboard.command(for: .return, modifiers: .shift))
+        XCTAssertNil(MindMapKeyboard.command(for: "e", modifiers: .option))
+        XCTAssertNil(MindMapKeyboard.command(for: .rightArrow, modifiers: .command))
+        XCTAssertNil(MindMapKeyboard.command(for: .delete, modifiers: [.command, .option]))
+        XCTAssertNil(MindMapKeyboard.command(for: .delete, modifiers: [.command, .shift]))
+    }
+
+    func testKeyboardParentChildAndLinearNavigationFollowVisibleMarkdownOutline() {
+        let outline = MindMapOutline.nodes(in: "# Root\n- A\n  - A1\n- B\n## Another")
+        XCTAssertEqual(outline.map(\.id), [0, 1, 2, 3, 4])
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 1, in: outline, moving: .childOrExpand), 2
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 2, in: outline, moving: .parentOrCollapse), 1
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 3, in: outline, moving: .parentOrCollapse), 0
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 1, in: outline, moving: .next), 2
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 0, in: outline, moving: .previous), 0
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 4, in: outline, moving: .next), 4
+        )
+        // Collapsed branches are absent from the visible list; navigation cannot
+        // target a hidden descendant or invent a separate tree.
+        let collapsed = outline.filter { $0.id != 2 }
+        XCTAssertNil(MindMapKeyboard.selection(from: 1, in: collapsed, moving: .childOrExpand))
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 1, in: collapsed, moving: .next), 3
+        )
+        XCTAssertEqual(MindMapKeyboard.selection(from: nil, in: outline, moving: .next), 0)
     }
 }

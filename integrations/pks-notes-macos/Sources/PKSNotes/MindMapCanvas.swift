@@ -2,6 +2,66 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+// Commands are resolved once from a focused canvas. Inline TextField editing
+// bypasses this dispatcher so native text editing retains its own shortcuts.
+enum MindMapKeyboard {
+    enum Command: Equatable {
+        case previous, next, parentOrCollapse, childOrExpand
+        case addChild, addSibling, promote, rename, toggleBranch
+        case deleteLeaf, deleteBranch, fit, zoomIn, zoomOut, clearSelection
+    }
+
+    static func command(for key: KeyEquivalent, modifiers: EventModifiers) -> Command? {
+        guard !modifiers.contains(.control), !modifiers.contains(.option) else { return nil }
+        if modifiers.contains(.command) {
+            if key == .delete, !modifiers.contains(.shift) { return .deleteBranch }
+            if key == "0", !modifiers.contains(.shift) { return .fit }
+            if key == "-", !modifiers.contains(.shift) { return .zoomOut }
+            if key == "=" || key == "+" { return .zoomIn }
+            return nil
+        }
+        if key == .tab { return modifiers.contains(.shift) ? .promote : .addChild }
+        guard !modifiers.contains(.shift) else { return nil }
+        switch key {
+        case .upArrow: return .previous
+        case .downArrow: return .next
+        case .leftArrow: return .parentOrCollapse
+        case .rightArrow: return .childOrExpand
+        case .return: return .addSibling
+        case .delete: return .deleteLeaf
+        case .space: return .toggleBranch
+        case .escape: return .clearSelection
+        case "e": return .rename
+        default: return nil
+        }
+    }
+
+    // Visible outline is already the current keyboard traversal order.
+    // Parent/child resolution uses Markdown depth, not a second tree authority.
+    static func selection(
+        from selectedID: Int?,
+        in visible: [MindMapNode],
+        moving direction: Command
+    ) -> Int? {
+        guard !visible.isEmpty else { return nil }
+        guard let selectedID, let index = visible.firstIndex(where: { $0.id == selectedID }) else {
+            return direction == .previous ? visible.last?.id : visible.first?.id
+        }
+        switch direction {
+        case .previous: return visible[max(0, index - 1)].id
+        case .next: return visible[min(visible.count - 1, index + 1)].id
+        case .parentOrCollapse:
+            return visible[..<index].last(where: { $0.depth < visible[index].depth })?.id
+        case .childOrExpand:
+            let following = visible.index(after: index)
+            guard following < visible.endIndex,
+                  visible[following].depth > visible[index].depth else { return nil }
+            return visible[following].id
+        default: return nil
+        }
+    }
+}
+
 /// An editable Markdown-backed mind-map canvas. Markdown remains the only document authority.
 struct MindMapCanvas: View {
     @Environment(\.notesLanguage) private var language
@@ -18,6 +78,7 @@ struct MindMapCanvas: View {
     @State private var editingNodeID: Int?
     @State private var editingCreatedNodeID: Int?
     @State private var interchangeError: String?
+    @State private var showingShortcuts = false
     @State private var branchDeleteCandidateID: Int?
     @State private var collapsed: Set<Int> = []
     @State private var zoom: CGFloat = 1.0
@@ -43,7 +104,8 @@ struct MindMapCanvas: View {
             toolbar
             Divider()
             GeometryReader { viewport in
-                ScrollView([.horizontal, .vertical]) {
+                ScrollViewReader { scroller in
+                    ScrollView([.horizontal, .vertical]) {
                     if !projectionReady {
                         VStack(spacing: 10) {
                             ProgressView().controlSize(.small)
@@ -82,6 +144,7 @@ struct MindMapCanvas: View {
                     }
                 }
                 .background(Color.primary.opacity(0.012))
+                .accessibilityIdentifier("pks-mind-map-canvas")
                 .simultaneousGesture(
                     MagnifyGesture()
                         .onChanged { value in
@@ -90,8 +153,23 @@ struct MindMapCanvas: View {
                         }
                         .onEnded { _ in gestureBaseZoom = nil }
                 )
-                .onReceive(NotificationCenter.default.publisher(for: .pksMindMapFit)) { _ in
-                    fitToContent(viewport: viewport.size)
+                    .onReceive(NotificationCenter.default.publisher(for: .pksMindMapFit)) { _ in
+                        fitToContent(viewport: viewport.size)
+                    }
+                    .onChange(of: selectedID) { _, selected in
+                        guard let selected,
+                              visible.contains(where: { $0.id == selected }) else { return }
+                        withAnimation(.easeOut(duration: 0.14)) {
+                            scroller.scrollTo(selected, anchor: .center)
+                        }
+                    }
+                    .onChange(of: visible) { _, rows in
+                        // New child/sibling nodes are parsed asynchronously after
+                        // the ID changes. Reveal them once their placement exists.
+                        guard let selected = editingNodeID ?? selectedID,
+                              rows.contains(where: { $0.id == selected }) else { return }
+                        scroller.scrollTo(selected, anchor: .center)
+                    }
                 }
             }
         }
@@ -125,6 +203,7 @@ struct MindMapCanvas: View {
             Text(interchangeError ?? "")
         }
         .focusable()
+        .focusEffectDisabled()
         .focused($canvasFocused)
         .task(id: revision) {
             let input = source
@@ -173,50 +252,58 @@ struct MindMapCanvas: View {
                 }
             }
         }
-        .onKeyPress(.downArrow) {
-            guard editingNodeID == nil else { return .ignored }
-            moveSelection(by: 1)
-            return .handled
+        .onKeyPress { press in
+            guard editingNodeID == nil,
+                  let command = MindMapKeyboard.command(for: press.key, modifiers: press.modifiers)
+            else { return .ignored }
+            return performShortcut(command) ? .handled : .ignored
         }
-        .onKeyPress(.upArrow) {
-            guard editingNodeID == nil else { return .ignored }
-            moveSelection(by: -1)
-            return .handled
+        .onChange(of: showingShortcuts) { _, visible in
+            if !visible { requestCanvasFocus() }
         }
-        .onKeyPress(.tab) {
-            guard editingNodeID == nil else { return .ignored }
-            addChild()
-            return .handled
+        .onChange(of: branchDeleteCandidateID) { _, candidate in
+            if candidate == nil { requestCanvasFocus() }
         }
-        .onKeyPress(.return) {
-            guard editingNodeID == nil else { return .ignored }
-            addSibling()
-            return .handled
-        }
-        .onKeyPress(.delete) {
-            guard editingNodeID == nil else { return .ignored }
-            deleteSelectedLeaf()
-            return .handled
-        }
-        .accessibilityIdentifier("pks-mind-map-canvas")
     }
 
     private var toolbar: some View {
-        HStack {
-            Text(language.text("Mind Map")).font(.headline)
-            Spacer()
-            Button(language.text("Add Child"), systemImage: "plus") { addChild() }
-                .disabled(nodes.isEmpty)
-                .help(language.text("Add child (Tab)"))
-                .accessibilityIdentifier("pks-mind-map-add-child")
+        HStack(spacing: 8) {
+            Text(language.text("Mind Map"))
+                .font(.headline)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Button {
+                addChild()
+            } label: {
+                Image(systemName: "plus")
+                .frame(width: 30, height: 30)
+            }
+            .disabled(nodes.isEmpty)
+            .help("\(language.text("Add Child")) · Tab")
+            .accessibilityLabel(language.text("Add Child"))
+            .accessibilityIdentifier("pks-mind-map-add-child")
 
-            Button(language.text("Add Sibling"), systemImage: "plus.square.on.square") { addSibling() }
-                .disabled(nodes.isEmpty)
-                .help(language.text("Add sibling (Return)"))
-                .accessibilityIdentifier("pks-mind-map-add-sibling")
+            Button {
+                addSibling()
+            } label: {
+                Image(systemName: "plus.square.on.square")
+                .frame(width: 30, height: 30)
+            }
+            .disabled(nodes.isEmpty)
+            .help("\(language.text("Add Sibling")) · Return")
+            .accessibilityLabel(language.text("Add Sibling"))
+            .accessibilityIdentifier("pks-mind-map-add-sibling")
 
-            Button(language.text("Rename"), systemImage: "pencil") { beginRename() }
-                .disabled(selectedID == nil)
+            Button {
+                beginRename()
+            } label: {
+                Image(systemName: "pencil")
+                .frame(width: 30, height: 30)
+            }
+            .disabled(selectedID == nil)
+            .help("\(language.text("Rename node")) · E")
+            .accessibilityLabel(language.text("Rename node"))
+            .accessibilityIdentifier("pks-mind-map-rename")
 
             Menu {
                 Button(language.text("Link Note"), systemImage: "doc.text") {
@@ -230,58 +317,83 @@ struct MindMapCanvas: View {
                     if let selectedID { createLinkedNote(selectedID) }
                 }
             } label: {
-                Label(language.text("Link"), systemImage: "link.badge.plus")
+                Image(systemName: "link.badge.plus")
+                .frame(width: 30, height: 30)
             }
             .disabled(selectedID == nil)
             .help(language.text("Link selected node to note"))
+            .accessibilityLabel(language.text("Link"))
             .accessibilityIdentifier("pks-mind-map-link")
 
-            Button(language.text("Show in Markdown"), systemImage: "text.cursor") {
+            Button {
                 if let selectedID { revealSource(selectedID) }
+            } label: {
+                Image(systemName: "text.cursor")
+                .frame(width: 30, height: 30)
             }
             .disabled(selectedID == nil)
             .help(language.text("Reveal selected node in Markdown"))
+            .accessibilityLabel(language.text("Show in Markdown"))
             .accessibilityIdentifier("pks-mind-map-reveal-markdown")
 
-            Button {
-                shiftSelected(deeper: false)
+            Menu {
+                Button(language.text("Promote node"), systemImage: "arrow.left") {
+                    _ = performShortcut(.promote)
+                }
+                .disabled(selectedID == nil || !canPromote)
+                Button(language.text("Make child of previous sibling"), systemImage: "arrow.right") {
+                    shiftSelected(deeper: true)
+                    requestCanvasFocus()
+                }
+                .disabled(selectedID == nil || !canDemote)
+                Divider()
+                Button(language.text("Delete Leaf"), systemImage: "trash") {
+                    _ = performShortcut(.deleteLeaf)
+                }
+                .disabled(selectedID == nil || !canDeleteLeaf)
+                Button(language.text("Delete Branch"), systemImage: "trash.slash", role: .destructive) {
+                    _ = performShortcut(.deleteBranch)
+                }
+                .disabled(selectedID == nil)
             } label: {
-                Image(systemName: "arrow.left")
+                Image(systemName: "ellipsis.circle")
+                .frame(width: 30, height: 30)
             }
-            .help(language.text("Promote node"))
-            .disabled(selectedID == nil || !canPromote)
-
-            Button {
-                shiftSelected(deeper: true)
-            } label: {
-                Image(systemName: "arrow.right")
-            }
-            .help(language.text("Make child of previous sibling"))
-            .disabled(selectedID == nil || !canDemote)
-
-            Button(language.text("Delete Leaf"), systemImage: "trash") { deleteSelectedLeaf() }
-            .disabled(selectedID == nil || !canDeleteLeaf)
+            .disabled(selectedID == nil)
+            .help(language.text("Node Actions"))
+            .accessibilityLabel(language.text("Node Actions"))
+            .accessibilityIdentifier("pks-mind-map-node-actions")
 
             Divider().frame(height: 18)
 
             Button {
-                NotificationCenter.default.post(name: .pksMindMapFit, object: nil)
+                _ = performShortcut(.zoomOut)
             } label: {
-                Image(systemName: "arrow.down.right.and.arrow.up.left")
-            }
-            .help(language.text("Fit map to window"))
-
-            Button { zoom = clampedZoom(zoom - 0.15) } label: {
                 Image(systemName: "minus.magnifyingglass")
+                .frame(width: 30, height: 30)
             }
-            .help(language.text("Zoom out"))
+            .help("\(language.text("Zoom out")) · ⌘−")
+            .accessibilityLabel(language.text("Zoom out"))
             Text("\(Int((zoom * 100).rounded()))%")
                 .font(.caption.monospacedDigit())
-                .frame(width: 45)
-            Button { zoom = clampedZoom(zoom + 0.15) } label: {
+                .frame(width: 42)
+            Button {
+                _ = performShortcut(.zoomIn)
+            } label: {
                 Image(systemName: "plus.magnifyingglass")
+                .frame(width: 30, height: 30)
             }
-            .help(language.text("Zoom in"))
+            .help("\(language.text("Zoom in")) · ⌘+")
+            .accessibilityLabel(language.text("Zoom in"))
+            Button {
+                _ = performShortcut(.fit)
+            } label: {
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                .frame(width: 30, height: 30)
+            }
+            .help("\(language.text("Fit map to window")) · ⌘0")
+            .accessibilityLabel(language.text("Fit map to window"))
+            .accessibilityIdentifier("pks-mind-map-fit")
 
             Menu {
                 Button(language.text("Import MindNode Package…")) { importMindNode() }
@@ -297,11 +409,142 @@ struct MindMapCanvas: View {
                     .disabled(nodes.isEmpty)
             } label: {
                 Image(systemName: "square.and.arrow.up.on.square")
+                .frame(width: 30, height: 30)
             }
             .help(language.text("MindNode package interchange, OPML, PNG and PDF export"))
+            .accessibilityLabel(language.text("Import/Export"))
             .accessibilityIdentifier("pks-mind-map-interchange")
+
+            Button {
+                showingShortcuts.toggle()
+            } label: {
+                Image(systemName: "keyboard")
+                .frame(width: 30, height: 30)
+            }
+            .help(language.text("Mind Map Shortcuts"))
+            .accessibilityLabel(language.text("Mind Map Shortcuts"))
+            .accessibilityIdentifier("pks-mind-map-shortcuts")
+            .popover(isPresented: $showingShortcuts, arrowEdge: .bottom) {
+                shortcutHelp
+            }
         }
-        .padding(16)
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .padding(.horizontal, 14)
+        .frame(height: 46)
+    }
+
+    private var shortcutHelp: some View {
+        let rows: [(String, String)] = [
+            ("↑ / ↓", "Select previous / next node"),
+            ("← / →", "Parent / child; collapse / expand"),
+            ("Tab", "Add Child"),
+            ("Return", "Add Sibling"),
+            ("⇧ Tab", "Promote node"),
+            ("E", "Rename node"),
+            ("Space", "Collapse / expand branch"),
+            ("Delete", "Delete Leaf"),
+            ("⌘ Delete", "Delete Branch"),
+            ("⌘ + / ⌘ −", "Zoom in / out"),
+            ("⌘ 0", "Fit map to window"),
+            ("Esc", "Clear selection")
+        ]
+        return VStack(alignment: .leading, spacing: 11) {
+            Text(language.text("Mind Map Shortcuts"))
+                .font(.headline)
+            ForEach(rows.indices, id: \.self) { index in
+                HStack(spacing: 14) {
+                    Text(rows[index].0)
+                        .font(.system(.caption, design: .monospaced, weight: .medium))
+                        .frame(width: 112, alignment: .leading)
+                    Text(language.text(rows[index].1))
+                        .font(.subheadline)
+                    Spacer(minLength: 0)
+                }
+            }
+            Text(language.text("Shortcuts work when the map is focused, not while editing a node title."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
+        }
+        .padding(18)
+        .frame(width: 410, alignment: .leading)
+    }
+
+    private func requestCanvasFocus() {
+        Task { @MainActor in
+            await Task.yield()
+            if editingNodeID == nil { canvasFocused = true }
+        }
+    }
+
+    @discardableResult
+    private func performShortcut(_ command: MindMapKeyboard.Command) -> Bool {
+        switch command {
+        case .previous, .next:
+            guard !visible.isEmpty else { return false }
+            selectedID = MindMapKeyboard.selection(from: selectedID, in: visible, moving: command)
+        case .parentOrCollapse:
+            guard let selectedID,
+                  let index = visible.firstIndex(where: { $0.id == selectedID }) else {
+                self.selectedID = visible.first?.id
+                return !visible.isEmpty
+            }
+            if index + 1 < visible.count, visible[index + 1].depth > visible[index].depth {
+                collapsed.insert(selectedID)
+            } else if let parent = MindMapKeyboard.selection(
+                from: selectedID, in: visible, moving: .parentOrCollapse
+            ) {
+                self.selectedID = parent
+            } else { return false }
+        case .childOrExpand:
+            guard let selectedID else {
+                self.selectedID = visible.first?.id
+                return !visible.isEmpty
+            }
+            if collapsed.remove(selectedID) != nil {
+                // The layout refresh makes the child available on the next press.
+            } else if let child = MindMapKeyboard.selection(
+                from: selectedID, in: visible, moving: .childOrExpand
+            ) {
+                self.selectedID = child
+            } else { return false }
+        case .addChild:
+            guard !nodes.isEmpty else { return false }
+            addChild()
+        case .addSibling:
+            guard !nodes.isEmpty else { return false }
+            addSibling()
+        case .promote:
+            guard let updated = shiftedSource(deeper: false) else { return false }
+            source = updated
+            collapsed.removeAll()
+        case .rename:
+            guard selectedID != nil else { return false }
+            beginRename()
+        case .toggleBranch:
+            guard let selectedID,
+                  let index = nodes.firstIndex(where: { $0.id == selectedID }),
+                  index + 1 < nodes.count,
+                  nodes[index + 1].depth > nodes[index].depth else { return false }
+            if !collapsed.insert(selectedID).inserted { collapsed.remove(selectedID) }
+        case .deleteLeaf:
+            guard let selectedID, let updated = MindMapOutline.deleteLeaf(in: source, nodeID: selectedID)
+            else { return false }
+            source = updated
+            self.selectedID = nil
+        case .deleteBranch:
+            guard let selectedID, MindMapOutline.deleteListSubtree(in: source, nodeID: selectedID) != nil
+            else { return false }
+            branchDeleteCandidateID = selectedID
+        case .fit:
+            NotificationCenter.default.post(name: .pksMindMapFit, object: nil)
+        case .zoomIn: zoom = clampedZoom(zoom + 0.15)
+        case .zoomOut: zoom = clampedZoom(zoom - 0.15)
+        case .clearSelection: selectedID = nil
+        }
+        if editingNodeID == nil, command != .deleteBranch { requestCanvasFocus() }
+        return true
     }
 
     @ViewBuilder
@@ -323,6 +566,7 @@ struct MindMapCanvas: View {
                 nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id), exporting: exporting)
                     .frame(width: placement.size.width, height: placement.size.height)
                     .position(placement.center)
+                    .id(placement.id)
             }
         }
         .frame(width: layout.size.width, height: layout.size.height, alignment: .topLeading)
@@ -360,12 +604,18 @@ struct MindMapCanvas: View {
                         .font(.system(size: 10, weight: .semibold))
                 } else {
                     Button {
+                        selectedID = node.id
                         if !collapsed.insert(node.id).inserted { collapsed.remove(node.id) }
+                        requestCanvasFocus()
                     } label: {
                         Image(systemName: collapsed.contains(node.id) ? "chevron.right" : "chevron.down")
                             .font(.system(size: 10, weight: .semibold))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("pks-mind-map-disclosure-\(node.id)")
+                    .accessibilityLabel(language.text(
+                        collapsed.contains(node.id) ? "Expand Branch" : "Collapse Branch"
+                    ))
                 }
             } else {
                 Color.clear.frame(width: 10, height: 10)
@@ -413,6 +663,9 @@ struct MindMapCanvas: View {
                     .font(.system(size: node.depth == 0 ? 16 : 14,
                                   weight: node.depth == 0 ? .semibold : .medium))
                     .lineLimit(2)
+                    .accessibilityIdentifier("pks-mind-map-node-\(node.id)")
+                    .accessibilityValue(!exporting && selectedID == node.id
+                                        ? language.text("Selected") : "")
             }
             Spacer(minLength: 0)
 
@@ -519,17 +772,21 @@ struct MindMapCanvas: View {
             }
             .disabled(MindMapOutline.deleteListSubtree(in: source, nodeID: node.id) == nil)
         }
-        .accessibilityIdentifier("pks-mind-map-node-\(node.id)")
-        .accessibilityValue(selectedID == node.id ? language.text("Selected") : "")
         .onTapGesture {
             guard editingNodeID != node.id else { return }
-            if editingNodeID != nil { finishRename(save: true) }
+            if editingNodeID != nil {
+                finishRename(save: true)
+                guard editingNodeID == nil else { return }
+            }
             selectedID = node.id
             canvasFocused = true
         }
         .onTapGesture(count: 2) {
             guard editingNodeID != node.id else { return }
-            if editingNodeID != nil { finishRename(save: true) }
+            if editingNodeID != nil {
+                finishRename(save: true)
+                guard editingNodeID == nil else { return }
+            }
             selectedID = node.id
             beginRename()
         }
@@ -713,21 +970,6 @@ struct MindMapCanvas: View {
         let horizontal = max(0.1, (viewport.width - 36) / mapLayout.size.width)
         let vertical = max(0.1, (viewport.height - 36) / mapLayout.size.height)
         zoom = clampedZoom(min(horizontal, vertical, 1.25))
-    }
-
-    private func moveSelection(by offset: Int) {
-        let rows = visible
-        guard !rows.isEmpty else {
-            selectedID = nil
-            return
-        }
-        guard let selectedID,
-              let index = rows.firstIndex(where: { $0.id == selectedID }) else {
-            self.selectedID = offset < 0 ? rows.last?.id : rows.first?.id
-            return
-        }
-        let next = min(max(index + offset, 0), rows.count - 1)
-        self.selectedID = rows[next].id
     }
 
     private func beginRename() {
