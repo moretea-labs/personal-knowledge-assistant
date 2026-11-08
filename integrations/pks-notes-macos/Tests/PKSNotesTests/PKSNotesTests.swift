@@ -705,6 +705,25 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(matches.last?.name, "Note 0023")
     }
 
+    func testQuickOpenLocalSeedIncludesDeepKnownNotesWithoutDuplicates() {
+        let root = URL(fileURLWithPath: "/tmp/pks-quickopen-seed")
+        let visible = root.appendingPathComponent("Visible.md")
+        let deepRecent = root.appendingPathComponent("Archive/2026/Deep Recent.md")
+        let tree = [NoteItem(url: visible, children: nil)]
+
+        let entries = NoteTreePresentation.quickOpenEntries(
+            tree,
+            prioritizedFiles: [deepRecent, visible]
+        )
+
+        XCTAssertEqual(entries.count, 2, "Known navigation URLs must not duplicate loaded tree items.")
+        XCTAssertEqual(
+            NoteTreePresentation.quickOpen(entries, query: "deep recent").first?.url,
+            deepRecent.standardizedFileURL,
+            "A deep recent/favorite note should be searchable before its folder is expanded."
+        )
+    }
+
     func testFolderExpansionShowsOnlyVisibleDescendants() {
         let root = URL(fileURLWithPath: "/tmp/pks-ui-test")
         let parent = root.appendingPathComponent("Projects", isDirectory: true)

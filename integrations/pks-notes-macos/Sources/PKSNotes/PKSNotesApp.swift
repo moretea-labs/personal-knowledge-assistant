@@ -310,6 +310,21 @@ struct NotesWindow: View {
     @State private var pdfCaptureRequest: PDFCaptureRequest?
     @State private var pdfCaptureCommentary = ""
 
+    private var localQuickOpenPriorityURLs: [URL] {
+        var urls: [URL] = []
+        if let selected = model.selected { urls.append(selected) }
+        urls.append(contentsOf: model.recentNotes)
+        urls.append(contentsOf: model.favoriteNotes.prefix(32))
+        return urls
+    }
+
+    private func localQuickOpenEntries(_ files: [NoteItem]) -> [NoteTreePresentation.QuickOpenEntry] {
+        NoteTreePresentation.quickOpenEntries(
+            files,
+            prioritizedFiles: localQuickOpenPriorityURLs
+        )
+    }
+
     private var pdfCapturePreviewText: String? {
         guard let text = pdfCaptureRequest?.selectedText?
             .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -651,7 +666,7 @@ struct NotesWindow: View {
                 // Folding/sorting the local tree is useful only while Quick Open is
                 // visible. Directory expansion and file mutations should not pay this
                 // derived-work cost in the background.
-                quickOpenEntries = NoteTreePresentation.quickOpenEntries(files)
+                quickOpenEntries = localQuickOpenEntries(files)
                 rebuildQuickOpenMatches()
             }
             model.loadExpandedFolders(expandedFolderPaths)
@@ -663,7 +678,7 @@ struct NotesWindow: View {
             } else {
                 // A local filesystem mutation invalidates only the full-vault
                 // projection. Keep an open picker useful immediately from the loaded tree.
-                quickOpenEntries = NoteTreePresentation.quickOpenEntries(model.files)
+                quickOpenEntries = localQuickOpenEntries(model.files)
             }
             rebuildQuickOpenMatches()
         }
@@ -856,7 +871,7 @@ struct NotesWindow: View {
     private func prepareQuickOpenPresentation() {
         quickOpenEntries = model.globalFileIndexReady
             ? model.globalQuickOpenEntries
-            : NoteTreePresentation.quickOpenEntries(model.files)
+            : localQuickOpenEntries(model.files)
         rebuildQuickOpenMatches()
         model.prepareGlobalFileIndex()
         showingQuickOpen = true
