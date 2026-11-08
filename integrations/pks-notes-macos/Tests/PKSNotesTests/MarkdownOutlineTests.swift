@@ -57,4 +57,12 @@ final class MarkdownOutlineTests: XCTestCase {
         )
         XCTAssertNil(MarkdownOutline.heading(matchingFragment: "hidden-heading", in: source))
     }
+
+    func testLinkableHeadingsOmitAmbiguousDuplicateTitles() {
+        let source = "# Overview\n## Detail\n## DETAIL\n### Unique"
+        XCTAssertEqual(
+            MarkdownOutline.linkableHeadings(in: source).map(\.title),
+            ["Overview", "Unique"]
+        )
+    }
 }

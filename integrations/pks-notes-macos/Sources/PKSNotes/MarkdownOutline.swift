@@ -86,6 +86,20 @@ enum MarkdownOutline {
         return headings.first { anchorKey($0.title) == wanted }
     }
 
+    /// Only expose headings that can be addressed unambiguously by the exact-title
+    /// fragment contract used by Note#Heading navigation.
+    static func linkableHeadings(in source: String) -> [MarkdownOutlineHeading] {
+        let all = headings(in: source)
+        var counts: [String: Int] = [:]
+        func exactKey(_ title: String) -> String {
+            title.folding(options: [.caseInsensitive, .widthInsensitive], locale: .current)
+        }
+        for heading in all {
+            counts[exactKey(heading.title), default: 0] += 1
+        }
+        return all.filter { counts[exactKey($0.title)] == 1 }
+    }
+
     private static func anchorKey(_ value: String) -> String {
         let folded = value.folding(
             options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],

@@ -682,6 +682,28 @@ final class PKSNotesTests: XCTestCase {
             WorkspaceFiles.resolveKnowledgeTarget(wikiTarget, from: source, in: root),
             target.standardizedFileURL
         )
+
+        try "# Overview\n## Café & 数据\n## Duplicate\n## duplicate".write(
+            to: target,
+            atomically: true,
+            encoding: .utf8
+        )
+        let sectionTarget = try XCTUnwrap(
+            WorkspaceFiles.canonicalWikiTarget(for: target, in: root, heading: "Café & 数据")
+        )
+        XCTAssertEqual(
+            sectionTarget,
+            "/Reference%20Notes/Design%20%231#Caf%C3%A9%20&%20%E6%95%B0%E6%8D%AE"
+        )
+        XCTAssertEqual(WorkspaceFiles.knowledgeFragment(in: sectionTarget), "Café & 数据")
+        XCTAssertEqual(
+            WorkspaceFiles.resolveKnowledgeTarget(sectionTarget, from: source, in: root),
+            target.standardizedFileURL
+        )
+        XCTAssertEqual(
+            WorkspaceFiles.linkableMarkdownHeadings(at: target, in: root)?.map(\.title),
+            ["Overview", "Café & 数据"]
+        )
     }
 
     @MainActor

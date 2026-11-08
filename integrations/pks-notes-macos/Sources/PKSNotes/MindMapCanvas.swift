@@ -10,6 +10,7 @@ struct MindMapCanvas: View {
     let revision: UInt64
     let openLink: (String) -> Void
     let connectNote: (Int) -> Void
+    let connectSection: (Int) -> Void
     let revealSource: (Int) -> Void
     let importOutline: (String, String) -> Bool
     @State private var renameTitle = ""
@@ -216,12 +217,19 @@ struct MindMapCanvas: View {
             Button(language.text("Rename"), systemImage: "pencil") { beginRename() }
                 .disabled(selectedID == nil)
 
-            Button(language.text("Link Note"), systemImage: "link.badge.plus") {
-                if let selectedID { connectNote(selectedID) }
+            Menu {
+                Button(language.text("Link Note"), systemImage: "doc.text") {
+                    if let selectedID { connectNote(selectedID) }
+                }
+                Button(language.text("Link Section"), systemImage: "text.badge.plus") {
+                    if let selectedID { connectSection(selectedID) }
+                }
+            } label: {
+                Label(language.text("Link"), systemImage: "link.badge.plus")
             }
             .disabled(selectedID == nil)
             .help(language.text("Link selected node to note"))
-            .accessibilityIdentifier("pks-mind-map-link-note")
+            .accessibilityIdentifier("pks-mind-map-link")
 
             Button(language.text("Show in Markdown"), systemImage: "text.cursor") {
                 if let selectedID { revealSource(selectedID) }
@@ -485,9 +493,13 @@ struct MindMapCanvas: View {
                 selectedID = node.id
                 beginRename()
             }
-            Button(language.text("Link Note"), systemImage: "link.badge.plus") {
+            Button(language.text("Link Note"), systemImage: "doc.text") {
                 selectedID = node.id
                 connectNote(node.id)
+            }
+            Button(language.text("Link Section"), systemImage: "text.badge.plus") {
+                selectedID = node.id
+                connectSection(node.id)
             }
             Button(language.text("Show in Markdown"), systemImage: "text.cursor") {
                 selectedID = node.id

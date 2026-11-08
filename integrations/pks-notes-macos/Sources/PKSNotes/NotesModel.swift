@@ -294,6 +294,36 @@ enum WorkspaceFiles {
         return "/" + encoded
     }
 
+    static func canonicalWikiTarget(
+        for target: URL,
+        in root: URL,
+        heading: String
+    ) -> String? {
+        guard let base = canonicalWikiTarget(for: target, in: root) else { return nil }
+        let clean = heading.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return nil }
+
+        var allowed = CharacterSet.urlFragmentAllowed
+        allowed.remove(charactersIn: "#%[]|")
+        guard let encoded = clean.addingPercentEncoding(withAllowedCharacters: allowed),
+              !encoded.isEmpty else { return nil }
+        return "\(base)#\(encoded)"
+    }
+
+    static func linkableMarkdownHeadings(at target: URL, in root: URL) -> [MarkdownOutlineHeading]? {
+        let file = target.standardizedFileURL
+        guard contains(file, in: root),
+              ["md", "markdown"].contains(file.pathExtension.lowercased())
+        else { return nil }
+
+        var info = Darwin.stat()
+        guard file.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG),
+              let source = try? String(contentsOf: file, encoding: .utf8)
+        else { return nil }
+        return MarkdownOutline.linkableHeadings(in: source)
+    }
+
     static func knowledgeFragment(in rawTarget: String) -> String? {
         guard let marker = rawTarget.firstIndex(of: "#") else { return nil }
         let raw = String(rawTarget[rawTarget.index(after: marker)...])
