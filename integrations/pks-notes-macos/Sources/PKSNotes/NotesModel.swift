@@ -1448,6 +1448,15 @@ final class NotesModel: ObservableObject {
         }
     }
 
+    /// Quick Open keeps a complete-vault snapshot for performance, but iCloud or
+    /// external tools can add files without going through this model's mutation path.
+    /// Callers use this only as a bounded fallback after a cached query returns no hits.
+    func refreshGlobalFileIndex() {
+        guard root != nil else { return }
+        invalidateGlobalFileIndex()
+        prepareGlobalFileIndex()
+    }
+
     enum UnsavedNoteDecision {
         case save, discard, cancel
     }

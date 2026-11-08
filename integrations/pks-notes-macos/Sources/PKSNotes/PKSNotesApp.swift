@@ -372,6 +372,7 @@ struct NotesWindow: View {
     @State private var showingProUpsell = false
     @State private var quickOpenQuery = ""
     @State private var quickOpenIndex = 0
+    @State private var quickOpenFallbackRescanRequested = false
     @State private var pdfCaptureRequest: PDFCaptureRequest?
     @State private var pdfCaptureCommentary = ""
     @State private var mindMapLinkNodeID: Int?
@@ -1025,12 +1026,23 @@ struct NotesWindow: View {
     private func requestGlobalQuickOpenIndexIfNeeded() {
         guard showingQuickOpen,
               !quickOpenQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !model.globalFileIndexReady,
               !model.indexingFiles else { return }
-        model.prepareGlobalFileIndex()
+
+        if !model.globalFileIndexReady {
+            model.prepareGlobalFileIndex()
+            return
+        }
+
+        // Keep the cached full-vault index fast for normal searches. A zero-result
+        // query is the only signal that an external/iCloud mutation may have made
+        // the snapshot stale, and each picker session gets at most one fallback scan.
+        guard quickOpenMatches.isEmpty, !quickOpenFallbackRescanRequested else { return }
+        quickOpenFallbackRescanRequested = true
+        model.refreshGlobalFileIndex()
     }
 
     private func prepareQuickOpenPresentation() {
+        quickOpenFallbackRescanRequested = false
         quickOpenEntries = model.globalFileIndexReady
             ? model.globalQuickOpenEntries
             : localQuickOpenEntries(model.files)
@@ -1094,6 +1106,7 @@ struct NotesWindow: View {
     private func closeQuickPicker() {
         showingQuickOpen = false
         quickOpenMatches = []
+        quickOpenFallbackRescanRequested = false
         pdfCaptureRequest = nil
         pdfCaptureCommentary = ""
         resetMindMapLinkState()
