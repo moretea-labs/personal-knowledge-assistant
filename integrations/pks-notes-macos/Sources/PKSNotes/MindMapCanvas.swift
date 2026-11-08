@@ -481,11 +481,11 @@ struct MindMapCanvas: View {
         .dropDestination(for: String.self) { items, _ in
             guard let raw = items.first,
                   let draggedID = Int(raw),
-                  let updated = MindMapOutline.moveListSubtree(
+                  let outcome = MindMapOutline.moveListSubtreeWithOutcome(
                     in: source, nodeID: draggedID, asChildOf: node.id
                   ) else { return false }
-            source = updated
-            selectedID = nil
+            source = outcome.source
+            selectedID = outcome.movedNodeID
             collapsed.removeAll()
             dropTargetID = nil
             return true
