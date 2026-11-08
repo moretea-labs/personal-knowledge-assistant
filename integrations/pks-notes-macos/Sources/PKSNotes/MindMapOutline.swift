@@ -401,6 +401,14 @@ extension MindMapOutline {
     /// Move a pure Markdown list subtree under another structural node.
     /// The moved list remains canonical Markdown; headings are anchors, not movable nodes.
     static func moveListSubtree(in source: String, nodeID: Int, asChildOf targetID: Int) -> String? {
+        moveListSubtreeWithOutcome(in: source, nodeID: nodeID, asChildOf: targetID)?.source
+    }
+
+    /// Same move, but also reports the moved root's new canonical line index so
+    /// callers can keep the moved node selected instead of dropping selection.
+    static func moveListSubtreeWithOutcome(
+        in source: String, nodeID: Int, asChildOf targetID: Int
+    ) -> (source: String, movedNodeID: Int)? {
         guard nodeID != targetID else { return nil }
         let parsed = nodes(in: source)
         guard let sourcePosition = parsed.firstIndex(where: { $0.id == nodeID }),
@@ -457,7 +465,7 @@ extension MindMapOutline {
         let adjustedTarget = targetID > nodeID ? targetID - removedCount : targetID
         guard lines.indices.contains(adjustedTarget) else { return nil }
         lines.insert(contentsOf: moved, at: adjustedTarget + 1)
-        return lines.joined(separator: "\n")
+        return (lines.joined(separator: "\n"), adjustedTarget + 1)
     }
 }
 
