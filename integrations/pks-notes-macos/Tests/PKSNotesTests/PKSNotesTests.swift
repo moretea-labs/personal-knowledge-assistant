@@ -2323,6 +2323,47 @@ extension PKSNotesTests {
     }
 
     @MainActor
+    func testPDFRelationshipsFindCanonicalCitationThroughNotesModel() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let materials = root.appendingPathComponent("Materials", isDirectory: true)
+        try fm.createDirectory(at: materials, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = root.appendingPathComponent("Study.md")
+        let pdf = materials.appendingPathComponent("Source.pdf")
+        try "# Study\n\n[Source.pdf · p. 1](/Materials/Source.pdf#page=1)\n".write(
+            to: note,
+            atomically: true,
+            encoding: .utf8
+        )
+        try Data("%PDF-1.4\n%%EOF".utf8).write(to: pdf)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<200 where model.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.openNote(note)
+        await waitForNote(model, note)
+        model.openFile(pdf)
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+
+        model.loadRelationships()
+        for _ in 0..<400 where model.loadingBacklinks {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertFalse(model.loadingBacklinks)
+        XCTAssertEqual(model.backlinks.count, 1)
+        XCTAssertEqual(model.backlinks.first?.source, note.standardizedFileURL)
+        XCTAssertEqual(
+            model.backlinks.first?.locations,
+            [NoteBacklinkLocation(lineIndex: 2, count: 1)]
+        )
+    }
+
+    @MainActor
     func testInternalPDFLinkOpensRequestedPageThroughSingleFileAuthority() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")
