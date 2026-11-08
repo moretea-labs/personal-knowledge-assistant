@@ -654,17 +654,21 @@ struct NotesWindow: View {
         }
         .onReceive(model.$files) { files in
             visibleTreeRows = NoteTreePresentation.visibleRows(files, expandedPaths: expandedFolderPaths)
-            if !model.globalFileIndexReady {
+            if showingQuickOpen, !model.globalFileIndexReady {
+                // Folding/sorting the local tree is useful only while Quick Open is
+                // visible. Directory expansion and file mutations should not pay this
+                // derived-work cost in the background.
                 quickOpenEntries = NoteTreePresentation.quickOpenEntries(files)
             }
             model.loadExpandedFolders(expandedFolderPaths)
         }
         .onReceive(model.$globalQuickOpenEntries) { entries in
+            guard showingQuickOpen else { return }
             if model.globalFileIndexReady {
                 quickOpenEntries = entries
             } else {
                 // A local filesystem mutation invalidates only the full-vault
-                // projection. Keep Quick Open useful immediately from the loaded tree.
+                // projection. Keep an open picker useful immediately from the loaded tree.
                 quickOpenEntries = NoteTreePresentation.quickOpenEntries(model.files)
             }
         }
@@ -837,13 +841,20 @@ struct NotesWindow: View {
         }
     }
 
+    private func prepareQuickOpenPresentation() {
+        quickOpenEntries = model.globalFileIndexReady
+            ? model.globalQuickOpenEntries
+            : NoteTreePresentation.quickOpenEntries(model.files)
+        model.prepareGlobalFileIndex()
+        showingQuickOpen = true
+    }
+
     private func openQuickPicker() {
         pdfCaptureRequest = nil
         pdfCaptureCommentary = ""
         quickOpenQuery = ""
         quickOpenIndex = 0
-        model.prepareGlobalFileIndex()
-        showingQuickOpen = true
+        prepareQuickOpenPresentation()
     }
 
     private func beginPDFCapture(
@@ -861,8 +872,7 @@ struct NotesWindow: View {
         pdfCaptureCommentary = ""
         quickOpenQuery = ""
         quickOpenIndex = 0
-        model.prepareGlobalFileIndex()
-        showingQuickOpen = true
+        prepareQuickOpenPresentation()
     }
 
     private func closeQuickPicker() {
