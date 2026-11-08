@@ -9,6 +9,7 @@ struct MindMapCanvas: View {
     @Binding var selectedID: Int?
     let revision: UInt64
     let openLink: (String) -> Void
+    let connectNote: (Int) -> Void
     let revealSource: (Int) -> Void
     let importOutline: (String, String) -> Bool
     @State private var renameTitle = ""
@@ -214,6 +215,13 @@ struct MindMapCanvas: View {
 
             Button(language.text("Rename"), systemImage: "pencil") { beginRename() }
                 .disabled(selectedID == nil)
+
+            Button(language.text("Link Note"), systemImage: "link.badge.plus") {
+                if let selectedID { connectNote(selectedID) }
+            }
+            .disabled(selectedID == nil)
+            .help(language.text("Link selected node to note"))
+            .accessibilityIdentifier("pks-mind-map-link-note")
 
             Button(language.text("Show in Markdown"), systemImage: "text.cursor") {
                 if let selectedID { revealSource(selectedID) }
@@ -476,6 +484,10 @@ struct MindMapCanvas: View {
                 if editingNodeID != nil { finishRename(save: true) }
                 selectedID = node.id
                 beginRename()
+            }
+            Button(language.text("Link Note"), systemImage: "link.badge.plus") {
+                selectedID = node.id
+                connectNote(node.id)
             }
             Button(language.text("Show in Markdown"), systemImage: "text.cursor") {
                 selectedID = node.id

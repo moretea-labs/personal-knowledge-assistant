@@ -116,6 +116,31 @@ extension MindMapOutlineTests {
             "Presentation must never mutate the canonical Markdown title."
         )
     }
+
+    func testAppendWikiLinkWritesOnlyCanonicalNodeLineAndIsIdempotent() {
+        let source = "# Root\n- Topic\n  - Child"
+        let linked = MindMapOutline.appendWikiLink(
+            in: source,
+            nodeID: 1,
+            target: "/References/Design%20Spec",
+            label: "Design Spec"
+        )
+
+        XCTAssertEqual(
+            linked,
+            "# Root\n- Topic [[/References/Design%20Spec|Design Spec]]\n  - Child"
+        )
+        XCTAssertEqual(
+            MindMapOutline.appendWikiLink(
+                in: linked!,
+                nodeID: 1,
+                target: "/References/Design%20Spec",
+                label: "Design Spec"
+            ),
+            linked,
+            "Connecting the same target twice must not duplicate the link."
+        )
+    }
 }
 
 

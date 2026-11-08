@@ -269,6 +269,31 @@ enum WorkspaceFiles {
         return contains(normalized, in: root) ? normalized : nil
     }
 
+    /// Build one deterministic root-relative WikiLink target for a Markdown file.
+    /// The existing resolver treats a leading slash as workspace-root relative.
+    static func canonicalWikiTarget(for target: URL, in root: URL) -> String? {
+        let canonicalRoot = root.standardizedFileURL
+        let canonicalTarget = target.standardizedFileURL
+        guard contains(canonicalTarget, in: canonicalRoot),
+              ["md", "markdown"].contains(canonicalTarget.pathExtension.lowercased())
+        else { return nil }
+
+        let prefix = canonicalRoot.path + "/"
+        guard canonicalTarget.path.hasPrefix(prefix) else { return nil }
+        var relative = String(canonicalTarget.path.dropFirst(prefix.count))
+        let ext = canonicalTarget.pathExtension
+        if !ext.isEmpty {
+            relative.removeLast(ext.count + 1)
+        }
+        guard !relative.isEmpty else { return nil }
+
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "#?[]|%")
+        guard let encoded = relative.addingPercentEncoding(withAllowedCharacters: allowed),
+              !encoded.isEmpty else { return nil }
+        return "/" + encoded
+    }
+
     /// Resolve a WikiLink/Markdown note target through one deterministic workspace path.
     /// Exact relative/root paths win; basename fallback is accepted only when unique.
     static func resolveKnowledgeTarget(

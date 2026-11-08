@@ -308,12 +308,20 @@ struct NotesWindow: View {
     @State private var quickOpenIndex = 0
     @State private var pdfCaptureRequest: PDFCaptureRequest?
     @State private var pdfCaptureCommentary = ""
+    @State private var mindMapLinkNodeID: Int?
 
     private var quickOpenMatches: [NoteItem] {
         let matches = NoteTreePresentation.quickOpen(quickOpenEntries, query: quickOpenQuery)
-        guard pdfCaptureRequest != nil else { return matches }
-        return matches.filter {
-            !$0.isFolder && ["md", "markdown"].contains($0.url.pathExtension.lowercased())
+        guard pdfCaptureRequest != nil || mindMapLinkNodeID != nil else { return matches }
+        return matches.filter { item in
+            guard !item.isFolder,
+                  ["md", "markdown"].contains(item.url.pathExtension.lowercased())
+            else { return false }
+            if mindMapLinkNodeID != nil, let selected = model.selected,
+               item.url.standardizedFileURL == selected.standardizedFileURL {
+                return false
+            }
+            return true
         }
     }
 
@@ -852,6 +860,17 @@ struct NotesWindow: View {
     private func openQuickPicker() {
         pdfCaptureRequest = nil
         pdfCaptureCommentary = ""
+        mindMapLinkNodeID = nil
+        quickOpenQuery = ""
+        quickOpenIndex = 0
+        prepareQuickOpenPresentation()
+    }
+
+    private func beginMindMapLink(nodeID: Int) {
+        guard model.selected != nil else { return }
+        pdfCaptureRequest = nil
+        pdfCaptureCommentary = ""
+        mindMapLinkNodeID = nodeID
         quickOpenQuery = ""
         quickOpenIndex = 0
         prepareQuickOpenPresentation()
@@ -863,6 +882,7 @@ struct NotesWindow: View {
         selectedText: String?,
         anchor: PDFSourceAnchor?
     ) {
+        mindMapLinkNodeID = nil
         pdfCaptureRequest = PDFCaptureRequest(
             pdf: pdf,
             page: page,
@@ -879,6 +899,7 @@ struct NotesWindow: View {
         showingQuickOpen = false
         pdfCaptureRequest = nil
         pdfCaptureCommentary = ""
+        mindMapLinkNodeID = nil
     }
 
     private func savePDFCapture(to studyNote: URL) {
@@ -903,12 +924,38 @@ struct NotesWindow: View {
     }
 
     private func openQuickMatch(_ item: NoteItem) {
+        if let nodeID = mindMapLinkNodeID {
+            connectMindMapNode(nodeID, to: item.url)
+            return
+        }
         if pdfCaptureRequest != nil {
             savePDFCapture(to: item.url)
             return
         }
         closeQuickPicker()
         model.openFile(item.url)
+    }
+
+    private func connectMindMapNode(_ nodeID: Int, to target: URL) {
+        guard let root = model.root,
+              let selected = model.selected,
+              target.standardizedFileURL != selected.standardizedFileURL,
+              let wikiTarget = WorkspaceFiles.canonicalWikiTarget(for: target, in: root),
+              let updated = MindMapOutline.appendWikiLink(
+                in: model.draft,
+                nodeID: nodeID,
+                target: wikiTarget,
+                label: target.deletingPathExtension().lastPathComponent
+              )
+        else {
+            model.message = AppLanguage.current.text("Link target not available in this workspace.")
+            return
+        }
+
+        model.draft = updated
+        mindMapSelectionLine = nodeID
+        closeQuickPicker()
+        model.message = nil
     }
 
     private func createNoteFromPDFCapture() {
@@ -943,7 +990,16 @@ struct NotesWindow: View {
     private var quickOpenSheet: some View {
         let matches = quickOpenMatches
         let selectedPreview = pdfCapturePreviewText
+        let linkingMindMapNode = mindMapLinkNodeID != nil
+        let markdownOnly = pdfCaptureRequest != nil || linkingMindMapNode
         return VStack(alignment: .leading, spacing: 0) {
+            if linkingMindMapNode {
+                Label(language.text("Link selected node to note"), systemImage: "link.badge.plus")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
+                    .padding(.bottom, 4)
+            }
             if let capture = pdfCaptureRequest {
                 HStack(spacing: 10) {
                     Label(
@@ -1009,7 +1065,7 @@ struct NotesWindow: View {
                     .frame(width: NotesGeometry.treeIconWidth)
                     .foregroundStyle(.secondary)
                 TextField(
-                    language.text(pdfCaptureRequest == nil ? "Search files…" : "Search Markdown notes…"),
+                    language.text(markdownOnly ? "Search Markdown notes…" : "Search files…"),
                     text: $quickOpenQuery
                 )
                     .textFieldStyle(.plain)
@@ -1054,13 +1110,17 @@ struct NotesWindow: View {
                         Text(language.text("Scanning files…"))
                     } else {
                         Text(language.text(
-                            pdfCaptureRequest != nil
+                            linkingMindMapNode
                                 ? (quickOpenQuery.isEmpty
-                                   ? "Choose a Markdown note for this PDF page."
+                                   ? "Choose a Markdown note to link this node."
                                    : "No Markdown notes match your search.")
-                                : (quickOpenQuery.isEmpty
-                                   ? "Type a name to find a note in your library."
-                                   : "No files match your search.")
+                                : (pdfCaptureRequest != nil
+                                   ? (quickOpenQuery.isEmpty
+                                      ? "Choose a Markdown note for this PDF page."
+                                      : "No Markdown notes match your search.")
+                                   : (quickOpenQuery.isEmpty
+                                      ? "Type a name to find a note in your library."
+                                      : "No files match your search."))
                         ))
                     }
                 }
@@ -1121,6 +1181,7 @@ struct NotesWindow: View {
                 620,
                 (matches.isEmpty ? 176 : min(470, max(238, CGFloat(matches.count) * 54 + 83)))
                     + (pdfCaptureRequest == nil ? 0 : (selectedPreview == nil ? 104 : 148))
+                    + (linkingMindMapNode ? 44 : 0)
             )
         )
         .background(Color(nsColor: .windowBackgroundColor))
@@ -1994,6 +2055,7 @@ struct NotesWindow: View {
                 selectedID: $mindMapSelectionLine,
                 revision: model.draftRevision,
                 openLink: { target in _ = model.openKnowledgeLink(target) },
+                connectNote: { nodeID in beginMindMapLink(nodeID: nodeID) },
                 revealSource: { line in revealMarkdownLine(line) },
                 importOutline: { markdown, name in
                     // Import into a new note rather than overwriting the active note.

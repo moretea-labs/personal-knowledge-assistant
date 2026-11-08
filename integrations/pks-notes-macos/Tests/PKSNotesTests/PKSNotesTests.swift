@@ -636,6 +636,25 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertFalse(model.loadingNote)
     }
 
+    func testCanonicalWikiTargetIsRootRelativeEncodedAndRoundTrips() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = root.appendingPathComponent("Reference Notes", isDirectory: true)
+        let target = folder.appendingPathComponent("Design #1.md")
+        let source = root.appendingPathComponent("Current.md")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "# Target".write(to: target, atomically: true, encoding: .utf8)
+        try "# Current".write(to: source, atomically: true, encoding: .utf8)
+        defer { try? fm.removeItem(at: root) }
+
+        let wikiTarget = try XCTUnwrap(WorkspaceFiles.canonicalWikiTarget(for: target, in: root))
+        XCTAssertEqual(wikiTarget, "/Reference%20Notes/Design%20%231")
+        XCTAssertEqual(
+            WorkspaceFiles.resolveKnowledgeTarget(wikiTarget, from: source, in: root),
+            target.standardizedFileURL
+        )
+    }
+
     func testQuickOpenSearchIsDerivedRankedAndIncludesNestedFiles() {
         let root = URL(fileURLWithPath: "/tmp/pks-quickopen")
         let docs = root.appendingPathComponent("Documents")

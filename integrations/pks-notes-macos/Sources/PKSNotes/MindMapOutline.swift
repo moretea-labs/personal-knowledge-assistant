@@ -328,6 +328,43 @@ extension MindMapOutline {
         let clean = rendered.trimmingCharacters(in: .whitespacesAndNewlines)
         return .init(title: clean.isEmpty ? title : clean, links: parsed.map(\.link))
     }
+
+    /// Add one canonical WikiLink to an existing structural node. The source
+    /// Markdown line remains the only persistence authority.
+    static func appendWikiLink(
+        in source: String,
+        nodeID: Int,
+        target: String,
+        label: String
+    ) -> String? {
+        let cleanTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTarget.isEmpty,
+              !cleanTarget.contains("|"),
+              !cleanTarget.contains("]"),
+              !cleanTarget.contains("\n"),
+              !cleanTarget.contains("\r"),
+              let context = editContext(in: source, nodeID: nodeID)
+        else { return nil }
+
+        if links(in: context.node.title).contains(where: { $0.target == cleanTarget }) {
+            return source
+        }
+
+        let cleanLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let labelIsSafe = !cleanLabel.isEmpty
+            && !cleanLabel.contains("|")
+            && !cleanLabel.contains("]")
+            && !cleanLabel.contains("\n")
+            && !cleanLabel.contains("\r")
+        let markup = labelIsSafe
+            ? "[[\(cleanTarget)|\(cleanLabel)]]"
+            : "[[\(cleanTarget)]]"
+
+        var lines = context.lines
+        let separator = lines[nodeID].hasSuffix(" ") ? "" : " "
+        lines[nodeID] += separator + markup
+        return lines.joined(separator: "\n")
+    }
 }
 
 
