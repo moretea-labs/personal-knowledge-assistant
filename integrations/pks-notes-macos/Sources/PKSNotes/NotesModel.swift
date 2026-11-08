@@ -189,25 +189,47 @@ enum WorkspaceFiles {
         }
     }
 
-    /// Flat, transient full-vault files for on-demand Quick Open/backlinks.
-    /// This avoids building and sorting a complete nested tree.
-    static func flatFiles(in root: URL) -> [NoteItem] {
+    /// One filesystem-authoritative flat traversal shared by all complete-vault
+    /// transient projections. Callers decide which lightweight derived buffers to keep.
+    private static func visitFlatFiles(in root: URL, _ visit: (URL) -> Void) {
         var pending = [root]
-        var result: [NoteItem] = []
-
         while let folder = pending.popLast() {
             guard !scanCancelled else { break }
             for entry in directoryEntries(in: folder) {
-                guard !scanCancelled else { return result }
+                guard !scanCancelled else { return }
                 switch entry.kind {
                 case .directory:
                     pending.append(entry.url)
                 case .regular:
-                    result.append(NoteItem(url: entry.url, children: nil))
+                    visit(entry.url)
                 }
             }
         }
+    }
+
+    /// Flat, transient full-vault files for compatibility/fallback callers.
+    static func flatFiles(in root: URL) -> [NoteItem] {
+        var result: [NoteItem] = []
+        visitFlatFiles(in: root) { url in
+            result.append(NoteItem(url: url, children: nil))
+        }
         return result
+    }
+
+    /// Complete-vault scan used by the global transient index. Markdown candidates
+    /// are collected during the same directory traversal instead of filtering the
+    /// complete NoteItem array in a second O(N) pass.
+    static func flatFilesAndMarkdown(in root: URL) -> (files: [NoteItem], markdownFiles: [URL]) {
+        var files: [NoteItem] = []
+        var markdownFiles: [URL] = []
+        visitFlatFiles(in: root) { url in
+            let item = NoteItem(url: url, children: nil)
+            files.append(item)
+            if item.isMarkdown {
+                markdownFiles.append(url.standardizedFileURL)
+            }
+        }
+        return (files, markdownFiles)
     }
 
     /// Reconcile one filesystem-authoritative shallow listing with already
@@ -1264,19 +1286,16 @@ final class NotesModel: ObservableObject {
         } else {
             indexingFiles = true
             let task = Task.detached(priority: .utility) {
-                let files = WorkspaceFiles.flatFiles(in: root)
+                let scan = WorkspaceFiles.flatFilesAndMarkdown(in: root)
                 guard !Task.isCancelled else {
                     return GlobalFileIndexSnapshot(
                         quickOpenEntries: [],
                         linkCandidates: .empty
                     )
                 }
-                let linkCandidates = WorkspaceLinkCandidateIndex(
-                    markdownFiles: WorkspaceBacklinks.markdownFiles(files)
-                )
                 return GlobalFileIndexSnapshot(
-                    quickOpenEntries: NoteTreePresentation.quickOpenEntries(files),
-                    linkCandidates: linkCandidates
+                    quickOpenEntries: NoteTreePresentation.quickOpenEntries(scan.files),
+                    linkCandidates: WorkspaceLinkCandidateIndex(markdownFiles: scan.markdownFiles)
                 )
             }
             globalFileScanTask = task
