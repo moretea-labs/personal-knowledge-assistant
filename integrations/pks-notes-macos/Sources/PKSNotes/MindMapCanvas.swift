@@ -880,7 +880,9 @@ struct MindMapCanvas: View {
                     .font(.system(size: node.depth == 0 ? 16 : 14,
                                   weight: node.depth == 0 ? .semibold : .medium,
                                   design: mapStyle.fontDesign))
-                    .lineLimit(2)
+                    .lineLimit(5)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(presentation.title)
                     .accessibilityIdentifier("pks-mind-map-node-\(node.id)")
                     .accessibilityValue(!exporting && selectedID == node.id
                                         ? language.text("Selected") : "")

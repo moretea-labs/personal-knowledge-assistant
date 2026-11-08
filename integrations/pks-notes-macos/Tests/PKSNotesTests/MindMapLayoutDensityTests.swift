@@ -18,6 +18,43 @@ final class MindMapLayoutDensityTests: XCTestCase {
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Spacious"), "宽松")
     }
 
+    func testLongChineseAndEnglishTitlesGrowCardHeightWithoutOverlaps() throws {
+        let longChinese = String(repeating: "跨文档关联和搜索结果需要保持准确且容易理解", count: 6)
+        let longEnglish = String(repeating: "Knowledge graph navigation and research context ", count: 6)
+            .trimmingCharacters(in: .whitespaces)
+        let markdown = """
+        # Research Notes
+        - \(longChinese)
+          - Related [[Reference|source note]] and **important** background
+        - \(longEnglish)
+          - Short
+        - Third branch
+        """
+        let nodes = MindMapOutline.nodes(in: markdown)
+        XCTAssertEqual(nodes.count, 6)
+        for density in MindMapLayoutDensity.allCases {
+            let layout = MindMapSpatialLayout.layout(nodes, density: density)
+            let longChineseID = try XCTUnwrap(nodes.first(where: { $0.title == longChinese })?.id)
+            let longEnglishID = try XCTUnwrap(nodes.first(where: { $0.title == longEnglish })?.id)
+            let chinese = try XCTUnwrap(layout.placements.first(where: { $0.id == longChineseID }))
+            let english = try XCTUnwrap(layout.placements.first(where: { $0.id == longEnglishID }))
+            XCTAssertGreaterThan(chinese.size.height, 50 * density.scale)
+            XCTAssertGreaterThan(english.size.height, 50 * density.scale)
+            let rects = layout.placements.map {
+                CGRect(x: $0.center.x - $0.size.width / 2,
+                       y: $0.center.y - $0.size.height / 2,
+                       width: $0.size.width, height: $0.size.height)
+            }
+            for i in rects.indices {
+                for j in rects.indices where j > i {
+                    XCTAssertFalse(rects[i].intersects(rects[j]),
+                                   "Long titles must not overlap for density \(density)")
+                }
+            }
+        }
+        XCTAssertEqual(MindMapOutline.nodes(in: markdown), nodes)
+    }
+
     func testSpacingChangesGeometryWithoutOverlappingOrChangingMarkdownNodes() {
         let branches = (0..<12).map { index in
             "- Branch \(index)\n  - Topic \(index)\n    - Detail \(index)\n    - Reference \(index)"

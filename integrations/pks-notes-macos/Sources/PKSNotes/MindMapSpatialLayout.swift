@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 
 /// Visual spacing is an app preference, not a second node/document authority.
@@ -80,10 +81,39 @@ enum MindMapSpatialLayout {
             }
         }
 
+        // Compute visible text height once per layout, not once per subtree
+        // traversal or SwiftUI redraw. Card width remains column-safe.
+        // The canvas shows up to five lines; longer titles expose their full
+        // text on hover instead of silently overlapping adjacent nodes.
+        var nodeSizes: [Int: CGSize] = [:]
+        nodeSizes.reserveCapacity(nodes.count)
+        for node in nodes {
+            let isRoot = node.depth == 0
+            let width: CGFloat = (isRoot ? 230 : 210) * density.scale
+            let baseHeight: CGFloat = (isRoot ? 58 : 50) * density.scale
+            var height = baseHeight
+            if node.title.count > 8 {
+                let label = String(MindMapOutline.presentation(for: node.title).title.prefix(240))
+                let font = NSFont.systemFont(
+                    ofSize: isRoot ? 16 : 14,
+                    weight: isRoot ? .semibold : .medium
+                )
+                // Reserve space for padding, disclosure, branch accent and
+                // link affordances. Readable font size is not shrunk by density.
+                let textWidth = max(72, width - 78)
+                let bounds = (label as NSString).boundingRect(
+                    with: CGSize(width: textWidth, height: 10_000),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading],
+                    attributes: [.font: font]
+                )
+                let lineHeight = font.ascender - font.descender + font.leading
+                height = max(baseHeight, ceil(min(bounds.height, lineHeight * 5) + 20))
+            }
+            nodeSizes[node.id] = CGSize(width: width, height: height)
+        }
+
         func nodeSize(_ node: MindMapNode) -> CGSize {
-            node.depth == 0
-                ? CGSize(width: 230 * density.scale, height: 58 * density.scale)
-                : CGSize(width: 210 * density.scale, height: 50 * density.scale)
+            nodeSizes[node.id] ?? .zero
         }
 
         var heightCache: [Int: CGFloat] = [:]
