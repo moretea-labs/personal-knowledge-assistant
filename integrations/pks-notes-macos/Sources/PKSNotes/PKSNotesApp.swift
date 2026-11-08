@@ -670,7 +670,6 @@ struct NotesWindow: View {
                 quickOpenEntries = localQuickOpenEntries(files)
                 rebuildQuickOpenMatches()
             }
-            model.loadExpandedFolders(expandedFolderPaths)
         }
         .onReceive(model.$globalQuickOpenEntries) { entries in
             guard showingQuickOpen else { return }

@@ -507,6 +507,60 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
+    func testBatchExpandedFolderSchedulerLoadsManyPathsWithoutRepeatedRefeed() async throws {
+        let defaults = UserDefaults.standard
+        let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let priorWorkspace { defaults.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        var expanded: Set<String> = []
+        var expectedNotes: [URL] = []
+        for index in 0..<24 {
+            let folder = root.appendingPathComponent(String(format: "Folder-%02d", index), isDirectory: true)
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            let note = folder.appendingPathComponent("Note.md")
+            try "# \(index)".write(to: note, atomically: true, encoding: .utf8)
+            expanded.insert(folder.path)
+            expectedNotes.append(note.standardizedFileURL)
+        }
+
+        func flatten(_ items: [NoteItem]) -> Set<URL> {
+            var urls: Set<URL> = []
+            func visit(_ nodes: [NoteItem]) {
+                for item in nodes {
+                    if let children = item.children { visit(children) }
+                    else { urls.insert(item.url.standardizedFileURL) }
+                }
+            }
+            visit(items)
+            return urls
+        }
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<200 where model.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.loadExpandedFolders(expanded)
+
+        for _ in 0..<600 {
+            let loaded = flatten(model.files)
+            if expectedNotes.allSatisfy(loaded.contains) { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        let loaded = flatten(model.files)
+        XCTAssertTrue(expectedNotes.allSatisfy(loaded.contains))
+    }
+
+    @MainActor
     func testWorkspaceRefreshAndFolderExpansionAreLazy() async throws {
         let defaults = UserDefaults.standard
         let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
