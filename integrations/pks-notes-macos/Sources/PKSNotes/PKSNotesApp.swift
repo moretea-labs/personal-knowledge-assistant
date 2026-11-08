@@ -302,6 +302,7 @@ struct NotesWindow: View {
     @State private var outgoingLinks: [MindMapLink] = []
     @State private var visibleTreeRows: [NoteTreePresentation.Row] = []
     @State private var quickOpenEntries: [NoteTreePresentation.QuickOpenEntry] = []
+    @State private var quickOpenMatches: [NoteItem] = []
     @State private var showingQuickOpen = false
     @State private var showingBacklinks = false
     @State private var quickOpenQuery = ""
@@ -310,19 +311,19 @@ struct NotesWindow: View {
     @State private var pdfCaptureCommentary = ""
     @State private var mindMapLinkNodeID: Int?
 
-    private var quickOpenMatches: [NoteItem] {
-        let matches = NoteTreePresentation.quickOpen(quickOpenEntries, query: quickOpenQuery)
-        guard pdfCaptureRequest != nil || mindMapLinkNodeID != nil else { return matches }
-        return matches.filter { item in
-            guard !item.isFolder,
-                  ["md", "markdown"].contains(item.url.pathExtension.lowercased())
-            else { return false }
-            if mindMapLinkNodeID != nil, let selected = model.selected,
-               item.url.standardizedFileURL == selected.standardizedFileURL {
-                return false
-            }
-            return true
-        }
+    private var localQuickOpenPriorityURLs: [URL] {
+        var urls: [URL] = []
+        if let selected = model.selected { urls.append(selected) }
+        urls.append(contentsOf: model.recentNotes)
+        urls.append(contentsOf: model.favoriteNotes.prefix(32))
+        return urls
+    }
+
+    private func localQuickOpenEntries(_ files: [NoteItem]) -> [NoteTreePresentation.QuickOpenEntry] {
+        NoteTreePresentation.quickOpenEntries(
+            files,
+            prioritizedFiles: localQuickOpenPriorityURLs
+        )
     }
 
     private var pdfCapturePreviewText: String? {
@@ -666,7 +667,8 @@ struct NotesWindow: View {
                 // Folding/sorting the local tree is useful only while Quick Open is
                 // visible. Directory expansion and file mutations should not pay this
                 // derived-work cost in the background.
-                quickOpenEntries = NoteTreePresentation.quickOpenEntries(files)
+                quickOpenEntries = localQuickOpenEntries(files)
+                rebuildQuickOpenMatches()
             }
             model.loadExpandedFolders(expandedFolderPaths)
         }
@@ -677,8 +679,12 @@ struct NotesWindow: View {
             } else {
                 // A local filesystem mutation invalidates only the full-vault
                 // projection. Keep an open picker useful immediately from the loaded tree.
-                quickOpenEntries = NoteTreePresentation.quickOpenEntries(model.files)
+                quickOpenEntries = localQuickOpenEntries(model.files)
             }
+            rebuildQuickOpenMatches()
+        }
+        .onChange(of: quickOpenQuery) { _, _ in
+            if showingQuickOpen { rebuildQuickOpenMatches() }
         }
         .onChange(of: expandedFolderPaths) { _, expanded in
             visibleTreeRows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expanded)
@@ -849,10 +855,32 @@ struct NotesWindow: View {
         }
     }
 
+    private func rebuildQuickOpenMatches() {
+        let matches = NoteTreePresentation.quickOpen(quickOpenEntries, query: quickOpenQuery)
+        if pdfCaptureRequest != nil || mindMapLinkNodeID != nil {
+            quickOpenMatches = matches.filter { item in
+                guard !item.isFolder,
+                      ["md", "markdown"].contains(item.url.pathExtension.lowercased())
+                else { return false }
+                if mindMapLinkNodeID != nil, let selected = model.selected,
+                   item.url.standardizedFileURL == selected.standardizedFileURL {
+                    return false
+                }
+                return true
+            }
+        } else {
+            quickOpenMatches = matches
+        }
+        quickOpenIndex = quickOpenMatches.isEmpty
+            ? 0
+            : min(quickOpenIndex, quickOpenMatches.count - 1)
+    }
+
     private func prepareQuickOpenPresentation() {
         quickOpenEntries = model.globalFileIndexReady
             ? model.globalQuickOpenEntries
-            : NoteTreePresentation.quickOpenEntries(model.files)
+            : localQuickOpenEntries(model.files)
+        rebuildQuickOpenMatches()
         model.prepareGlobalFileIndex()
         showingQuickOpen = true
     }
@@ -897,6 +925,7 @@ struct NotesWindow: View {
 
     private func closeQuickPicker() {
         showingQuickOpen = false
+        quickOpenMatches = []
         pdfCaptureRequest = nil
         pdfCaptureCommentary = ""
         mindMapLinkNodeID = nil

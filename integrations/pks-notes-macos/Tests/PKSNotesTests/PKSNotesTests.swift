@@ -321,6 +321,25 @@ final class PKSNotesTests: XCTestCase {
                        "Progressive loading should expose top-level folders before recursive scanning.")
     }
 
+    func testLinkCandidateIndexPrecomputesMarkdownFilesAndBasenames() {
+        let root = URL(fileURLWithPath: "/tmp/pks-link-candidates")
+        let a = root.appendingPathComponent("A/Same.md")
+        let b = root.appendingPathComponent("B/Same.markdown")
+        let pdf = root.appendingPathComponent("Book.pdf")
+        let files = [
+            NoteItem(url: a, children: nil),
+            NoteItem(url: b, children: nil),
+            NoteItem(url: pdf, children: nil)
+        ]
+
+        let index = WorkspaceLinkCandidateIndex(
+            markdownFiles: WorkspaceBacklinks.markdownFiles(files)
+        )
+        XCTAssertEqual(Set(index.markdownFiles), Set([a.standardizedFileURL, b.standardizedFileURL]))
+        XCTAssertEqual(Set(index.byBasename["Same"] ?? []), Set([a.standardizedFileURL, b.standardizedFileURL]))
+        XCTAssertNil(index.byBasename["Book"])
+    }
+
     func testFlatVaultScanAndLoadedSubtreeReplacement() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -750,6 +769,25 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(matches.count, 24)
         XCTAssertEqual(matches.first?.name, "Note 0000")
         XCTAssertEqual(matches.last?.name, "Note 0023")
+    }
+
+    func testQuickOpenLocalSeedIncludesDeepKnownNotesWithoutDuplicates() {
+        let root = URL(fileURLWithPath: "/tmp/pks-quickopen-seed")
+        let visible = root.appendingPathComponent("Visible.md")
+        let deepRecent = root.appendingPathComponent("Archive/2026/Deep Recent.md")
+        let tree = [NoteItem(url: visible, children: nil)]
+
+        let entries = NoteTreePresentation.quickOpenEntries(
+            tree,
+            prioritizedFiles: [deepRecent, visible]
+        )
+
+        XCTAssertEqual(entries.count, 2, "Known navigation URLs must not duplicate loaded tree items.")
+        XCTAssertEqual(
+            NoteTreePresentation.quickOpen(entries, query: "deep recent").first?.url,
+            deepRecent.standardizedFileURL,
+            "A deep recent/favorite note should be searchable before its folder is expanded."
+        )
     }
 
     func testFolderExpansionShowsOnlyVisibleDescendants() {
@@ -2106,7 +2144,13 @@ extension PKSNotesTests {
         try "[A](/A.md)".write(to: another, atomically: true, encoding: .utf8)
         try "[T](/T.md)".write(to: thirdFile, atomically: true, encoding: .utf8)
         _ = cache.lookup(another)
+        XCTAssertTrue(try XCTUnwrap(cache.lookup(source)).hit,
+                      "Touching Source should make it the most recently used entry.")
         _ = cache.lookup(thirdFile)
+        XCTAssertTrue(try XCTUnwrap(cache.lookup(source)).hit,
+                      "The most recently used entry must survive capacity eviction.")
+        XCTAssertFalse(try XCTUnwrap(cache.lookup(another)).hit,
+                       "The least recently used entry should be evicted in O(1).")
         XCTAssertLessThanOrEqual(cache.entryCount, 2)
 
         cache.removeAll()

@@ -52,15 +52,18 @@ enum NoteTreePresentation {
     /// folding and sorting the full match set on every Quick Open keystroke.
     /// Build one buffer directly so a large flat vault does not allocate an
     /// openable-files copy, a tuple map, and a second mapped result array.
-    static func quickOpenEntries(_ items: [NoteItem]) -> [QuickOpenEntry] {
+    static func quickOpenEntries(
+        _ items: [NoteItem],
+        prioritizedFiles: [URL] = []
+    ) -> [QuickOpenEntry] {
         var entries: [QuickOpenEntry] = []
-        entries.reserveCapacity(items.count)
+        entries.reserveCapacity(items.count + prioritizedFiles.count)
+        var seenPaths: Set<String> = []
+        seenPaths.reserveCapacity(items.count + prioritizedFiles.count)
 
-        func visit(_ item: NoteItem) {
-            if let children = item.children {
-                children.forEach(visit)
-                return
-            }
+        func appendFile(_ item: NoteItem) {
+            let path = item.url.standardizedFileURL.path
+            guard seenPaths.insert(path).inserted else { return }
             entries.append(
                 QuickOpenEntry(
                     item: item,
@@ -69,6 +72,21 @@ enum NoteTreePresentation {
                     insertionOrder: entries.count
                 )
             )
+        }
+
+        // Current/recent/favorite notes are already-known navigation targets.
+        // Seeding them adds no recursive filesystem I/O and makes deep notes
+        // searchable while the complete-vault utility scan is still running.
+        prioritizedFiles.forEach {
+            appendFile(NoteItem(url: $0.standardizedFileURL, children: nil))
+        }
+
+        func visit(_ item: NoteItem) {
+            if let children = item.children {
+                children.forEach(visit)
+                return
+            }
+            appendFile(item)
         }
 
         items.forEach(visit)
