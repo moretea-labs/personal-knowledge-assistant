@@ -295,10 +295,21 @@ extension MindMapOutline {
 
     /// Preserve every Markdown link occurrence and its canonical source line.
     /// Backlinks reuse this parse result; there is no second occurrence index.
+    /// Fenced code blocks are skipped so example markup never reports as a
+    /// real backlink — matching the outgoing-link parser's fence handling.
     static func linkOccurrences(in markdown: String) -> [MarkdownLinkOccurrence] {
         var result: [MarkdownLinkOccurrence] = []
+        var fenceMarker: Character?
         for (lineIndex, line) in markdown.components(separatedBy: "\n").enumerated() {
-            guard line.contains("["), line.contains("]") else { continue }
+            let trimmed = line.drop(while: { $0.isWhitespace })
+            if let marker = trimmed.first, marker == "\u{60}" || marker == "~",
+               trimmed.prefix(while: { $0 == marker }).count >= 3 {
+                if fenceMarker == nil { fenceMarker = marker }
+                else if fenceMarker == marker { fenceMarker = nil }
+                continue
+            }
+            guard fenceMarker == nil,
+                  line.contains("["), line.contains("]") else { continue }
             for link in links(in: line) {
                 result.append(.init(link: link, lineIndex: lineIndex))
             }
