@@ -2779,6 +2779,63 @@ extension PKSNotesTests {
         cache.removeAll()
         XCTAssertEqual(cache.entryCount, 0)
     }
+
+    func testLinkOccurrencesSkipFencedCodeBlocks() {
+        let markdown = """
+        [Real](/Beta.md)
+
+        ```markdown
+        [Example](/Beta.md)
+        [[Beta]]
+        ```
+
+        [Also real](/Beta.md)
+        """
+
+        let occurrences = MindMapOutline.linkOccurrences(in: markdown)
+        XCTAssertEqual(occurrences.map(\.lineIndex), [0, 7])
+        XCTAssertEqual(occurrences.map(\.link.target), ["/Beta.md", "/Beta.md"])
+    }
+
+    func testBacklinksIgnoreLinksInsideFencedCodeBlocks() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let target = root.appendingPathComponent("Beta.md")
+        let source = root.appendingPathComponent("Source.md")
+        try "# Beta".write(to: target, atomically: true, encoding: .utf8)
+        try """
+        Intro line.
+
+        ```markdown
+        [Example](/Beta.md)
+        [[Beta]]
+        ```
+
+        [Real](/Beta.md)
+        """.write(to: source, atomically: true, encoding: .utf8)
+
+        let files = [
+            NoteItem(url: source, children: nil),
+            NoteItem(url: target, children: nil)
+        ]
+        let index = WorkspaceLinkCandidateIndex(markdownFiles: [source, target])
+        let scan = WorkspaceBacklinks.scan(
+            target: target,
+            root: root,
+            files: files,
+            candidateIndex: index
+        )
+
+        // Only the real link below the fence is a backlink; the fenced example
+        // markup must not be reported as a reference to Beta.
+        let backlink = try XCTUnwrap(scan.backlinks.first)
+        XCTAssertEqual(backlink.source, source.standardizedFileURL)
+        XCTAssertEqual(backlink.count, 1)
+        XCTAssertEqual(backlink.locations, [NoteBacklinkLocation(lineIndex: 7, count: 1)])
+    }
 }
 
 
