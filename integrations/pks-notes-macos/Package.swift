@@ -14,6 +14,6 @@ let package = Package(
             dependencies: [.product(name: "MarkdownUI", package: "swift-markdown-ui")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
-        .testTarget(name: "PKSNotesTests", dependencies: ["PKSNotes"])
+        .testTarget(name: "PKSNotesTests", dependencies: ["PKSNotes"], resources: [.process("Resources")])
     ]
 )

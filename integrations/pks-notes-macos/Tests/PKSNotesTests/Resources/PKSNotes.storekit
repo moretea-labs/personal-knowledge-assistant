@@ -1,0 +1,30 @@
+{
+  "products": [
+    {
+      "displayPrice": "13.99",
+      "familyShareable": false,
+      "internalID": "B3AF7701",
+      "localizations": [
+        {
+          "description": "Unlock advanced mind maps and linked knowledge.",
+          "displayName": "PKS Notes Pro",
+          "locale": "en_US"
+        },
+        {
+          "description": "解锁思维导图与关联知识等高级功能。",
+          "displayName": "PKS Notes 专业版",
+          "locale": "zh_CN"
+        }
+      ],
+      "productID": "com.moretea.pks.notes.pro",
+      "referenceName": "PKS Notes Pro",
+      "type": "NonConsumable"
+    }
+  ],
+  "settings": {},
+  "subscriptionGroups": [],
+  "version": {
+    "major": 1,
+    "minor": 0
+  }
+}

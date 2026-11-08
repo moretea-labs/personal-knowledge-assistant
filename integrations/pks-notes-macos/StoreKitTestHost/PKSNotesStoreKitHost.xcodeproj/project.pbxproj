@@ -1,0 +1,441 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 46;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0A2F66ED74084851C6322EAB /* ProPurchaseHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EA2CCF4ED1080D05D6D1A8B /* ProPurchaseHostTests.swift */; };
+		34DC2EC2F31B343CFB9BE2E9 /* AppPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = D931BCB486B42680B83BE70C /* AppPreferences.swift */; };
+		53B1CFD21C1109F5C5FF1E33 /* StoreKitTestHostApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 260871EF521B423F7979C460 /* StoreKitTestHostApp.swift */; };
+		8C52700D80463560573FB2B8 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C8ED2B945DD4EF965AFD5BFF /* Cocoa.framework */; };
+		977B39624B2B7F920DB41663 /* PKSNotes.storekit in Resources */ = {isa = PBXBuildFile; fileRef = 99B4A59BFA487026F6791600 /* PKSNotes.storekit */; };
+		9AB456D0CD2199970A07AC19 /* ProPurchases.swift in Sources */ = {isa = PBXBuildFile; fileRef = 775D5949F828F29BCECE9AF2 /* ProPurchases.swift */; };
+		9C61843AF211341B2322847D /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C8ED2B945DD4EF965AFD5BFF /* Cocoa.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		6486DA47D5492E9C5A1B95E6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2B8F71AF5A11E72DAC882152 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 053E5D31210C8B66F80A1A98;
+			remoteInfo = PKSNotesStoreKitHost;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		260871EF521B423F7979C460 /* StoreKitTestHostApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StoreKitTestHostApp.swift; sourceTree = "<group>"; };
+		5EA2CCF4ED1080D05D6D1A8B /* ProPurchaseHostTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProPurchaseHostTests.swift; sourceTree = "<group>"; };
+		775D5949F828F29BCECE9AF2 /* ProPurchases.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ProPurchases.swift; path = ../Sources/PKSNotes/ProPurchases.swift; sourceTree = "<group>"; };
+		7F22C95CB95B1732E907BA1F /* PKSNotesStoreKitHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PKSNotesStoreKitHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		99B4A59BFA487026F6791600 /* PKSNotes.storekit */ = {isa = PBXFileReference; includeInIndex = 1; name = PKSNotes.storekit; path = ../Tests/PKSNotesTests/Resources/PKSNotes.storekit; sourceTree = "<group>"; };
+		C8ED2B945DD4EF965AFD5BFF /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
+		D931BCB486B42680B83BE70C /* AppPreferences.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppPreferences.swift; path = ../Sources/PKSNotes/AppPreferences.swift; sourceTree = "<group>"; };
+		ECB321B8E6713F0A2D1E1743 /* PKSNotesStoreKitHostTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PKSNotesStoreKitHostTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A00AE24105A4E00D23D0F51E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8C52700D80463560573FB2B8 /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A7DEB2D971F0D974D0FF47E7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9C61843AF211341B2322847D /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		5A0AFFED520F144FFC0AE0BF = {
+			isa = PBXGroup;
+			children = (
+				78026BE77546A4268E0B66B1 /* Products */,
+				F09E64A356FE713A863E4B5F /* Frameworks */,
+				96606334FF620074E6AFE6E8 /* Sources */,
+				6E361654F3B1DC1F33679169 /* Tests */,
+			);
+			sourceTree = "<group>";
+		};
+		6E361654F3B1DC1F33679169 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				5EA2CCF4ED1080D05D6D1A8B /* ProPurchaseHostTests.swift */,
+				99B4A59BFA487026F6791600 /* PKSNotes.storekit */,
+			);
+			name = Tests;
+			sourceTree = "<group>";
+		};
+		78026BE77546A4268E0B66B1 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7F22C95CB95B1732E907BA1F /* PKSNotesStoreKitHost.app */,
+				ECB321B8E6713F0A2D1E1743 /* PKSNotesStoreKitHostTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		96606334FF620074E6AFE6E8 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				260871EF521B423F7979C460 /* StoreKitTestHostApp.swift */,
+				D931BCB486B42680B83BE70C /* AppPreferences.swift */,
+				775D5949F828F29BCECE9AF2 /* ProPurchases.swift */,
+			);
+			name = Sources;
+			sourceTree = "<group>";
+		};
+		F09E64A356FE713A863E4B5F /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				F1B267ED5DF52568064A3A75 /* OS X */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		F1B267ED5DF52568064A3A75 /* OS X */ = {
+			isa = PBXGroup;
+			children = (
+				C8ED2B945DD4EF965AFD5BFF /* Cocoa.framework */,
+			);
+			name = "OS X";
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		053E5D31210C8B66F80A1A98 /* PKSNotesStoreKitHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 14D7AED310AB171C2EB9FAD6 /* Build configuration list for PBXNativeTarget "PKSNotesStoreKitHost" */;
+			buildPhases = (
+				4E87340963B1B83E804E7A9F /* Sources */,
+				A7DEB2D971F0D974D0FF47E7 /* Frameworks */,
+				EFA36CFD0046255937D75357 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PKSNotesStoreKitHost;
+			productName = PKSNotesStoreKitHost;
+			productReference = 7F22C95CB95B1732E907BA1F /* PKSNotesStoreKitHost.app */;
+			productType = "com.apple.product-type.application";
+		};
+		0D19F39CFB9753BC747D900B /* PKSNotesStoreKitHostTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B6914D016144194CF20E8DFC /* Build configuration list for PBXNativeTarget "PKSNotesStoreKitHostTests" */;
+			buildPhases = (
+				4E58352F0EC448EF28311E07 /* Sources */,
+				A00AE24105A4E00D23D0F51E /* Frameworks */,
+				4A6C63A2117AE3D443389B2D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				9BB316E184DC32CABBE03090 /* PBXTargetDependency */,
+			);
+			name = PKSNotesStoreKitHostTests;
+			productName = PKSNotesStoreKitHostTests;
+			productReference = ECB321B8E6713F0A2D1E1743 /* PKSNotesStoreKitHostTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		2B8F71AF5A11E72DAC882152 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+			};
+			buildConfigurationList = A750339FC991EB8305353C53 /* Build configuration list for PBXProject "PKSNotesStoreKitHost" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 5A0AFFED520F144FFC0AE0BF;
+			minimizedProjectReferenceProxies = 0;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 78026BE77546A4268E0B66B1 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				053E5D31210C8B66F80A1A98 /* PKSNotesStoreKitHost */,
+				0D19F39CFB9753BC747D900B /* PKSNotesStoreKitHostTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		4A6C63A2117AE3D443389B2D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				977B39624B2B7F920DB41663 /* PKSNotes.storekit in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EFA36CFD0046255937D75357 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4E58352F0EC448EF28311E07 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0A2F66ED74084851C6322EAB /* ProPurchaseHostTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4E87340963B1B83E804E7A9F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				53B1CFD21C1109F5C5FF1E33 /* StoreKitTestHostApp.swift in Sources */,
+				34DC2EC2F31B343CFB9BE2E9 /* AppPreferences.swift in Sources */,
+				9AB456D0CD2199970A07AC19 /* ProPurchases.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		9BB316E184DC32CABBE03090 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = PKSNotesStoreKitHost;
+			target = 053E5D31210C8B66F80A1A98 /* PKSNotesStoreKitHost */;
+			targetProxy = 6486DA47D5492E9C5A1B95E6 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		3F21493F900DC2EA9087C139 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moretea.pks.notes.storekittests;
+				PRODUCT_NAME = PKSNotesStoreKitHostTests;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PKSNotesStoreKitHost.app/Contents/MacOS/PKSNotesStoreKitHost";
+			};
+			name = Release;
+		};
+		4E3545447CEBFDD1940AD5C1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moretea.pks.notes;
+				PRODUCT_NAME = PKSNotesStoreKitHost;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		8876F281ADA47E90EDD20A04 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		8CC90B3F4E4A03139890F5D7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moretea.pks.notes;
+				PRODUCT_NAME = PKSNotesStoreKitHost;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		B23CC3FB43CA150AC10436F3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moretea.pks.notes.storekittests;
+				PRODUCT_NAME = PKSNotesStoreKitHostTests;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PKSNotesStoreKitHost.app/Contents/MacOS/PKSNotesStoreKitHost";
+			};
+			name = Debug;
+		};
+		CC43B1F29D345824510F546E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		14D7AED310AB171C2EB9FAD6 /* Build configuration list for PBXNativeTarget "PKSNotesStoreKitHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4E3545447CEBFDD1940AD5C1 /* Release */,
+				8CC90B3F4E4A03139890F5D7 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A750339FC991EB8305353C53 /* Build configuration list for PBXProject "PKSNotesStoreKitHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CC43B1F29D345824510F546E /* Debug */,
+				8876F281ADA47E90EDD20A04 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B6914D016144194CF20E8DFC /* Build configuration list for PBXNativeTarget "PKSNotesStoreKitHostTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3F21493F900DC2EA9087C139 /* Release */,
+				B23CC3FB43CA150AC10436F3 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 2B8F71AF5A11E72DAC882152 /* Project object */;
+}

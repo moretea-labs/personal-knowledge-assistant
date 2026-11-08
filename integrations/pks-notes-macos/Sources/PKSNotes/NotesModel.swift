@@ -1249,6 +1249,24 @@ final class NotesModel: ObservableObject {
         }.map(\.path)
     }
 
+    /// Pick the next materializable directory on one preferred deep path.
+    /// The existing pending set remains the only queue authority: this is merely
+    /// a priority hint that walks the path shallow-to-deep so each child can be
+    /// published into an already materialized parent.
+    static func preferredPendingFolder(in pending: Set<String>, toward preferredLeaf: String) -> String? {
+        var selected: String?
+        var selectedDepth = Int.max
+        for candidate in pending
+        where candidate == preferredLeaf || preferredLeaf.hasPrefix(candidate + "/") {
+            let depth = candidate.split(separator: "/").count
+            if depth < selectedDepth {
+                selected = candidate
+                selectedDepth = depth
+            }
+        }
+        return selected
+    }
+
     func loadExpandedFolders(_ paths: Set<String>) {
         guard let root else { return }
         let rootPath = root.standardizedFileURL.path
@@ -1265,6 +1283,27 @@ final class NotesModel: ObservableObject {
         if let preferredFolderPath, !expanded.contains(preferredFolderPath) {
             self.preferredFolderPath = nil
         }
+        startPendingFolderLoad()
+    }
+
+    /// Prioritize one already-expanded deep path (for example the active note)
+    /// without introducing another tree/index. The scheduler derives each next
+    /// ancestor from the same pending set used by normal disclosure loading.
+    func prioritizeExpandedPath(_ paths: Set<String>, toward targetFolder: URL) {
+        guard let root else { return }
+        let rootPath = root.standardizedFileURL.path
+        let target = targetFolder.standardizedFileURL.path
+        guard target.hasPrefix(rootPath + "/") else { return }
+
+        let expanded = Set(paths.compactMap { path -> String? in
+            let normalized = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+            return normalized.hasPrefix(rootPath + "/") ? normalized : nil
+        })
+        guard expanded.contains(target) else { return }
+
+        pendingFolderPaths.formUnion(expanded.filter { !loadedFolderPaths.contains($0) })
+        preferredFolderPath = target
+        rebuildPendingFolderQueue(rootPath: rootPath)
         startPendingFolderLoad()
     }
 
@@ -1291,11 +1330,16 @@ final class NotesModel: ObservableObject {
         let rootPath = root.standardizedFileURL.path
         var target: String?
         if let preferred = preferredFolderPath,
-           pendingFolderPaths.contains(preferred),
            preferred.hasPrefix(rootPath + "/"),
-           !loadedFolderPaths.contains(preferred) {
-            pendingFolderPaths.remove(preferred)
-            target = preferred
+           let next = Self.preferredPendingFolder(in: pendingFolderPaths, toward: preferred),
+           !loadedFolderPaths.contains(next) {
+            pendingFolderPaths.remove(next)
+            target = next
+            if next == preferred {
+                preferredFolderPath = nil
+            }
+        } else if let preferred = preferredFolderPath,
+                  !preferred.hasPrefix(rootPath + "/") || loadedFolderPaths.contains(preferred) {
             preferredFolderPath = nil
         }
 

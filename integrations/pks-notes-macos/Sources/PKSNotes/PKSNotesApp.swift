@@ -32,6 +32,7 @@ final class PKSNotesAppDelegate: NSObject, NSApplicationDelegate {
 struct PKSNotesApp: App {
     @NSApplicationDelegateAdaptor(PKSNotesAppDelegate.self) private var appDelegate
     @StateObject private var model = NotesModel()
+    @StateObject private var purchases = ProPurchases()
     @AppStorage(AppAppearance.defaultsKey) private var appearanceID = AppAppearance.system.rawValue
     @AppStorage(AppLanguage.defaultsKey) private var languageID = AppLanguage.system.rawValue
 
@@ -42,9 +43,11 @@ struct PKSNotesApp: App {
         WindowGroup {
             NotesWindow()
                 .environmentObject(model)
+                .environmentObject(purchases)
                 .environment(\.notesLanguage, language)
                 .environment(\.locale, language.locale)
                 .preferredColorScheme(appearance.colorScheme)
+                .task { await purchases.start() }
                 .onAppear { appDelegate.notesModel = model }
                 .frame(minWidth: 920, minHeight: 620)
         }
@@ -52,7 +55,8 @@ struct PKSNotesApp: App {
         .defaultSize(width: 1220, height: 780)
 
         Settings {
-            NotesAppearanceSettings()
+            PKSNotesSettingsView()
+                .environmentObject(purchases)
                 .environment(\.notesLanguage, language)
                 .environment(\.locale, language.locale)
                 .preferredColorScheme(appearance.colorScheme)
@@ -130,6 +134,65 @@ struct PKSNotesApp: App {
                     .keyboardShortcut("o", modifiers: .command)
             }
         }
+    }
+}
+
+private struct PKSNotesSettingsView: View {
+    @EnvironmentObject private var purchases: ProPurchases
+    @Environment(\.notesLanguage) private var language
+    @State private var showingPro = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                settingsPaneButton(
+                    title: language.text("Appearance"),
+                    symbol: "textformat.size",
+                    selected: !showingPro
+                ) {
+                    showingPro = false
+                }
+                settingsPaneButton(
+                    title: language.text("Pro"),
+                    symbol: "checkmark.seal",
+                    selected: showingPro
+                ) {
+                    showingPro = true
+                }
+            }
+            .frame(width: 280)
+            .padding(.top, 16)
+            .padding(.bottom, 10)
+
+            Divider()
+
+            if showingPro {
+                ProSettingsView()
+                    .environmentObject(purchases)
+            } else {
+                NotesAppearanceSettings()
+            }
+        }
+        .frame(width: 470)
+    }
+
+    private func settingsPaneButton(
+        title: String,
+        symbol: String,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(
+                    selected ? Color.accentColor.opacity(0.14) : .clear,
+                    in: RoundedRectangle(cornerRadius: 7)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(selected ? "pks-settings-selected-pane" : "pks-settings-other-pane")
     }
 }
 
@@ -287,6 +350,7 @@ private struct PDFCaptureRequest: Equatable {
 
 struct NotesWindow: View {
     @EnvironmentObject private var model: NotesModel
+    @EnvironmentObject private var purchases: ProPurchases
     @Environment(\.notesLanguage) private var language
     @Environment(\.colorScheme) private var colorScheme
     @State private var mode: ReadingMode = .read
@@ -305,6 +369,7 @@ struct NotesWindow: View {
     @State private var quickOpenMatches: [NoteItem] = []
     @State private var showingQuickOpen = false
     @State private var showingBacklinks = false
+    @State private var showingProUpsell = false
     @State private var quickOpenQuery = ""
     @State private var quickOpenIndex = 0
     @State private var pdfCaptureRequest: PDFCaptureRequest?
@@ -347,6 +412,23 @@ struct NotesWindow: View {
     }
 
     private var theme: NotesTheme { NotesTheme.restored(themeID) }
+
+    private var mindMapToggleBinding: Binding<Bool> {
+        Binding(
+            get: { showingMindMap },
+            set: { requested in
+                guard requested else {
+                    setMindMapVisible(false)
+                    return
+                }
+                if ProAccess.allows(.mindMap, unlocked: purchases.unlocked) {
+                    setMindMapVisible(true)
+                } else {
+                    showingProUpsell = true
+                }
+            }
+        )
+    }
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarTab: SidebarTab = .notes
     @State private var pendingEditorFocus: URL?
@@ -404,10 +486,7 @@ struct NotesWindow: View {
                 }
 
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
-                    Toggle(isOn: Binding(
-                        get: { showingMindMap },
-                        set: { setMindMapVisible($0) }
-                    )) {
+                    Toggle(isOn: mindMapToggleBinding) {
                         toolbarSymbol(showingMindMap ? "doc.text" : "point.3.connected.trianglepath.dotted")
                     }
                     .toggleStyle(.button)
@@ -448,8 +527,12 @@ struct NotesWindow: View {
 
                 if (model.selected != nil && model.externalBody == nil) || model.previewPDF != nil {
                     Button {
-                        showingBacklinks.toggle()
-                        if showingBacklinks { model.loadRelationships() }
+                        if ProAccess.allows(.relationships, unlocked: purchases.unlocked) {
+                            showingBacklinks.toggle()
+                            if showingBacklinks { model.loadRelationships() }
+                        } else {
+                            showingProUpsell = true
+                        }
                     } label: {
                         HStack(spacing: 4) {
                             toolbarSymbol("link")
@@ -542,7 +625,7 @@ struct NotesWindow: View {
                                     if model.loadingRelated {
                                         relationshipEmpty(language.text("Finding related knowledge…"))
                                     } else if let error = model.relatedError {
-                                        relationshipEmpty(error)
+                                        relationshipEmpty(language.text(error))
                                     } else if model.relatedHits.isEmpty {
                                         relationshipEmpty(language.text("No related PKS results."))
                                     } else {
@@ -554,7 +637,6 @@ struct NotesWindow: View {
                                             ) {
                                                 showingBacklinks = false
                                                 model.openResult(hit)
-                                            }
                                         }
                                     }
                                 }
@@ -593,6 +675,12 @@ struct NotesWindow: View {
                         Button(language.text("Copy Source Link"), systemImage: "link") { model.copySource(link.absoluteString) }
                         Divider()
                     }
+                    if !purchases.unlocked {
+                        Button(language.text("Unlock Pro…"), systemImage: "checkmark.seal") {
+                            showingProUpsell = true
+                        }
+                        Divider()
+                    }
                     Button(language.text("Refresh Files"), systemImage: "arrow.clockwise") { model.refresh() }
                     Button(language.text("Choose Folder…"), systemImage: "folder") { model.chooseWorkspace() }
                 } label: {
@@ -601,6 +689,17 @@ struct NotesWindow: View {
                 .menuIndicator(.hidden)
                 .accessibilityIdentifier("pks-file-actions-menu")
                 .help(language.text("File actions and workspace options"))
+            }
+        }
+        }
+        .sheet(isPresented: $showingProUpsell) {
+            ProSettingsView()
+                .environmentObject(purchases)
+        }
+        .onChange(of: purchases.unlocked) { _, unlocked in
+            if !unlocked {
+                showingMindMap = false
+                showingBacklinks = false
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.quickOpen)) { _ in
@@ -721,7 +820,7 @@ struct NotesWindow: View {
         .onChange(of: model.selected) { _, note in
             mindMapSelectionLine = nil
             let openAsMap = note != nil && note == pendingMindMapOpen
-            showingMindMap = openAsMap
+            showingMindMap = openAsMap && ProAccess.allows(.mindMap, unlocked: purchases.unlocked)
             if openAsMap {
                 pendingMindMapOpen = nil
                 mode = .read
@@ -729,7 +828,12 @@ struct NotesWindow: View {
             showingBacklinks = false
             outgoingLinks = []
             if let note, let root = model.root {
-                expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: note, in: root))
+                let ancestors = NoteTreePresentation.ancestorPaths(for: note, in: root)
+                expandedFolderPaths.formUnion(ancestors)
+                model.prioritizeExpandedPath(
+                    ancestors,
+                    toward: note.deletingLastPathComponent()
+                )
                 treeCursorPath = note.path
             }
             if note == pendingBacklinkNote,
@@ -845,7 +949,12 @@ struct NotesWindow: View {
         guard let file = currentWorkspaceFile, let root = model.root else { return }
         columnVisibility = .all
         sidebarTab = .notes
-        expandedFolderPaths.formUnion(NoteTreePresentation.ancestorPaths(for: file, in: root))
+        let ancestors = NoteTreePresentation.ancestorPaths(for: file, in: root)
+        expandedFolderPaths.formUnion(ancestors)
+        model.prioritizeExpandedPath(
+            ancestors,
+            toward: file.deletingLastPathComponent()
+        )
         treeCursorPath = file.path
         treeFocused = true
         Task { @MainActor in
@@ -869,6 +978,10 @@ struct NotesWindow: View {
     }
 
     private func beginNewMindMap(in folder: URL? = nil) {
+        guard ProAccess.allows(.mindMap, unlocked: purchases.unlocked) else {
+            showingProUpsell = true
+            return
+        }
         if model.root == nil {
             model.chooseWorkspace()
             guard model.root != nil else { return }
@@ -2422,7 +2535,9 @@ struct NotesWindow: View {
             } else {
                 pdfReader(url)
             }
-        } else if showingMindMap && model.selected != nil && model.externalBody == nil {
+        } else if showingMindMap
+                    && ProAccess.allows(.mindMap, unlocked: purchases.unlocked)
+                    && model.selected != nil && model.externalBody == nil {
             MindMapCanvas(
                 source: $model.draft,
                 selectedID: $mindMapSelectionLine,

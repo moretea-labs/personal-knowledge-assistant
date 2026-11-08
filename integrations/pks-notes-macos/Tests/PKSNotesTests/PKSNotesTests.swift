@@ -708,6 +708,88 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
+    func testCurrentFilePathPriorityWalksAncestorsBeforeUnrelatedExpandedFolders() {
+        let root = URL(fileURLWithPath: "/tmp/PKS-Vault", isDirectory: true)
+        let level1 = root.appendingPathComponent("Course", isDirectory: true)
+        let level2 = level1.appendingPathComponent("Term", isDirectory: true)
+        let leaf = level2.appendingPathComponent("Week", isDirectory: true)
+        let unrelated = root.appendingPathComponent("Archive", isDirectory: true)
+
+        var pending: Set<String> = [
+            unrelated.path,
+            leaf.path,
+            level2.path,
+            level1.path
+        ]
+
+        XCTAssertEqual(
+            NotesModel.preferredPendingFolder(in: pending, toward: leaf.path),
+            level1.path
+        )
+        pending.remove(level1.path)
+        XCTAssertEqual(
+            NotesModel.preferredPendingFolder(in: pending, toward: leaf.path),
+            level2.path
+        )
+        pending.remove(level2.path)
+        XCTAssertEqual(
+            NotesModel.preferredPendingFolder(in: pending, toward: leaf.path),
+            leaf.path
+        )
+        pending.remove(leaf.path)
+        XCTAssertNil(NotesModel.preferredPendingFolder(in: pending, toward: leaf.path))
+    }
+
+    @MainActor
+    func testLargeWorkspaceInitialRefreshStaysShallow() async throws {
+        let defaults = UserDefaults.standard
+        let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        let priorBookmark = defaults.data(forKey: "PKSNotesWorkspaceBookmark")
+        defaults.removeObject(forKey: "PKSNotesWorkspace")
+        defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark")
+        defer {
+            if let priorWorkspace { defaults.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let priorBookmark { defaults.set(priorBookmark, forKey: "PKSNotesWorkspaceBookmark") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let folderCount = 1_000
+        for index in 0..<folderCount {
+            let folder = root.appendingPathComponent(String(format: "Folder-%04d", index), isDirectory: true)
+            let nested = folder.appendingPathComponent("Nested", isDirectory: true)
+            try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+            try "# Deep".write(
+                to: nested.appendingPathComponent("Deep.md"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        let model = NotesModel()
+        let clock = ContinuousClock()
+        let started = clock.now
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<1_000 where model.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let elapsed = started.duration(to: clock.now)
+
+        XCTAssertFalse(model.loadingFiles)
+        XCTAssertEqual(model.files.count, folderCount)
+        XCTAssertTrue(model.files.allSatisfy { $0.isFolder && $0.children?.isEmpty == true })
+        XCTAssertFalse(model.globalFileIndexReady)
+        XCTAssertTrue(model.globalFiles.isEmpty)
+        XCTAssertLessThan(elapsed, .seconds(5), "Initial shallow refresh should not scale with nested file count.")
+        print("PKS_PERF large_workspace_shallow_root_1000=\(elapsed)")
+    }
+
+    @MainActor
     func testWorkspaceRefreshAndFolderExpansionAreLazy() async throws {
         let defaults = UserDefaults.standard
         let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")

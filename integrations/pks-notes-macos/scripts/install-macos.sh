@@ -22,27 +22,7 @@ mkdir -p "$staging/Contents/MacOS" "$staging/Contents/Resources"
 cp "$icon" "$staging/Contents/Resources/AppIcon.icns"
 cp "$binary" "$staging/Contents/MacOS/PKSNotes"
 chmod 755 "$staging/Contents/MacOS/PKSNotes"
-cat > "$staging/Contents/Info.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key><string>PKSNotes</string>
-    <key>CFBundleIdentifier</key><string>com.moretea.pks.notes</string>
-    <key>CFBundleName</key><string>PKS Notes</string>
-    <key>CFBundleDisplayName</key><string>PKS Notes</string>
-    <key>CFBundleIconFile</key><string>AppIcon</string>
-    <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
-    <key>LSMinimumSystemVersion</key><string>14.0</string>
-    <key>NSHighResolutionCapable</key><true/>
-    <key>NSAppTransportSecurity</key>
-    <dict><key>NSAllowsLocalNetworking</key><true/></dict>
-</dict>
-</plist>
-PLIST
+cp "$source_root/Resources/Info.plist" "$staging/Contents/Info.plist"
 codesign --force --sign - --timestamp=none "$staging" >/dev/null
 codesign --verify --deep --strict "$staging"
 previous="$HOME/Applications/.PKS-Notes-previous.app"
