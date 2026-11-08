@@ -904,7 +904,7 @@ final class NotesModel: ObservableObject {
     private var autoSaveTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var noteLoadTask: Task<Void, Never>?
-    private var requestedNote: URL?
+    @Published private(set) var requestedNote: URL?
     private var loadIdentity: UUID?
     private var pendingMatch: SearchHit?
     private var noteCache: [String: CachedNote] = [:]

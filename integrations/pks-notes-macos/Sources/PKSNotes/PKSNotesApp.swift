@@ -564,7 +564,13 @@ struct NotesWindow: View {
                     }
                 }
 
-                if model.autoSavePending && model.selected != nil {
+                if model.loadingNote, let requested = model.requestedNote {
+                    ProgressView()
+                        .controlSize(.small)
+                        .help("\(language.text("Opening note…")) \(requested.deletingPathExtension().lastPathComponent)")
+                        .accessibilityLabel(language.text("Opening note…"))
+                        .accessibilityIdentifier("pks-note-open-progress")
+                } else if model.autoSavePending && model.selected != nil {
                     ProgressView()
                         .controlSize(.small)
                         .help(language.text("Saving Markdown automatically…"))
@@ -1618,12 +1624,20 @@ struct NotesWindow: View {
                                                   height: NotesGeometry.treeRowHeight)
                             }
 
-                            Image(systemName: row.item.isFolder ? "folder.fill" : row.item.iconName)
-                                .font(.system(size: NotesGeometry.symbolSize, weight: .regular))
-                                .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                                .frame(width: NotesGeometry.treeIconWidth,
-                                       height: NotesGeometry.treeRowHeight)
+                            if model.loadingNote && model.requestedNote?.standardizedFileURL == row.item.url.standardizedFileURL {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                    .frame(width: NotesGeometry.treeIconWidth,
+                                           height: NotesGeometry.treeRowHeight)
+                                    .accessibilityLabel(language.text("Opening note…"))
+                            } else {
+                                Image(systemName: row.item.isFolder ? "folder.fill" : row.item.iconName)
+                                    .font(.system(size: NotesGeometry.symbolSize, weight: .regular))
+                                    .symbolRenderingMode(.hierarchical)
+                                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                                    .frame(width: NotesGeometry.treeIconWidth,
+                                           height: NotesGeometry.treeRowHeight)
+                            }
 
                             if row.item.isFolder {
                                 Text(row.item.name)
