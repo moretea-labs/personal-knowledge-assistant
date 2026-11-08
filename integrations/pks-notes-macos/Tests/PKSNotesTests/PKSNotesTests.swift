@@ -340,6 +340,10 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Markdown"), "Markdown")
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("On"), "开启")
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Off"), "关闭")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Preparing mind map…"), "正在准备思维导图…")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Reveal selected node in Markdown"), "在 Markdown 中定位所选节点")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Selected"), "已选择")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Show in Markdown"), "在 Markdown 中显示")
     }
 
     func testReadingThemeDefaultsAndParsedPreviewCacheIdentity() {
@@ -1339,6 +1343,39 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: child.appendingPathComponent("Untitled 2.md").path
         ))
+    }
+
+    @MainActor
+    func testCreateFolderStaysInsideWorkspaceAndNeverOverwritesExistingItem() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let parent = root.appendingPathComponent("Parent", isDirectory: true)
+        let outside = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer {
+            try? fm.removeItem(at: root)
+            try? fm.removeItem(at: outside)
+        }
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+
+        let created = try XCTUnwrap(model.newFolder(named: "Research", in: parent))
+        XCTAssertEqual(created, parent.appendingPathComponent("Research", isDirectory: true))
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(fm.fileExists(atPath: created.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
+
+        let sentinel = parent.appendingPathComponent("Existing", isDirectory: true)
+        try fm.createDirectory(at: sentinel, withIntermediateDirectories: false)
+        XCTAssertNil(model.newFolder(named: "Existing", in: parent))
+        XCTAssertTrue(fm.fileExists(atPath: sentinel.path))
+
+        XCTAssertNil(model.newFolder(named: "../Escape", in: parent))
+        XCTAssertNil(model.newFolder(named: ".hidden", in: parent))
+        XCTAssertNil(model.newFolder(named: "Outside", in: outside))
+        XCTAssertFalse(fm.fileExists(atPath: outside.appendingPathComponent("Outside").path))
     }
 
     @MainActor

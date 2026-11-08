@@ -2067,6 +2067,54 @@ final class NotesModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    func newFolder(named enteredName: String, in parentFolder: URL? = nil) -> URL? {
+        guard let root else {
+            message = AppLanguage.current.text("Choose a notes folder before creating a folder.")
+            return nil
+        }
+
+        let parent = (parentFolder ?? selected?.deletingLastPathComponent() ?? root).standardizedFileURL
+        var parentInfo = Darwin.stat()
+        guard (parent == root.standardizedFileURL || WorkspaceFiles.contains(parent, in: root)),
+              parent.path.withCString({ Darwin.lstat($0, &parentInfo) }) == 0,
+              (parentInfo.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR) else {
+            message = AppLanguage.current.text("Choose a folder inside the Markdown workspace.")
+            return nil
+        }
+
+        let name = enteredName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != ".", name != "..", !name.hasPrefix("."),
+              !name.contains("/"), !name.contains("\\"), !name.contains(":"),
+              !name.contains("\0") else {
+            message = AppLanguage.current.text("Enter a folder name without slashes or special path characters.")
+            return nil
+        }
+
+        let destination = parent.appendingPathComponent(name, isDirectory: true).standardizedFileURL
+        guard WorkspaceFiles.contains(destination, in: root) else {
+            message = AppLanguage.current.text("Invalid folder path.")
+            return nil
+        }
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            message = AppLanguage.current.text("A file or folder with this name already exists.")
+            return nil
+        }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: destination,
+                withIntermediateDirectories: false
+            )
+            scheduleFilesystemMutationRefresh(parentFolders: [parent])
+            message = nil
+            return destination
+        } catch {
+            message = "\(AppLanguage.current.text("Cannot create folder")): \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     func search() {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {

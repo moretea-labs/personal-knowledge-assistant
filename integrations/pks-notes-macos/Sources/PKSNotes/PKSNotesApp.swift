@@ -440,6 +440,9 @@ struct NotesWindow: View {
     @State private var renameCandidate: URL?
     @State private var renameValue = ""
     @State private var showingRename = false
+    @State private var newFolderParent: URL?
+    @State private var newFolderValue = ""
+    @State private var showingNewFolder = false
     @State private var folderTrashCandidate: URL?
     @State private var confirmingFolderTrash = false
     @State private var expandedFolderPaths: Set<String> = []
@@ -862,6 +865,28 @@ struct NotesWindow: View {
         .sheet(isPresented: $showingQuickOpen) {
             quickOpenSheet
         }
+        .alert(language.text("New Folder"), isPresented: $showingNewFolder) {
+            TextField(language.text("Folder Name"), text: $newFolderValue)
+                .accessibilityIdentifier("pks-new-folder-field")
+            Button(language.text("Create")) {
+                if let parent = newFolderParent,
+                   let created = model.newFolder(named: newFolderValue, in: parent) {
+                    if parent != model.root?.standardizedFileURL {
+                        expandedFolderPaths.insert(parent.path)
+                        model.loadExpandedFolder(parent)
+                    }
+                    treeCursorPath = created.path
+                }
+                newFolderParent = nil
+                newFolderValue = ""
+            }
+            Button(language.text("Cancel"), role: .cancel) {
+                newFolderParent = nil
+                newFolderValue = ""
+            }
+        } message: {
+            Text(language.text("Create a folder inside the current notes workspace."))
+        }
         .alert(language.text("Rename"), isPresented: $showingRename) {
             TextField(language.text("Name"), text: $renameValue)
                 .accessibilityIdentifier("pks-rename-field")
@@ -912,6 +937,15 @@ struct NotesWindow: View {
     private func toggleEditPreview() {
         guard model.selected != nil, model.previewPDF == nil, model.externalBody == nil else { return }
         switchReadingMode(to: mode == .edit ? .read : .edit)
+    }
+
+    private func beginNewFolder(in parent: URL) {
+        guard let root = model.root else { return }
+        let folder = parent.standardizedFileURL
+        guard folder == root.standardizedFileURL || WorkspaceFiles.contains(folder, in: root) else { return }
+        newFolderParent = folder
+        newFolderValue = ""
+        showingNewFolder = true
     }
 
     private func beginRename(_ item: URL) {
@@ -2060,6 +2094,12 @@ struct NotesWindow: View {
                 Spacer(minLength: 0)
                 if sidebarTab == .notes {
                     Menu {
+                        if let root = model.root {
+                            Button(language.text("New Folder…"), systemImage: "folder.badge.plus") {
+                                beginNewFolder(in: root)
+                            }
+                            Divider()
+                        }
                         Button(language.text("Choose Notes Folder…"), systemImage: "folder") {
                             model.chooseWorkspace()
                         }
@@ -2238,6 +2278,11 @@ struct NotesWindow: View {
         }
         if model.canManage(url) {
             Divider()
+            if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                Button(language.text("New Folder…"), systemImage: "folder.badge.plus") {
+                    beginNewFolder(in: url)
+                }
+            }
             Button(language.text("Rename…"), systemImage: "pencil") {
                 beginRename(url)
             }
