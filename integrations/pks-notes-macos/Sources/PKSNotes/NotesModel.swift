@@ -430,7 +430,6 @@ struct WorkspaceLinkCandidateIndex: Sendable {
 }
 
 private struct GlobalFileIndexSnapshot {
-    let files: [NoteItem]
     let quickOpenEntries: [NoteTreePresentation.QuickOpenEntry]
     let linkCandidates: WorkspaceLinkCandidateIndex
 }
@@ -631,8 +630,10 @@ final class NotesModel: ObservableObject {
     @Published private(set) var root: URL?
     @Published private(set) var files: [NoteItem] = []
     @Published private(set) var loadingFiles = false
-    @Published private(set) var globalFiles: [NoteItem] = []
     @Published private(set) var globalQuickOpenEntries: [NoteTreePresentation.QuickOpenEntry] = []
+    /// Compatibility/debug view only. The complete vault no longer retains a
+    /// second NoteItem array beside globalQuickOpenEntries.
+    var globalFiles: [NoteItem] { globalQuickOpenEntries.map(\.item) }
     @Published private(set) var indexingFiles = false
     @Published private(set) var globalFileIndexReady = false
     @Published private(set) var loadingNote = false
@@ -878,7 +879,6 @@ final class NotesModel: ObservableObject {
         globalFileScanTask = nil
         globalFileIndexGeneration &+= 1
         globalFileIndexReady = false
-        globalFiles = []
         globalQuickOpenEntries = []
         globalLinkCandidates = .empty
         indexingFiles = false
@@ -1082,9 +1082,9 @@ final class NotesModel: ObservableObject {
         }
     }
 
-    private func completeWorkspaceFiles() async -> [NoteItem] {
-        guard let root else { return [] }
-        if globalFileIndexReady { return globalFiles }
+    private func ensureGlobalFileIndex() async -> Bool {
+        guard let root else { return false }
+        if globalFileIndexReady { return true }
 
         let generation = globalFileIndexGeneration
         let scan: Task<GlobalFileIndexSnapshot, Never>
@@ -1096,7 +1096,6 @@ final class NotesModel: ObservableObject {
                 let files = WorkspaceFiles.flatFiles(in: root)
                 guard !Task.isCancelled else {
                     return GlobalFileIndexSnapshot(
-                        files: files,
                         quickOpenEntries: [],
                         linkCandidates: .empty
                     )
@@ -1105,7 +1104,6 @@ final class NotesModel: ObservableObject {
                     markdownFiles: WorkspaceBacklinks.markdownFiles(files)
                 )
                 return GlobalFileIndexSnapshot(
-                    files: files,
                     quickOpenEntries: NoteTreePresentation.quickOpenEntries(files),
                     linkCandidates: linkCandidates
                 )
@@ -1116,24 +1114,23 @@ final class NotesModel: ObservableObject {
         }
 
         let snapshot = await scan.value
-        guard self.root == root, globalFileIndexGeneration == generation else { return [] }
+        guard self.root == root, globalFileIndexGeneration == generation else { return false }
         // Publish readiness before the derived entries so the SwiftUI receive path
         // can swap from shallow/local results to the complete index immediately.
         globalFileIndexReady = true
-        globalFiles = snapshot.files
         globalQuickOpenEntries = snapshot.quickOpenEntries
         globalLinkCandidates = snapshot.linkCandidates
         indexingFiles = false
         if globalFileScanGeneration == generation {
             globalFileScanTask = nil
         }
-        return snapshot.files
+        return true
     }
 
     func prepareGlobalFileIndex() {
         guard root != nil, !globalFileIndexReady else { return }
         Task { [weak self] in
-            _ = await self?.completeWorkspaceFiles()
+            _ = await self?.ensureGlobalFileIndex()
         }
     }
 
@@ -1458,8 +1455,12 @@ final class NotesModel: ObservableObject {
                 snapshot = suppliedFiles
                 candidateIndex = nil
             } else {
-                snapshot = await self.completeWorkspaceFiles()
-                candidateIndex = self.globalFileIndexReady ? self.globalLinkCandidates : nil
+                guard await self.ensureGlobalFileIndex() else {
+                    self.loadingBacklinks = false
+                    return
+                }
+                snapshot = []
+                candidateIndex = self.globalLinkCandidates
             }
             guard !Task.isCancelled, self.root == root else { return }
 
@@ -1727,16 +1728,16 @@ final class NotesModel: ObservableObject {
         message = AppLanguage.current.text("Scanning files…")
         knowledgeLinkTask = Task { [weak self] in
             guard let self else { return }
-            let allFiles = await self.completeWorkspaceFiles()
+            let indexReady = await self.ensureGlobalFileIndex()
             guard !Task.isCancelled,
                   self.root == root,
                   self.selected == sourceNote else { return }
+            guard indexReady else {
+                self.message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
+                return
+            }
 
-            let candidateIndex = self.globalFileIndexReady
-                ? self.globalLinkCandidates
-                : WorkspaceLinkCandidateIndex(
-                    markdownFiles: WorkspaceBacklinks.markdownFiles(allFiles)
-                )
+            let candidateIndex = self.globalLinkCandidates
             guard let resolved = WorkspaceFiles.resolveLinkedTarget(
                 value,
                 from: sourceNote,
