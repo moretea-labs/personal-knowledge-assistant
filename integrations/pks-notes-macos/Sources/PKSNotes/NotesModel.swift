@@ -2436,6 +2436,8 @@ final class NotesModel: ObservableObject {
         let affected = isInside(oldSelected, item: target)
             || isInside(oldPDF, item: target) || isInside(oldRequested, item: target)
         if affected && !confirmLeavingNote(decision: navigationDecision) { return nil }
+        let ownLinkRepair = isFolder ? nil
+            : WorkspaceLinkRelocation.prepare(from: target, to: destination, root: root)
 
         func rebased(_ url: URL?) -> URL? {
             guard let url, isInside(url, item: target) else { return nil }
@@ -2445,6 +2447,7 @@ final class NotesModel: ObservableObject {
 
         do {
             try FileManager.default.moveItem(at: target, to: destination)
+            let repaired = ownLinkRepair.map { WorkspaceLinkRelocation.apply($0, to: destination) }
             if let newSelected = rebased(oldSelected) ?? rebased(oldRequested) {
                 loadNote(newSelected)
             } else if let newPDF = rebased(oldPDF) {
@@ -2465,7 +2468,13 @@ final class NotesModel: ObservableObject {
                     parentFolders: [target.deletingLastPathComponent()]
                 )
             }
-            message = nil
+            if repaired == false {
+                message = AppLanguage.current.text("Moved, but some outgoing links could not be preserved. Review the note.")
+            } else if isFolder || ["md", "markdown"].contains(destination.pathExtension.lowercased()) {
+                message = AppLanguage.current.text("Path changed. Incoming links from other notes may need repair.")
+            } else {
+                message = nil
+            }
             return destination
         } catch {
             message = "\(AppLanguage.current.text("Could not rename file")): \(error.localizedDescription)"
@@ -2546,6 +2555,8 @@ final class NotesModel: ObservableObject {
         let affected = isInside(oldSelected, item: target)
             || isInside(oldPDF, item: target) || isInside(oldRequested, item: target)
         if affected && !confirmLeavingNote(decision: navigationDecision) { return nil }
+        let ownLinkRepair = targetIsDirectory ? nil
+            : WorkspaceLinkRelocation.prepare(from: target, to: destination, root: root)
 
         func rebased(_ url: URL?) -> URL? {
             guard let url, isInside(url, item: target) else { return nil }
@@ -2555,6 +2566,7 @@ final class NotesModel: ObservableObject {
 
         do {
             try FileManager.default.moveItem(at: target, to: destination)
+            let repaired = ownLinkRepair.map { WorkspaceLinkRelocation.apply($0, to: destination) }
             if let newSelected = rebased(oldSelected) ?? rebased(oldRequested) {
                 loadNote(newSelected)
             } else if let newPDF = rebased(oldPDF) {
@@ -2575,7 +2587,13 @@ final class NotesModel: ObservableObject {
                     parentFolders: [target.deletingLastPathComponent(), folder]
                 )
             }
-            message = nil
+            if repaired == false {
+                message = AppLanguage.current.text("Moved, but some outgoing links could not be preserved. Review the note.")
+            } else if targetIsDirectory || ["md", "markdown"].contains(destination.pathExtension.lowercased()) {
+                message = AppLanguage.current.text("Path changed. Incoming links from other notes may need repair.")
+            } else {
+                message = nil
+            }
             return destination
         } catch {
             message = "\(AppLanguage.current.text("Could not move item")): \(error.localizedDescription)"
