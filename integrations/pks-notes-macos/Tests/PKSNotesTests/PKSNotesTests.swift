@@ -365,6 +365,118 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(loadedNested.children?.map(\.name), ["Deep"])
     }
 
+    func testShallowReconciliationPreservesLoadedDescendants() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let parent = root.appendingPathComponent("Parent", isDirectory: true)
+        let nested = parent.appendingPathComponent("Nested", isDirectory: true)
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let deep = nested.appendingPathComponent("Deep.md")
+        try "# Deep".write(to: deep, atomically: true, encoding: .utf8)
+
+        let shallowRoot = WorkspaceFiles.tree(in: root, recursive: false)
+        let withParent = WorkspaceFiles.replacingChildren(
+            in: shallowRoot,
+            folder: parent,
+            with: WorkspaceFiles.tree(in: parent, recursive: false)
+        )
+        let fullyLoaded = WorkspaceFiles.replacingChildren(
+            in: withParent,
+            folder: nested,
+            with: WorkspaceFiles.tree(in: nested, recursive: false)
+        )
+
+        let newRoot = root.appendingPathComponent("New.md")
+        try "# New".write(to: newRoot, atomically: true, encoding: .utf8)
+        let reconciled = WorkspaceFiles.preservingLoadedChildren(
+            WorkspaceFiles.tree(in: root, recursive: false),
+            from: fullyLoaded
+        )
+
+        XCTAssertNotNil(reconciled.first(where: { $0.url == newRoot }))
+        let loadedParent = try XCTUnwrap(reconciled.first(where: { $0.url == parent }))
+        let loadedNested = try XCTUnwrap(
+            loadedParent.children?.first(where: { $0.url == nested })
+        )
+        XCTAssertEqual(loadedNested.children?.map(\.url), [deep])
+    }
+
+    @MainActor
+    func testLocalMutationKeepsLoadedTreeAndLazilyInvalidatesGlobalIndex() async throws {
+        func find(_ url: URL, in items: [NoteItem]) -> NoteItem? {
+            for item in items {
+                if item.url.standardizedFileURL == url.standardizedFileURL { return item }
+                if let children = item.children, let match = find(url, in: children) {
+                    return match
+                }
+            }
+            return nil
+        }
+
+        let defaults = UserDefaults.standard
+        let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let priorWorkspace { defaults.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let parent = root.appendingPathComponent("Parent", isDirectory: true)
+        let nested = parent.appendingPathComponent("Nested", isDirectory: true)
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let deep = nested.appendingPathComponent("Deep.md")
+        try "# Deep".write(to: deep, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<200 {
+            if !model.loadingFiles { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.loadExpandedFolder(parent)
+        for _ in 0..<200 {
+            if find(nested, in: model.files) != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.loadExpandedFolder(nested)
+        for _ in 0..<200 {
+            if find(deep, in: model.files) != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        model.prepareGlobalFileIndex()
+        for _ in 0..<300 {
+            if model.globalFileIndexReady { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(model.globalFileIndexReady)
+
+        let created = try XCTUnwrap(model.newNote(named: "Root New", in: root))
+        for _ in 0..<200 {
+            if find(created, in: model.files) != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertNotNil(find(created, in: model.files))
+        XCTAssertNotNil(find(deep, in: model.files),
+                        "A root-level mutation must not discard loaded descendants.")
+        XCTAssertFalse(model.globalFileIndexReady,
+                       "The complete index should become stale, not rebuild eagerly.")
+
+        model.prepareGlobalFileIndex()
+        for _ in 0..<300 {
+            if model.globalFileIndexReady { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(model.globalFileIndexReady)
+        XCTAssertTrue(model.globalFiles.contains { $0.url.standardizedFileURL == created.standardizedFileURL })
+    }
+
     @MainActor
     func testWorkspaceRefreshAndFolderExpansionAreLazy() async throws {
         let defaults = UserDefaults.standard

@@ -210,7 +210,26 @@ enum WorkspaceFiles {
         return result
     }
 
-    /// Replace one loaded folder while preserving every other loaded subtree.
+    /// Reconcile one filesystem-authoritative shallow listing with already
+    /// loaded descendants. Only a directory that still exists at the exact same
+    /// path may retain its in-memory children.
+    static func preservingLoadedChildren(
+        _ fresh: [NoteItem],
+        from previous: [NoteItem]
+    ) -> [NoteItem] {
+        let previousByPath = Dictionary(uniqueKeysWithValues: previous.map {
+            ($0.url.standardizedFileURL.path, $0)
+        })
+        return fresh.map { item in
+            guard item.isFolder,
+                  let old = previousByPath[item.url.standardizedFileURL.path],
+                  let loaded = old.children else { return item }
+            return NoteItem(url: item.url, children: loaded)
+        }
+    }
+
+    /// Replace one loaded folder while preserving every other loaded subtree and
+    /// any already-loaded descendants whose direct directory path still exists.
     static func replacingChildren(
         in items: [NoteItem],
         folder: URL,
@@ -220,7 +239,10 @@ enum WorkspaceFiles {
         return items.map { item in
             let itemPath = item.url.standardizedFileURL.path
             if itemPath == target, item.isFolder {
-                return NoteItem(url: item.url, children: children)
+                return NoteItem(
+                    url: item.url,
+                    children: preservingLoadedChildren(children, from: item.children ?? [])
+                )
             }
             guard target.hasPrefix(itemPath + "/"), let current = item.children else {
                 return item
@@ -617,8 +639,12 @@ final class NotesModel: ObservableObject {
     private var pendingFolderPaths: Set<String> = []
     private var preferredFolderPath: String?
     private var loadedFolderPaths: Set<String> = []
+    private var mutationRefreshTask: Task<Void, Never>?
+    private var pendingMutationParentPaths: Set<String> = []
+    private var mutationRefreshGeneration: UInt64 = 0
     private var globalFileScanTask: Task<GlobalFileIndexSnapshot, Never>?
     private var globalFileScanGeneration: UInt64 = 0
+    private var globalFileIndexGeneration: UInt64 = 0
     private var knowledgeLinkTask: Task<Void, Never>?
     private var fileRefreshGeneration: UInt64 = 0
 
@@ -785,20 +811,29 @@ final class NotesModel: ObservableObject {
         openNote(url)
     }
 
+    private func invalidateGlobalFileIndex() {
+        globalFileScanTask?.cancel()
+        globalFileScanTask = nil
+        globalFileIndexGeneration &+= 1
+        globalFileIndexReady = false
+        globalFiles = []
+        globalQuickOpenEntries = []
+        indexingFiles = false
+    }
+
     func refresh() {
         guard let root else { return }
         fileRefreshTask?.cancel()
         folderLoadTask?.cancel()
-        globalFileScanTask?.cancel()
+        mutationRefreshTask?.cancel()
         folderLoadTask = nil
-        globalFileScanTask = nil
+        mutationRefreshTask = nil
+        mutationRefreshGeneration &+= 1
         pendingFolderPaths.removeAll()
+        pendingMutationParentPaths.removeAll()
         preferredFolderPath = nil
         loadedFolderPaths.removeAll()
-        globalFiles = []
-        globalQuickOpenEntries = []
-        globalFileIndexReady = false
-        indexingFiles = false
+        invalidateGlobalFileIndex()
 
         fileRefreshGeneration &+= 1
         let generation = fileRefreshGeneration
@@ -819,6 +854,83 @@ final class NotesModel: ObservableObject {
         loadingFiles = false
         fileRefreshTask = nil
         startPendingFolderLoad()
+    }
+
+    /// A local filesystem mutation only invalidates the global derived index and
+    /// re-reads parent directories that are currently materialized in the UI.
+    /// Directory membership still comes exclusively from a fresh filesystem scan.
+    private func scheduleFilesystemMutationRefresh(parentFolders: [URL]) {
+        guard let root else { return }
+        invalidateGlobalFileIndex()
+
+        let canonicalRoot = root.standardizedFileURL
+        let rootPath = canonicalRoot.path
+        for parent in parentFolders {
+            let normalized = parent.standardizedFileURL.path
+            guard normalized == rootPath || normalized.hasPrefix(rootPath + "/") else { continue }
+            if normalized == rootPath || loadedFolderPaths.contains(normalized) {
+                pendingMutationParentPaths.insert(normalized)
+            }
+        }
+        startPendingMutationRefresh()
+    }
+
+    private func discardLoadedSubtree(_ item: URL) {
+        let target = item.standardizedFileURL.path
+        func outside(_ path: String) -> Bool {
+            path != target && !path.hasPrefix(target + "/")
+        }
+        loadedFolderPaths = Set(loadedFolderPaths.filter(outside))
+        pendingFolderPaths = Set(pendingFolderPaths.filter(outside))
+        pendingMutationParentPaths = Set(pendingMutationParentPaths.filter(outside))
+        if let preferredFolderPath, !outside(preferredFolderPath) {
+            self.preferredFolderPath = nil
+        }
+    }
+
+    private func startPendingMutationRefresh() {
+        guard mutationRefreshTask == nil, let root,
+              !pendingMutationParentPaths.isEmpty else { return }
+
+        let rootPath = root.standardizedFileURL.path
+        let target = pendingMutationParentPaths.min {
+            let lhsDepth = $0.split(separator: "/").count
+            let rhsDepth = $1.split(separator: "/").count
+            if lhsDepth != rhsDepth { return lhsDepth < rhsDepth }
+            return $0.localizedStandardCompare($1) == .orderedAscending
+        }!
+        pendingMutationParentPaths.remove(target)
+        let generation = mutationRefreshGeneration
+
+        mutationRefreshTask = Task { [weak self] in
+            let scanner = Task.detached(priority: .userInitiated) {
+                let folder = URL(fileURLWithPath: target, isDirectory: true).standardizedFileURL
+                return (folder, WorkspaceFiles.tree(in: folder, recursive: false))
+            }
+            let refreshed = await withTaskCancellationHandler {
+                await scanner.value
+            } onCancel: {
+                scanner.cancel()
+            }
+
+            guard let self, self.mutationRefreshGeneration == generation else { return }
+            self.mutationRefreshTask = nil
+            guard !Task.isCancelled, self.root == root else { return }
+
+            if refreshed.0.path == rootPath {
+                self.files = WorkspaceFiles.preservingLoadedChildren(
+                    refreshed.1,
+                    from: self.files
+                )
+            } else if self.loadedFolderPaths.contains(refreshed.0.path) {
+                self.files = WorkspaceFiles.replacingChildren(
+                    in: self.files,
+                    folder: refreshed.0,
+                    with: refreshed.1
+                )
+            }
+            self.startPendingMutationRefresh()
+        }
     }
 
     func loadExpandedFolders(_ paths: Set<String>) {
@@ -911,7 +1023,7 @@ final class NotesModel: ObservableObject {
         guard let root else { return [] }
         if globalFileIndexReady { return globalFiles }
 
-        let generation = fileRefreshGeneration
+        let generation = globalFileIndexGeneration
         let scan: Task<GlobalFileIndexSnapshot, Never>
         if let current = globalFileScanTask, globalFileScanGeneration == generation {
             scan = current
@@ -933,7 +1045,7 @@ final class NotesModel: ObservableObject {
         }
 
         let snapshot = await scan.value
-        guard self.root == root, fileRefreshGeneration == generation else { return [] }
+        guard self.root == root, globalFileIndexGeneration == generation else { return [] }
         // Publish readiness before the derived entries so the SwiftUI receive path
         // can swap from shallow/local results to the complete index immediately.
         globalFileIndexReady = true
@@ -1442,7 +1554,7 @@ final class NotesModel: ObservableObject {
             let content = initialContent ?? (name == nil ? "" : "# \(url.deletingPathExtension().lastPathComponent)\n\n")
             try handle.write(contentsOf: Data(content.utf8))
             try handle.close()
-            refresh()
+            scheduleFilesystemMutationRefresh(parentFolders: [folder])
             loadNote(url, preservePDFPreview: preservePDFPreview)
             return url
         } catch {
@@ -1614,6 +1726,12 @@ final class NotesModel: ObservableObject {
             message = AppLanguage.current.text("Only existing files inside the notes folder can be moved to Trash.")
             return nil
         }
+        var targetInfo = Darwin.stat()
+        guard target.path.withCString({ Darwin.lstat($0, &targetInfo) }) == 0 else {
+            message = AppLanguage.current.text("The original file is no longer available.")
+            return nil
+        }
+        let targetIsDirectory = (targetInfo.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR)
         let affectsCurrent = isInside(selected, item: target) || isInside(previewPDF, item: target)
         if affectsCurrent && !confirmLeavingNote(decision: navigationDecision) { return nil }
 
@@ -1643,7 +1761,10 @@ final class NotesModel: ObservableObject {
                 NoteNavigationStore.removePath(target, in: root)
                 reloadNavigationPreferences()
             }
-            refresh()
+            if targetIsDirectory { discardLoadedSubtree(target) }
+            scheduleFilesystemMutationRefresh(
+                parentFolders: [target.deletingLastPathComponent()]
+            )
             message = nil
             return destination as URL?
         } catch {
@@ -1709,7 +1830,15 @@ final class NotesModel: ObservableObject {
             }
             NoteNavigationStore.replacePath(target, with: destination, in: root)
             reloadNavigationPreferences()
-            refresh()
+            if isFolder {
+                // Directory rename rebases every descendant identity, so retain
+                // the conservative full refresh for correctness.
+                refresh()
+            } else {
+                scheduleFilesystemMutationRefresh(
+                    parentFolders: [target.deletingLastPathComponent()]
+                )
+            }
             message = nil
             return destination
         } catch {
@@ -1747,7 +1876,7 @@ final class NotesModel: ObservableObject {
 
         do {
             try FileManager.default.copyItem(at: target, to: destination)
-            refresh()
+            scheduleFilesystemMutationRefresh(parentFolders: [folder])
             message = nil
             return destination
         } catch {
@@ -1811,7 +1940,15 @@ final class NotesModel: ObservableObject {
             }
             NoteNavigationStore.replacePath(target, with: destination, in: root)
             reloadNavigationPreferences()
-            refresh()
+            if targetIsDirectory {
+                // Directory moves recursively rebase descendant paths; do not
+                // maintain a second in-memory path authority for that case.
+                refresh()
+            } else {
+                scheduleFilesystemMutationRefresh(
+                    parentFolders: [target.deletingLastPathComponent(), folder]
+                )
+            }
             message = nil
             return destination
         } catch {

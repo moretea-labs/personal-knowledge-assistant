@@ -660,8 +660,13 @@ struct NotesWindow: View {
             model.loadExpandedFolders(expandedFolderPaths)
         }
         .onReceive(model.$globalQuickOpenEntries) { entries in
-            guard model.globalFileIndexReady else { return }
-            quickOpenEntries = entries
+            if model.globalFileIndexReady {
+                quickOpenEntries = entries
+            } else {
+                // A local filesystem mutation invalidates only the full-vault
+                // projection. Keep Quick Open useful immediately from the loaded tree.
+                quickOpenEntries = NoteTreePresentation.quickOpenEntries(model.files)
+            }
         }
         .onChange(of: expandedFolderPaths) { _, expanded in
             visibleTreeRows = NoteTreePresentation.visibleRows(model.files, expandedPaths: expanded)
@@ -695,6 +700,10 @@ struct NotesWindow: View {
                 pendingEditorFocus = nil
                 mode = .edit
                 Task { @MainActor in editorFocused = true }
+            } else if note != nil && !openAsMap {
+                // Existing Markdown always opens in Preview. Edit is an explicit
+                // per-note action; only the New Note path carries editor intent.
+                mode = .read
             }
         }
         .sheet(isPresented: $showingQuickOpen) {
