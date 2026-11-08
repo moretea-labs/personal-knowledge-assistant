@@ -14,12 +14,15 @@ entitlements="$root/Resources/MacAppStore.entitlements"
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")"
 version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")"
 build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info")"
+category="$(/usr/libexec/PlistBuddy -c 'Print :LSApplicationCategoryType' "$info")"
 [[ "$bundle_id" == "com.moretea.pks.notes" ]]
 [[ -n "$version" && -n "$build" ]]
+[[ "$category" == "public.app-category.productivity" ]]
 
 profile_plist="$(/usr/bin/mktemp -t pks-notes-profile)"
+effective_entitlements="$(/usr/bin/mktemp -t pks-notes-effective-entitlements)"
 signed_entitlements="$(/usr/bin/mktemp -t pks-notes-entitlements)"
-trap '/bin/rm -f "$profile_plist" "$signed_entitlements"' EXIT
+trap '/bin/rm -f "$profile_plist" "$effective_entitlements" "$signed_entitlements"' EXIT
 
 /usr/bin/security cms -D -i "$profile" > "$profile_plist"
 /usr/bin/plutil -lint "$profile_plist" >/dev/null
@@ -38,6 +41,11 @@ if [[ "$profile_app_id" != "$profile_team.$bundle_id" ]]; then
   echo "Provisioning profile app identifier mismatch: expected $profile_team.$bundle_id, got $profile_app_id" >&2
   exit 4
 fi
+cp "$entitlements" "$effective_entitlements"
+/usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string $profile_app_id" "$effective_entitlements"
+/usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string $profile_team" "$effective_entitlements"
+/usr/bin/plutil -lint "$effective_entitlements" >/dev/null
+
 if ! /usr/bin/python3 - "$profile_plist" <<'PY'
 import datetime
 import plistlib
@@ -74,7 +82,7 @@ cp "$profile" "$app/Contents/embedded.provisionprofile"
 chmod 755 "$app/Contents/MacOS/PKSNotes"
 
 codesign --force --timestamp --sign "$PKS_NOTES_APP_SIGN_IDENTITY" \
-  --entitlements "$entitlements" "$app"
+  --entitlements "$effective_entitlements" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 
 signed_team="$(codesign -dv --verbose=4 "$app" 2>&1 | /usr/bin/sed -nE 's/^TeamIdentifier=(.*)$/\1/p')"
@@ -84,6 +92,13 @@ if [[ "$signed_team" != "$profile_team" ]]; then
 fi
 
 codesign -d --entitlements :- "$app" > "$signed_entitlements" 2>/dev/null
+signed_app_id="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.application-identifier' "$signed_entitlements" 2>/dev/null || true)"
+signed_entitlement_team="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.team-identifier' "$signed_entitlements" 2>/dev/null || true)"
+if [[ "$signed_app_id" != "$profile_app_id" || "$signed_entitlement_team" != "$profile_team" ]]; then
+  echo "Signed application identity entitlements do not match provisioning profile." >&2
+  exit 8
+fi
+
 for key in \
   com.apple.security.app-sandbox \
   com.apple.security.files.bookmarks.app-scope \
@@ -93,7 +108,7 @@ do
   value="$(/usr/libexec/PlistBuddy -c "Print :$key" "$signed_entitlements" 2>/dev/null || true)"
   if [[ "$value" != "true" ]]; then
     echo "Signed app is missing required entitlement $key" >&2
-    exit 8
+    exit 9
   fi
 done
 
