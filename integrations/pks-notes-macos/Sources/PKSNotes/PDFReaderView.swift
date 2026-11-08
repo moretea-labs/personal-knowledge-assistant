@@ -713,6 +713,11 @@ struct NativePDFPreview: View {
             }
         }
         .task(id: url) {
+            // A different PDF must not inherit the previous document's search
+            // query, page field, or copy-link confirmation state.
+            searchText = ""
+            pageText = "1"
+            copiedPage = nil
             document = nil
             attemptedURL = nil
             let requestedURL = url
