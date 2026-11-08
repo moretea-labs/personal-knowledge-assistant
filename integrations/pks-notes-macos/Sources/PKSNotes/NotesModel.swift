@@ -96,6 +96,36 @@ enum WorkspaceFiles {
         return root
     }
 
+    /// File Provider placeholders cannot be synchronously decoded like ordinary files:
+    /// Foundation may fail immediately with EDEADLK while the item is dataless. Keep
+    /// hydration and content IO off the main actor, then capture the final POSIX stamp
+    /// after hydration so save/conflict detection does not mistake a cloud download for
+    /// an external edit. A second read is allowed only when the file changed mid-read.
+    static func readUTF8ForOpening(_ url: URL) async throws -> (content: String, stamp: WorkspaceFileStamp) {
+        if FileManager.default.isUbiquitousItem(at: url) {
+            let keys: Set<URLResourceKey> = [.ubiquitousItemDownloadingStatusKey]
+            var status = try? url.resourceValues(forKeys: keys).ubiquitousItemDownloadingStatus
+            if status != .current {
+                try FileManager.default.startDownloadingUbiquitousItem(at: url)
+                for _ in 0..<200 {
+                    try Task.checkCancellation()
+                    status = try? url.resourceValues(forKeys: keys).ubiquitousItemDownloadingStatus
+                    if status == .current { break }
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+            }
+        }
+
+        for _ in 0..<2 {
+            try Task.checkCancellation()
+            guard let before = fileStamp(url) else { throw CocoaError(.fileReadNoSuchFile) }
+            let content = try String(contentsOf: url, encoding: .utf8)
+            guard let after = fileStamp(url) else { throw CocoaError(.fileReadNoSuchFile) }
+            if before == after { return (content, after) }
+        }
+        throw CocoaError(.fileReadUnknown)
+    }
+
     static func contains(_ candidate: URL, in root: URL) -> Bool {
         let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath().path
         let path = candidate.standardizedFileURL.path
@@ -1536,11 +1566,11 @@ final class NotesModel: ObservableObject {
         notePrefetchTask?.cancel()
         notePrefetchPath = key
         notePrefetchTask = Task.detached(priority: .utility) {
-            let isICloud = candidate.path.contains("/Mobile Documents/")
+            let isICloud = FileManager.default.isUbiquitousItem(at: candidate)
             if isICloud {
                 // Pointer transit across a long tree must not hydrate every cloud file.
                 // A short dwell is enough to express intent, while an immediate click
-                // keeps using the normal user-initiated read path below.
+                // keeps using the normal user-initiated hydration/read path below.
                 do { try await Task.sleep(for: .milliseconds(120)) }
                 catch { return nil }
             }
@@ -1550,11 +1580,11 @@ final class NotesModel: ObservableObject {
                 try? FileManager.default.startDownloadingUbiquitousItem(at: candidate)
                 return nil
             }
-            guard let stamp = WorkspaceFiles.fileStamp(candidate) else { return nil }
-            if let cached, cached.stamp == stamp { return cached }
-            guard let content = try? String(contentsOf: candidate, encoding: .utf8),
+            if let stamp = WorkspaceFiles.fileStamp(candidate),
+               let cached, cached.stamp == stamp { return cached }
+            guard let loaded = try? await WorkspaceFiles.readUTF8ForOpening(candidate),
                   !Task.isCancelled else { return nil }
-            return CachedNote(content: content, stamp: stamp)
+            return CachedNote(content: loaded.content, stamp: loaded.stamp)
         }
     }
 
@@ -1589,25 +1619,30 @@ final class NotesModel: ObservableObject {
         let cached = noteCache[url.path]
         noteLoadTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
-                guard let stamp = WorkspaceFiles.fileStamp(url) else {
+                guard let initialStamp = WorkspaceFiles.fileStamp(url) else {
                     throw CocoaError(.fileReadNoSuchFile)
                 }
                 let content: String
-                if let cached, cached.stamp == stamp {
+                let resolvedStamp: WorkspaceFileStamp
+                if let cached, cached.stamp == initialStamp {
                     content = cached.content
+                    resolvedStamp = initialStamp
                 } else if let prefetched,
                           let warmed = await prefetched.value,
-                          warmed.stamp == stamp {
+                          warmed.stamp == initialStamp {
                     content = warmed.content
+                    resolvedStamp = initialStamp
                 } else {
-                    content = try String(contentsOf: url, encoding: .utf8)
+                    let loaded = try await WorkspaceFiles.readUTF8ForOpening(url)
+                    content = loaded.content
+                    resolvedStamp = loaded.stamp
                 }
                 guard !Task.isCancelled else { return }
                 await self?.finishOpeningNote(
                     url,
                     identity: identity,
                     content: content,
-                    stamp: stamp,
+                    stamp: resolvedStamp,
                     preservePDFPreview: preservePDFPreview
                 )
             } catch {
