@@ -1677,6 +1677,7 @@ final class NotesModel: ObservableObject {
         UserDefaults.standard.set(url.path, forKey: "PKSNotesLastOpenedMarkdown")
         if let root {
             recentNotes = NoteNavigationStore.recordRecent(url, in: root)
+            requestRecentHydration(excluding: url, in: root)
         }
         backlinkTask?.cancel()
         backlinks = []
@@ -1697,6 +1698,31 @@ final class NotesModel: ObservableObject {
         while noteCacheOrder.count > 10 {
             let evicted = noteCacheOrder.removeFirst()
             noteCache.removeValue(forKey: evicted)
+        }
+    }
+
+    /// Recent history is the strongest cheap signal for the next navigation target.
+    /// Request hydration for only two neighbors and never read their contents here;
+    /// File Provider remains the storage owner and loadNote remains the sole reader.
+    private func requestRecentHydration(excluding active: URL, in root: URL) {
+        let candidates = Array(recentNotes.lazy
+            .filter { $0.standardizedFileURL != active.standardizedFileURL }
+            .prefix(2))
+        guard !candidates.isEmpty else { return }
+
+        Task.detached(priority: .utility) {
+            for candidate in candidates {
+                guard !Task.isCancelled,
+                      ["md", "markdown"].contains(candidate.pathExtension.lowercased()),
+                      WorkspaceFiles.contains(candidate, in: root),
+                      FileManager.default.isUbiquitousItem(at: candidate) else { continue }
+                let status = try? candidate.resourceValues(
+                    forKeys: [.ubiquitousItemDownloadingStatusKey]
+                ).ubiquitousItemDownloadingStatus
+                if status != .current {
+                    try? FileManager.default.startDownloadingUbiquitousItem(at: candidate)
+                }
+            }
         }
     }
 
