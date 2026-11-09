@@ -68,9 +68,10 @@ final class RealICloudFileProviderAcceptanceTests: XCTestCase {
               fileManager.isUbiquitousItem(at: cloudNote) else {
             throw XCTSkip("The test files have not entered the iCloud File Provider domain.")
         }
-        try await waitForICloudUpload(source)
-        try await waitForICloudUpload(pdf)
-        try await waitForICloudUpload(cloudNote)
+        let uploadDeadline = ProcessInfo.processInfo.systemUptime + 180
+        try await waitForICloudUpload(source, until: uploadDeadline)
+        try await waitForICloudUpload(pdf, until: uploadDeadline)
+        try await waitForICloudUpload(cloudNote, until: uploadDeadline)
 
         try fileManager.evictUbiquitousItem(at: source)
         try await waitForDatalessPlaceholder(source)
@@ -257,14 +258,14 @@ final class RealICloudFileProviderAcceptanceTests: XCTestCase {
 
 }
 
-private func waitForICloudUpload(_ url: URL) async throws {
-    for _ in 0..<240 {
+private func waitForICloudUpload(_ url: URL, until deadline: TimeInterval) async throws {
+    while ProcessInfo.processInfo.systemUptime < deadline {
         try Task.checkCancellation()
         let values = try? url.resourceValues(forKeys: [.ubiquitousItemIsUploadedKey])
         if values?.ubiquitousItemIsUploaded == true { return }
         try await Task.sleep(for: .milliseconds(250))
     }
-    throw XCTSkip("iCloud did not finish uploading the isolated fixture within 60 seconds.")
+    throw XCTSkip("iCloud did not finish uploading the isolated fixtures within the shared 180-second deadline.")
 }
 
 private func waitForDatalessPlaceholder(_ url: URL) async throws {
