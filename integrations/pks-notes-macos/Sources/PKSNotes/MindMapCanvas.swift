@@ -66,6 +66,18 @@ enum MindMapKeyboard {
     }
 }
 
+/// Undo an uncommitted list-node insertion only in the exact draft where
+/// the temporary placeholder was created. Also used on canvas disappearance.
+enum MindMapPendingCreation {
+    static func rollback(in source: String, expected: String, nodeID: Int) -> String? {
+        guard source == expected,
+              MindMapOutline.nodes(in: source).contains(where: {
+                  $0.id == nodeID && $0.title == "New idea"
+              }) else { return nil }
+        return MindMapOutline.deleteLeaf(in: source, nodeID: nodeID)
+    }
+}
+
 /// Visual-only preference: node hierarchy/links still come from Markdown.
 enum MindMapVisualStyle: String, CaseIterable, Identifiable {
     case classic, colorful, minimal
@@ -206,6 +218,9 @@ struct MindMapCanvas: View {
     @State private var renameTitle = ""
     @State private var editingNodeID: Int?
     @State private var editingCreatedNodeID: Int?
+    // Exact transient draft guard: never remove a node from another note if
+    // navigation replaces the model's draft while an inline edit is pending.
+    @State private var createdNodeDraftSnapshot: String?
     @State private var interchangeError: String?
     @State private var showingShortcuts = false
     @State private var branchDeleteCandidateID: Int?
@@ -401,6 +416,12 @@ struct MindMapCanvas: View {
                     canvasFocused = true
                 }
             }
+        }
+        .onDisappear {
+            // A draft placeholder may already have autosaved before the user
+            // leaves the canvas. Cancel an unfinished Add Child/Sibling here,
+            // but only while the original note draft is still exact.
+            discardPendingCreationIfUnchanged()
         }
         .onKeyPress { press in
             guard editingNodeID == nil,
@@ -1294,6 +1315,7 @@ struct MindMapCanvas: View {
         renameTitle = title
         editingNodeID = id
         editingCreatedNodeID = created ? id : nil
+        createdNodeDraftSnapshot = created ? source : nil
         canvasFocused = false
         titleEditorFocused = false
     }
@@ -1308,21 +1330,30 @@ struct MindMapCanvas: View {
                 return
             }
             source = updated
-        } else if editingCreatedNodeID == id,
-                  let updated = MindMapOutline.deleteLeaf(in: source, nodeID: id) {
-            // Add Child/Sibling inserts a safe leaf before inline naming. Cancel
-            // must restore the original Markdown rather than keep "New idea".
-            source = updated
-            selectedID = nodes.first?.id
+        } else {
+            discardPendingCreationIfUnchanged()
         }
         editingNodeID = nil
         editingCreatedNodeID = nil
+        createdNodeDraftSnapshot = nil
         titleEditorFocused = false
         canvasFocused = false
         Task { @MainActor in
             await Task.yield()
             canvasFocused = true
         }
+    }
+
+    private func discardPendingCreationIfUnchanged() {
+        guard let id = editingCreatedNodeID,
+              let snapshot = createdNodeDraftSnapshot,
+              let restored = MindMapPendingCreation.rollback(
+                in: source, expected: snapshot, nodeID: id
+              ) else { return }
+        source = restored
+        selectedID = nodes.first?.id
+        editingCreatedNodeID = nil
+        createdNodeDraftSnapshot = nil
     }
 
     private func shiftedSource(deeper: Bool) -> String? {

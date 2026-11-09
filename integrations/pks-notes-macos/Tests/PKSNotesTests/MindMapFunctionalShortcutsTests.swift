@@ -28,6 +28,22 @@ final class MindMapFunctionalShortcutsTests: XCTestCase {
         XCTAssertEqual(MindMapOutline.links(in: combined).map(\.target), ["Docs/Readme.md"])
     }
 
+    func testNewNodeCancellationRestoresOnlyTheExactOriginalDraft() throws {
+        let original = "# Project\n- Existing\n"
+        let inserted = try XCTUnwrap(MindMapOutline.addChild(in: original, parentID: 0))
+        XCTAssertEqual(inserted, "# Project\n- New idea\n- Existing\n")
+        XCTAssertEqual(
+            MindMapPendingCreation.rollback(in: inserted, expected: inserted, nodeID: 1),
+            original
+        )
+        XCTAssertNil(MindMapPendingCreation.rollback(
+            in: inserted + "- Different\n", expected: inserted, nodeID: 1
+        ))
+        XCTAssertNil(MindMapPendingCreation.rollback(
+            in: original, expected: original, nodeID: 1
+        ))
+    }
+
     func testAddingChildrenRefusesToReparentAttachedMarkdown() {
         let protected = "# Topic\nAn explanation that belongs to the original heading.\n- Next\n"
         XCTAssertNil(MindMapOutline.addChild(in: protected, parentID: 0))
