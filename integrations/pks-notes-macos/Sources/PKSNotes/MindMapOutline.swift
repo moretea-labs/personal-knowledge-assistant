@@ -146,6 +146,19 @@ extension MindMapOutline {
         "# \(title)\n"
     }
 
+    /// Both Add Child and drag-to-reparent insert immediately after the
+    /// target node. Reject attached prose/code at that boundary, otherwise
+    /// it silently becomes part of the newly inserted child.
+    private static func canInsertChild(
+        after parentID: Int, in lines: [String], nodes parsed: [MindMapNode]
+    ) -> Bool {
+        guard lines.indices.contains(parentID) else { return false }
+        let nextNodeLine = parsed.first(where: { $0.id > parentID })?.id ?? lines.count
+        return !lines[(parentID + 1)..<nextNodeLine].contains {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
     /// Return/Enter creates a list sibling after the whole selected subtree.
     /// Headings are structural anchors, so Return on a heading creates its first child.
     static func addSibling(in source: String, nodeID: Int, title: String = "New idea") -> String? {
@@ -226,11 +239,7 @@ extension MindMapOutline {
         let line = lines[parentID]
         let indent = line.prefix(while: { $0 == " " }).count
         let isList = ["- ", "* ", "+ "].contains(where: { line.trimmingCharacters(in: .whitespaces).hasPrefix($0) })
-        // Inserting ahead of attached prose would accidentally make that prose
-        // part of the newly created child instead of the original parent.
-        let nextParsedID = nodes(in: source).first(where: { $0.id > parentID })?.id ?? lines.count
-        guard !lines[(parentID + 1)..<nextParsedID]
-            .contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        guard canInsertChild(after: parentID, in: lines, nodes: nodes(in: source))
         else { return nil }
         lines.insert(String(repeating: " ", count: indent + (isList ? 2 : 0)) + "- " + title, at: parentID + 1)
         return lines.joined(separator: "\n")
@@ -498,6 +507,10 @@ extension MindMapOutline {
         guard targetIsList || ((1...6).contains(targetHashes) && targetTrimmed.dropFirst(targetHashes).first == " ") else {
             return nil
         }
+        // Use the same target-side protection as Add Child. The dragged
+        // subtree may be pure list markup even when its destination has prose
+        // or code that would become attached to the newly inserted child.
+        guard canInsertChild(after: targetID, in: lines, nodes: parsed) else { return nil }
 
         let sourceIndent = lines[nodeID].prefix(while: { $0 == " " }).count
         let targetIndent = targetLine.prefix(while: { $0 == " " }).count

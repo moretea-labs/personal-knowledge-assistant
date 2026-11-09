@@ -118,6 +118,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Toggle task completion": "切换任务完成状态",
         "Bold / Italic node title": "节点标题加粗／斜体",
         "Cannot add a node here without changing attached Markdown. Use the editor.": "此处存在关联的 Markdown 正文或代码，无法安全新增节点；请在编辑器中调整。",
+        "Cannot move this branch without changing attached Markdown. Use the editor.": "移动会改变节点关联的 Markdown 正文或代码，请在编辑器中调整。",
         "Enter a nonempty, single-line node title.": "请输入非空的单行节点标题。",
         "Mind Map Style": "导图样式",
         "Bold node title": "节点标题加粗",

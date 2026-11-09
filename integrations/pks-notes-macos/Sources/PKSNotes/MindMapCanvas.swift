@@ -1025,11 +1025,16 @@ struct MindMapCanvas: View {
         .contentShape(RoundedRectangle(cornerRadius: cardRadius))
         .draggable(String(node.id))
         .dropDestination(for: String.self) { items, _ in
-            guard let raw = items.first,
-                  let draggedID = Int(raw),
-                  let outcome = MindMapOutline.moveListSubtreeWithOutcome(
-                    in: source, nodeID: draggedID, asChildOf: node.id
-                  ) else { return false }
+            guard let raw = items.first, let draggedID = Int(raw) else { return false }
+            guard let outcome = MindMapOutline.moveListSubtreeWithOutcome(
+                in: source, nodeID: draggedID, asChildOf: node.id
+            ) else {
+                interchangeError = language.text(
+                    "Cannot move this branch without changing attached Markdown. Use the editor."
+                )
+                dropTargetID = nil
+                return false
+            }
             source = outcome.source
             selectedID = outcome.movedNodeID
             collapsed.removeAll()
