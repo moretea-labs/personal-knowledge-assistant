@@ -2447,6 +2447,38 @@ extension PKSNotesTests {
     }
 
     @MainActor
+    func testInternalRelativeEncodedPDFLinkOpensRequestedPage() async throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = root.appendingPathComponent("PDF QA.md")
+        let pdf = root.appendingPathComponent("PDF QA.pdf")
+        try "# PDF QA".write(to: note, atomically: true, encoding: .utf8)
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+
+        let model = NotesModel()
+        model.openWorkspace(root)
+        model.openNote(note)
+        await waitForNote(model, note)
+
+        let link = try XCTUnwrap(URL(string: "PDF%20QA.pdf#page=2"))
+        XCTAssertTrue(model.openInternalLink(link))
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        XCTAssertEqual(model.previewPDFPage, 2)
+        XCTAssertEqual(model.selected, note.standardizedFileURL)
+        XCTAssertEqual(model.draft, "# PDF QA")
+    }
+
+    @MainActor
     func testInternalPDFSelectionLinkCarriesExactAnchorThroughFileAuthority() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")
