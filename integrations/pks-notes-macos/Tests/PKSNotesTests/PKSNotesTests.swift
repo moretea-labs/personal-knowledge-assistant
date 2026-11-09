@@ -1485,12 +1485,14 @@ final class PKSNotesTests: XCTestCase {
         await waitForNote(model, original)
 
         model.draft = "# Changes saved before rename"
-        XCTAssertNil(model.renameItem(original, to: "Taken"))
+        let collisionRename = await model.renameItem(original, to: "Taken")
+        XCTAssertNil(collisionRename)
         XCTAssertTrue(fm.fileExists(atPath: original.path))
         XCTAssertEqual(model.draft, "# Changes saved before rename")
         XCTAssertEqual(try String(contentsOf: other, encoding: .utf8), "# Other")
 
-        XCTAssertEqual(model.renameItem(original, to: "Renamed"), renamed)
+        let renameResult = await model.renameItem(original, to: "Renamed")
+        XCTAssertEqual(renameResult, renamed)
         await waitForNote(model, renamed)
         XCTAssertEqual(model.selected, renamed)
         XCTAssertEqual(model.draft, "# Changes saved before rename")
@@ -1552,13 +1554,15 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertNil(model.moveToTrash(outsideNote))
         XCTAssertNil(model.moveToTrash(link))
         XCTAssertNil(model.moveToTrash(vault))
-        XCTAssertNil(model.renameItem(folder, to: "../Escape"))
+        let invalidRename = await model.renameItem(folder, to: "../Escape")
+        XCTAssertNil(invalidRename)
         XCTAssertTrue(fm.fileExists(atPath: markdown.path))
         XCTAssertTrue(fm.fileExists(atPath: outsideNote.path))
 
         model.openNote(markdown)
         await waitForNote(model, markdown)
-        XCTAssertEqual(model.renameItem(folder, to: "Archive")?.path, renamed.path)
+        let folderRename = await model.renameItem(folder, to: "Archive")
+        XCTAssertEqual(folderRename?.path, renamed.path)
         let movedNote = renamed.appendingPathComponent("Note.md")
         await waitForNote(model, movedNote)
         XCTAssertEqual(model.selected, movedNote)
@@ -2163,7 +2167,7 @@ extension PKSNotesTests {
         XCTAssertEqual(try String(contentsOf: copied!, encoding: .utf8), "# Original")
         XCTAssertNil(model.copyItem(note, to: outside))
 
-        let moved = model.moveItem(note, to: archive, navigationDecision: .discard)
+        let moved = await model.moveItem(note, to: archive, navigationDecision: .discard)
         XCTAssertEqual(moved, archive.appendingPathComponent("Note.md"))
         await waitForNote(model, archive.appendingPathComponent("Note.md"))
         XCTAssertFalse(fm.fileExists(atPath: note.path))
@@ -2176,7 +2180,7 @@ extension PKSNotesTests {
         XCTAssertEqual(try String(contentsOf: copiedToRoot!, encoding: .utf8), "# Original")
         try fm.removeItem(at: copiedToRoot!)
 
-        let returned = model.moveItem(moved!, to: root, navigationDecision: .discard)
+        let returned = await model.moveItem(moved!, to: root, navigationDecision: .discard)
         XCTAssertEqual(returned, note)
         await waitForNote(model, note)
         XCTAssertEqual(model.selected, note)
@@ -2186,7 +2190,7 @@ extension PKSNotesTests {
 
 extension PKSNotesTests {
     @MainActor
-    func testMoveAndCopyFolderRejectDescendantDestination() throws {
+    func testMoveAndCopyFolderRejectDescendantDestination() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")
         defer {
@@ -2203,7 +2207,8 @@ extension PKSNotesTests {
 
         let model = NotesModel()
         model.openWorkspace(root)
-        XCTAssertNil(model.moveItem(parent, to: child, navigationDecision: .discard))
+        let descendantMove = await model.moveItem(parent, to: child, navigationDecision: .discard)
+        XCTAssertNil(descendantMove)
         XCTAssertTrue(fm.fileExists(atPath: parent.path))
         XCTAssertNil(model.copyItem(parent, to: child))
         XCTAssertTrue(fm.fileExists(atPath: parent.path))

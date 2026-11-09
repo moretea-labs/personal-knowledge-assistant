@@ -6,17 +6,21 @@ enum WorkspaceLinkRelocation {
     struct Prepared {
         let original: String
         let updated: String
+        let sourceStamp: WorkspaceFileStamp
     }
 
-    static func prepare(from source: URL, to destination: URL, root: URL) -> Prepared? {
-        guard ["md", "markdown"].contains(source.pathExtension.lowercased()),
-              WorkspaceFiles.contains(source, in: root),
-              WorkspaceFiles.contains(destination, in: root),
-              !WorkspaceFiles.isDataless(source),
-              let stamp = WorkspaceFiles.fileStamp(source),
-              stamp.size <= 4_000_000,
-              let original = try? String(contentsOf: source, encoding: .utf8),
-              WorkspaceFiles.fileStamp(source) == stamp else { return nil }
+    /// Capture the canonical Markdown before a path change. The shared opening
+    /// reader owns File Provider hydration and stable-stamp validation, so a
+    /// dataless iCloud note is never moved with link repair silently skipped.
+    static func prepare(from source: URL, to destination: URL, root: URL) async throws -> Prepared? {
+        guard ["md", "markdown"].contains(source.pathExtension.lowercased()) else { return nil }
+        guard WorkspaceFiles.contains(source, in: root),
+              WorkspaceFiles.contains(destination, in: root) else {
+            throw CocoaError(.fileReadNoPermission)
+        }
+
+        let snapshot = try await WorkspaceFiles.readUTF8ForOpening(source)
+        let original = snapshot.content
 
         let movedBetweenFolders =
             source.deletingLastPathComponent().standardizedFileURL
@@ -43,7 +47,13 @@ enum WorkspaceLinkRelocation {
             ) else { continue }
             updated = changed
         }
-        return updated == original ? nil : .init(original: original, updated: updated)
+        return .init(original: original, updated: updated, sourceStamp: snapshot.stamp)
+    }
+
+    /// A hydration/read can yield while File Provider or the user changes the
+    /// source. Never move a different revision than the one link repair parsed.
+    static func sourceIsCurrent(_ prepared: Prepared, at source: URL) -> Bool {
+        WorkspaceFiles.fileStamp(source) == prepared.sourceStamp
     }
 
     /// Verify the moved file still contains the source we planned against.
@@ -54,6 +64,7 @@ enum WorkspaceLinkRelocation {
               let current = try? String(contentsOf: destination, encoding: .utf8),
               current == prepared.original,
               WorkspaceFiles.fileStamp(destination) == stamp else { return false }
+        if prepared.updated == prepared.original { return true }
         do {
             try prepared.updated.write(to: destination, atomically: true, encoding: .utf8)
             return true

@@ -387,6 +387,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Could not rename file": "无法重命名文件",
         "Could not copy item": "无法复制项目",
         "Could not move item": "无法移动项目",
+        "Could not prepare path change": "无法安全准备路径变更",
+        "The file changed while preparing the path change. Try again.": "准备路径变更期间文件或导航状态发生变化，请重试。",
         "Path changed. Incoming links from other notes may need repair.": "路径已改变：其他笔记中指向该文件的链接可能需要修复。",
         "Moved, but some outgoing links could not be preserved. Review the note.": "文件已移动，但部分本笔记链接未能安全更新，请检查。",
         "PKS preview failed": "PKS 预览失败",

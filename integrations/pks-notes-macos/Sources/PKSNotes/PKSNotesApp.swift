@@ -944,8 +944,14 @@ struct NotesWindow: View {
             TextField(language.text("Name"), text: $renameValue)
                 .accessibilityIdentifier("pks-rename-field")
             Button(language.text("Rename")) {
-                if let item = renameCandidate { _ = model.renameItem(item, to: renameValue) }
+                let item = renameCandidate
+                let value = renameValue
                 renameCandidate = nil
+                if let item {
+                    Task { @MainActor in
+                        _ = await model.renameItem(item, to: value)
+                    }
+                }
             }
             Button(language.text("Cancel"), role: .cancel) { renameCandidate = nil }
         } message: {
@@ -1949,13 +1955,14 @@ struct NotesWindow: View {
                                         guard let source = urls.first?.standardizedFileURL,
                                               model.canManage(source),
                                               source != row.item.url else { return false }
-                                        let moved = model.moveItem(source, to: row.item.url)
-                                        if moved != nil {
-                                            expandedFolderPaths.insert(row.item.url.path)
+                                        Task { @MainActor in
+                                            let moved = await model.moveItem(source, to: row.item.url)
+                                            if moved != nil {
+                                                expandedFolderPaths.insert(row.item.url.path)
+                                            }
                                             fileDropTargetPath = nil
-                                            return true
                                         }
-                                        return false
+                                        return true
                                     } isTargeted: { targeted in
                                         fileDropTargetPath = targeted ? row.id : nil
                                     }
@@ -2478,7 +2485,9 @@ struct NotesWindow: View {
         if copying {
             _ = model.copyItem(item, to: folder)
         } else {
-            _ = model.moveItem(item, to: folder)
+            Task { @MainActor in
+                _ = await model.moveItem(item, to: folder)
+            }
         }
     }
 

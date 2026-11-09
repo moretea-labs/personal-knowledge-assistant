@@ -3,7 +3,7 @@ import XCTest
 @testable import PKSNotes
 
 final class WorkspaceLinkRelocationTests: XCTestCase {
-    func testMovePreservesInternalRelativeLinksAndLeavesExternalSyntaxUntouched() throws {
+    func testMovePreservesInternalRelativeLinksAndLeavesExternalSyntaxUntouched() async throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let originalFolder = root.appendingPathComponent("Before")
@@ -31,9 +31,10 @@ final class WorkspaceLinkRelocationTests: XCTestCase {
         """
         try originalBody.write(to: original, atomically: true, encoding: .utf8)
 
-        let prepared = try XCTUnwrap(WorkspaceLinkRelocation.prepare(
+        let preparedResult = try await WorkspaceLinkRelocation.prepare(
             from: original, to: destination, root: root
-        ))
+        )
+        let prepared = try XCTUnwrap(preparedResult)
         XCTAssertTrue(prepared.updated.contains("[Sibling](/Before/Sibling#A)"))
         XCTAssertTrue(prepared.updated.contains("[[/Paper.pdf#page=2|PDF]]"))
         XCTAssertTrue(prepared.updated.contains("[Self](/After/Guide#Intro)"))
@@ -48,7 +49,7 @@ final class WorkspaceLinkRelocationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: sibling, encoding: .utf8), "# Sibling")
     }
 
-    func testSameFolderRenameOnlyRewritesSelfReferences() throws {
+    func testSameFolderRenameOnlyRewritesSelfReferences() async throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
@@ -59,13 +60,14 @@ final class WorkspaceLinkRelocationTests: XCTestCase {
         try "# Other".write(to: other, atomically: true, encoding: .utf8)
         try "[Self](Old.md#One) and [Other](Other.md)".write(to: source, atomically: true, encoding: .utf8)
 
-        let prepared = try XCTUnwrap(WorkspaceLinkRelocation.prepare(from: source, to: renamed, root: root))
+        let preparedResult = try await WorkspaceLinkRelocation.prepare(from: source, to: renamed, root: root)
+        let prepared = try XCTUnwrap(preparedResult)
         XCTAssertEqual(prepared.updated, "[Self](/New#One) and [Other](Other.md)")
         try fm.moveItem(at: source, to: renamed)
         XCTAssertTrue(WorkspaceLinkRelocation.apply(prepared, to: renamed))
     }
 
-    func testChangedFileRefusesOverwriteAfterMove() throws {
+    func testChangedFileRefusesOverwriteAfterMove() async throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let dstFolder = root.appendingPathComponent("Dest")
@@ -76,7 +78,8 @@ final class WorkspaceLinkRelocationTests: XCTestCase {
         let moved = dstFolder.appendingPathComponent("Old.md")
         try "# Other".write(to: target, atomically: true, encoding: .utf8)
         try "[Other](Other.md)".write(to: source, atomically: true, encoding: .utf8)
-        let prepared = try XCTUnwrap(WorkspaceLinkRelocation.prepare(from: source, to: moved, root: root))
+        let preparedResult = try await WorkspaceLinkRelocation.prepare(from: source, to: moved, root: root)
+        let prepared = try XCTUnwrap(preparedResult)
         try fm.moveItem(at: source, to: moved)
         try "Modified concurrently".write(to: moved, atomically: true, encoding: .utf8)
         XCTAssertFalse(WorkspaceLinkRelocation.apply(prepared, to: moved))
@@ -84,7 +87,29 @@ final class WorkspaceLinkRelocationTests: XCTestCase {
     }
 
     @MainActor
-    func testModelMovePreservesSourceLinksWithoutChangingOtherNotes() throws {
+    func testUnreadableMarkdownRefusesMoveInsteadOfSkippingLinkRepair() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = root.appendingPathComponent("Docs", isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let original = root.appendingPathComponent("Broken.md")
+        let moved = folder.appendingPathComponent("Broken.md")
+        try Data([0xFF, 0xFE, 0xFD]).write(to: original)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        let result = await model.moveItem(original, to: folder)
+
+        XCTAssertNil(result)
+        XCTAssertTrue(fm.fileExists(atPath: original.path))
+        XCTAssertFalse(fm.fileExists(atPath: moved.path))
+        XCTAssertTrue(model.message?.contains(AppLanguage.current.text("Could not prepare path change")) == true)
+    }
+
+    @MainActor
+    func testModelMovePreservesSourceLinksWithoutChangingOtherNotes() async throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let folder = root.appendingPathComponent("Docs")
@@ -97,7 +122,8 @@ final class WorkspaceLinkRelocationTests: XCTestCase {
         try "[Reference](Reference.md)".write(to: original, atomically: true, encoding: .utf8)
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(root))
-        XCTAssertEqual(model.moveItem(original, to: folder), moved)
+        let movedResult = await model.moveItem(original, to: folder)
+        XCTAssertEqual(movedResult, moved)
         XCTAssertEqual(try String(contentsOf: moved, encoding: .utf8), "[Reference](/Reference)")
         XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "# Reference")
     }

@@ -2403,7 +2403,7 @@ final class NotesModel: ObservableObject {
     /// outside the selected workspace. For folders, rebase an open descendant.
     @discardableResult
     func renameItem(_ item: URL, to enteredName: String,
-                    navigationDecision: UnsavedNoteDecision? = nil) -> URL? {
+                    navigationDecision: UnsavedNoteDecision? = nil) async -> URL? {
         let target = item.standardizedFileURL
         guard canManage(target) else {
             message = AppLanguage.current.text("Only existing files inside the notes folder can be renamed.")
@@ -2436,8 +2436,19 @@ final class NotesModel: ObservableObject {
         let affected = isInside(oldSelected, item: target)
             || isInside(oldPDF, item: target) || isInside(oldRequested, item: target)
         if affected && !confirmLeavingNote(decision: navigationDecision) { return nil }
-        let ownLinkRepair = isFolder ? nil
-            : WorkspaceLinkRelocation.prepare(from: target, to: destination, root: root)
+        let ownLinkRepair: WorkspaceLinkRelocation.Prepared?
+        do {
+            ownLinkRepair = isFolder ? nil
+                : try await WorkspaceLinkRelocation.prepare(from: target, to: destination, root: root)
+        } catch {
+            message = "\(AppLanguage.current.text("Could not prepare path change")): \(error.localizedDescription)"
+            return nil
+        }
+        guard selected == oldSelected, previewPDF == oldPDF, requestedNote == oldRequested,
+              ownLinkRepair.map({ WorkspaceLinkRelocation.sourceIsCurrent($0, at: target) }) ?? true else {
+            message = AppLanguage.current.text("The file changed while preparing the path change. Try again.")
+            return nil
+        }
 
         func rebased(_ url: URL?) -> URL? {
             guard let url, isInside(url, item: target) else { return nil }
@@ -2522,7 +2533,7 @@ final class NotesModel: ObservableObject {
 
     @discardableResult
     func moveItem(_ item: URL, to directory: URL,
-                  navigationDecision: UnsavedNoteDecision? = nil) -> URL? {
+                  navigationDecision: UnsavedNoteDecision? = nil) async -> URL? {
         let target = item.standardizedFileURL
         let folder = directory.standardizedFileURL
         guard canManage(target), let root,
@@ -2555,8 +2566,19 @@ final class NotesModel: ObservableObject {
         let affected = isInside(oldSelected, item: target)
             || isInside(oldPDF, item: target) || isInside(oldRequested, item: target)
         if affected && !confirmLeavingNote(decision: navigationDecision) { return nil }
-        let ownLinkRepair = targetIsDirectory ? nil
-            : WorkspaceLinkRelocation.prepare(from: target, to: destination, root: root)
+        let ownLinkRepair: WorkspaceLinkRelocation.Prepared?
+        do {
+            ownLinkRepair = targetIsDirectory ? nil
+                : try await WorkspaceLinkRelocation.prepare(from: target, to: destination, root: root)
+        } catch {
+            message = "\(AppLanguage.current.text("Could not prepare path change")): \(error.localizedDescription)"
+            return nil
+        }
+        guard selected == oldSelected, previewPDF == oldPDF, requestedNote == oldRequested,
+              ownLinkRepair.map({ WorkspaceLinkRelocation.sourceIsCurrent($0, at: target) }) ?? true else {
+            message = AppLanguage.current.text("The file changed while preparing the path change. Try again.")
+            return nil
+        }
 
         func rebased(_ url: URL?) -> URL? {
             guard let url, isInside(url, item: target) else { return nil }
