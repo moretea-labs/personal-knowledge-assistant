@@ -7,7 +7,7 @@ import XCTest
 /// removes only that folder after the test. Normal CI runs skip this test.
 final class RealICloudFileProviderAcceptanceTests: XCTestCase {
     @MainActor
-    func testDatalessMarkdownRenameAndPDFMovePreserveLinks() async throws {
+    func testDatalessMarkdownRenameFolderCopyMoveAndPDFMovePreserveLinks() async throws {
         guard ProcessInfo.processInfo.environment["PKS_NOTES_RUN_REAL_ICLOUD_ACCEPTANCE"] == "1" else {
             throw XCTSkip("Set PKS_NOTES_RUN_REAL_ICLOUD_ACCEPTANCE=1 to run against the real iCloud File Provider.")
         }
@@ -43,6 +43,10 @@ final class RealICloudFileProviderAcceptanceTests: XCTestCase {
         let source = root.appendingPathComponent("Source.md")
         let pdf = root.appendingPathComponent("Book.pdf")
         let reader = root.appendingPathComponent("Reading.md")
+        let cloudFolder = root.appendingPathComponent("Cloud Folder", isDirectory: true)
+        let deepFolder = cloudFolder.appendingPathComponent("Deep", isDirectory: true)
+        let sibling = cloudFolder.appendingPathComponent("Other.md")
+        let cloudNote = deepFolder.appendingPathComponent("Cloud.md")
         try "# Source\n[Self](Source.md)\n".write(to: source, atomically: true, encoding: .utf8)
         try Data("%PDF-1.4\n%%EOF".utf8).write(to: pdf)
         try "# Reading\n[Book · p. 5](/Book.pdf#page=5)\n".write(
@@ -50,17 +54,30 @@ final class RealICloudFileProviderAcceptanceTests: XCTestCase {
             atomically: true,
             encoding: .utf8
         )
+        try fileManager.createDirectory(at: deepFolder, withIntermediateDirectories: true)
+        try "# Other\n".write(to: sibling, atomically: true, encoding: .utf8)
+        try """
+        # Cloud
+        [Sibling](../Other.md)
+        [Root sibling](/Cloud Folder/Other.md)
+        [Renamed source](../../Renamed.md)
+        """.write(to: cloudNote, atomically: true, encoding: .utf8)
 
         guard fileManager.isUbiquitousItem(at: source),
-              fileManager.isUbiquitousItem(at: pdf) else {
+              fileManager.isUbiquitousItem(at: pdf),
+              fileManager.isUbiquitousItem(at: cloudNote) else {
             throw XCTSkip("The test files have not entered the iCloud File Provider domain.")
         }
         try await waitForICloudUpload(source)
         try await waitForICloudUpload(pdf)
+        try await waitForICloudUpload(cloudNote)
 
         try fileManager.evictUbiquitousItem(at: source)
         try await waitForDatalessPlaceholder(source)
         XCTAssertTrue(WorkspaceFiles.isDataless(source), "The Markdown fixture must be a real dataless placeholder.")
+        try fileManager.evictUbiquitousItem(at: cloudNote)
+        try await waitForDatalessPlaceholder(cloudNote)
+        XCTAssertTrue(WorkspaceFiles.isDataless(cloudNote), "The nested Markdown fixture must be a real dataless placeholder.")
 
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(root))
@@ -82,6 +99,45 @@ final class RealICloudFileProviderAcceptanceTests: XCTestCase {
 
         let copies = root.appendingPathComponent("Copies", isDirectory: true)
         try fileManager.createDirectory(at: copies, withIntermediateDirectories: false)
+
+        let copiedFolderResult = await model.copyItem(cloudFolder, to: copies)
+        let copiedFolder = try XCTUnwrap(copiedFolderResult, model.message ?? "Folder copy failed.")
+        let copiedCloudNote = copiedFolder
+            .appendingPathComponent("Deep", isDirectory: true)
+            .appendingPathComponent("Cloud.md")
+        let copiedSibling = copiedFolder.appendingPathComponent("Other.md")
+        XCTAssertFalse(WorkspaceFiles.isDataless(cloudNote), "Folder copy must hydrate nested cloud-only Markdown before link repair.")
+        let copiedContent = try String(contentsOf: copiedCloudNote, encoding: .utf8)
+        let expectedCopiedSiblingTarget = try XCTUnwrap(
+            WorkspaceFiles.canonicalLinkTarget(for: copiedSibling, in: root)
+        )
+        let expectedRenamedTarget = try XCTUnwrap(
+            WorkspaceFiles.canonicalLinkTarget(for: renamed, in: root)
+        )
+        XCTAssertTrue(copiedContent.contains("](../Other.md)"))
+        XCTAssertTrue(copiedContent.contains("](\(expectedCopiedSiblingTarget))"))
+        XCTAssertTrue(copiedContent.contains("](\(expectedRenamedTarget))"))
+
+        let folderArchive = root.appendingPathComponent("Folder Archive", isDirectory: true)
+        try fileManager.createDirectory(at: folderArchive, withIntermediateDirectories: false)
+        try fileManager.evictUbiquitousItem(at: cloudNote)
+        try await waitForDatalessPlaceholder(cloudNote)
+        XCTAssertTrue(WorkspaceFiles.isDataless(cloudNote), "The nested Markdown fixture must be dataless before folder move.")
+        let movedFolderResult = await model.moveItem(cloudFolder, to: folderArchive)
+        let movedFolder = try XCTUnwrap(movedFolderResult, model.message ?? "Folder move failed.")
+        let movedCloudNote = movedFolder
+            .appendingPathComponent("Deep", isDirectory: true)
+            .appendingPathComponent("Cloud.md")
+        let movedSibling = movedFolder.appendingPathComponent("Other.md")
+        XCTAssertFalse(WorkspaceFiles.isDataless(movedCloudNote), "Folder move must hydrate nested cloud-only Markdown before link repair.")
+        let movedContent = try String(contentsOf: movedCloudNote, encoding: .utf8)
+        let expectedMovedSiblingTarget = try XCTUnwrap(
+            WorkspaceFiles.canonicalLinkTarget(for: movedSibling, in: root)
+        )
+        XCTAssertTrue(movedContent.contains("](../Other.md)"))
+        XCTAssertTrue(movedContent.contains("](\(expectedMovedSiblingTarget))"))
+        XCTAssertTrue(movedContent.contains("](\(expectedRenamedTarget))"))
+
         try fileManager.evictUbiquitousItem(at: pdf)
         try await waitForDatalessPlaceholder(pdf)
         XCTAssertTrue(WorkspaceFiles.isDataless(pdf), "The PDF fixture must be a real dataless placeholder before copy.")
@@ -110,6 +166,93 @@ final class RealICloudFileProviderAcceptanceTests: XCTestCase {
         )
         XCTAssertTrue(readerContent.contains("(\(expectedPDFTarget)#page=5)"))
         XCTAssertFalse(readerContent.contains("(/Book.pdf#page=5)"))
+    }
+
+    @MainActor
+    func testUnreadableLastOpenedNoteKeepsRetryablePath() async throws {
+        let fileManager = FileManager.default
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        let previousNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "PKS Notes Last Opened QA \\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: false)
+        defer {
+            try? fileManager.removeItem(at: root)
+            if let previousWorkspace { defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousNote { defaults.set(previousNote, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+
+        let note = root.appendingPathComponent("Unreadable.md")
+        try Data([0xFF, 0xFE, 0xFD]).write(to: note)
+        defaults.set(note.path, forKey: "PKSNotesLastOpenedMarkdown")
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<400 where model.loadingNote {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertFalse(model.loadingNote)
+        XCTAssertNil(model.selected)
+        XCTAssertEqual(defaults.string(forKey: "PKSNotesLastOpenedMarkdown"), note.path)
+        XCTAssertTrue(
+            model.message?.contains(
+                AppLanguage.current.text("Could not reopen the last note. Select it again to retry.")
+            ) == true
+        )
+    }
+
+    @MainActor
+    func testFolderMoveAndCopyAbortWhenInternalMarkdownCannotBeRead() async throws {
+        let fileManager = FileManager.default
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        let previousNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "PKS Notes Folder Relocation QA \\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let source = root.appendingPathComponent("Bundle", isDirectory: true)
+        let copies = root.appendingPathComponent("Copies", isDirectory: true)
+        let archive = root.appendingPathComponent("Archive", isDirectory: true)
+        try fileManager.createDirectory(at: source, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: copies, withIntermediateDirectories: false)
+        try fileManager.createDirectory(at: archive, withIntermediateDirectories: false)
+        defer {
+            try? fileManager.removeItem(at: root)
+            if let previousWorkspace { defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousNote { defaults.set(previousNote, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+
+        defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown")
+        let unreadable = source.appendingPathComponent("Unreadable.md")
+        try Data([0xFF, 0xFE, 0xFD]).write(to: unreadable)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+
+        let copied = await model.copyItem(source, to: copies)
+        XCTAssertNil(copied)
+        XCTAssertTrue(fileManager.fileExists(atPath: unreadable.path))
+        XCTAssertFalse(fileManager.fileExists(atPath: copies.appendingPathComponent("Bundle").path))
+        XCTAssertTrue(
+            model.message?.contains(AppLanguage.current.text("Could not prepare file operation")) == true
+        )
+
+        let moved = await model.moveItem(source, to: archive)
+        XCTAssertNil(moved)
+        XCTAssertTrue(fileManager.fileExists(atPath: unreadable.path))
+        XCTAssertFalse(fileManager.fileExists(atPath: archive.appendingPathComponent("Bundle").path))
+        XCTAssertTrue(
+            model.message?.contains(AppLanguage.current.text("Could not prepare path change")) == true
+        )
     }
 
 }

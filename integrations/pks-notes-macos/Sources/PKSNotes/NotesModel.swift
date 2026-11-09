@@ -1153,9 +1153,20 @@ final class NotesModel: ObservableObject {
         guard WorkspaceFiles.contains(url, in: root) else { return }
         guard ["md", "markdown"].contains(url.pathExtension.lowercased()) else { return }
         var info = Darwin.stat()
-        guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0,
-              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+        let status = url.path.withCString { Darwin.lstat($0, &info) }
+        guard status == 0 else {
+            if errno == ENOENT || errno == ENOTDIR {
+                UserDefaults.standard.removeObject(forKey: "PKSNotesLastOpenedMarkdown")
+                message = AppLanguage.current.text("Last opened note is no longer available. Choose another note.")
+            } else {
+                // Preserve the path for retry when the file exists but metadata access failed.
+                openNote(url, reportFailure: true)
+            }
+            return
+        }
+        guard (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
             UserDefaults.standard.removeObject(forKey: "PKSNotesLastOpenedMarkdown")
+            message = AppLanguage.current.text("Last opened note is no longer available. Choose another note.")
             return
         }
         openNote(url, reportFailure: false)
@@ -2574,14 +2585,20 @@ final class NotesModel: ObservableObject {
             message = "\(AppLanguage.current.text("Could not prepare path change")): \(error.localizedDescription)"
             return nil
         }
-        let relatedLinkRepair = await WorkspaceLinkRelocation.prepareRelatedSources(
-            from: target,
-            to: destination,
-            movingIsDirectory: isFolder,
-            root: root,
-            markdownFiles: candidateFiles,
-            candidateBasenames: candidateBasenames
-        )
+        let relatedLinkRepair: WorkspaceLinkRelocation.RelatedPlan
+        do {
+            relatedLinkRepair = try await WorkspaceLinkRelocation.prepareRelatedSources(
+                from: target,
+                to: destination,
+                movingIsDirectory: isFolder,
+                root: root,
+                markdownFiles: candidateFiles,
+                candidateBasenames: candidateBasenames
+            )
+        } catch {
+            message = "\(AppLanguage.current.text("Could not prepare path change")): \(error.localizedDescription)"
+            return nil
+        }
         let selectedRelatedEdit = oldSelected.flatMap { selected in
             relatedLinkRepair.edits.first {
                 $0.source.standardizedFileURL == selected.standardizedFileURL
@@ -2742,13 +2759,18 @@ final class NotesModel: ObservableObject {
             let candidateFiles = globalLinkCandidates.markdownFiles
             let candidateBasenames = globalLinkCandidates.byBasename
             if targetIsDirectory {
-                folderRepair = await WorkspaceLinkRelocation.prepareCopiedSources(
-                    from: target,
-                    to: destination,
-                    root: root,
-                    markdownFiles: candidateFiles,
-                    candidateBasenames: candidateBasenames
-                )
+                do {
+                    folderRepair = try await WorkspaceLinkRelocation.prepareCopiedSources(
+                        from: target,
+                        to: destination,
+                        root: root,
+                        markdownFiles: candidateFiles,
+                        candidateBasenames: candidateBasenames
+                    )
+                } catch {
+                    message = "\(AppLanguage.current.text("Could not prepare file operation")): \(error.localizedDescription)"
+                    return nil
+                }
             } else {
                 do {
                     directRepair = try await WorkspaceLinkRelocation.prepare(
@@ -2875,14 +2897,20 @@ final class NotesModel: ObservableObject {
             message = "\(AppLanguage.current.text("Could not prepare path change")): \(error.localizedDescription)"
             return nil
         }
-        let relatedLinkRepair = await WorkspaceLinkRelocation.prepareRelatedSources(
-            from: target,
-            to: destination,
-            movingIsDirectory: targetIsDirectory,
-            root: root,
-            markdownFiles: candidateFiles,
-            candidateBasenames: candidateBasenames
-        )
+        let relatedLinkRepair: WorkspaceLinkRelocation.RelatedPlan
+        do {
+            relatedLinkRepair = try await WorkspaceLinkRelocation.prepareRelatedSources(
+                from: target,
+                to: destination,
+                movingIsDirectory: targetIsDirectory,
+                root: root,
+                markdownFiles: candidateFiles,
+                candidateBasenames: candidateBasenames
+            )
+        } catch {
+            message = "\(AppLanguage.current.text("Could not prepare path change")): \(error.localizedDescription)"
+            return nil
+        }
         let selectedRelatedEdit = oldSelected.flatMap { selected in
             relatedLinkRepair.edits.first {
                 $0.source.standardizedFileURL == selected.standardizedFileURL

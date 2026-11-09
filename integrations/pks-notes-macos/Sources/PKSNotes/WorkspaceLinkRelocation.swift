@@ -74,10 +74,9 @@ enum WorkspaceLinkRelocation {
         return .init(original: original, updated: updated, sourceStamp: snapshot.stamp)
     }
 
-    /// Prepare every locally available Markdown source whose link semantics
-    /// would change because a file or folder moves. The existing complete-vault
-    /// transient index supplies candidates; this routine creates no reverse-link
-    /// database and never hydrates unrelated cloud placeholders.
+    /// Prepare Markdown sources whose link semantics change when a file or
+    /// folder moves or is renamed. Hydrate only Markdown descendants inside
+    /// that folder; unrelated cloud placeholders remain untouched and are reported.
     static func prepareRelatedSources(
         from movingSource: URL,
         to movingDestination: URL,
@@ -85,11 +84,11 @@ enum WorkspaceLinkRelocation {
         root: URL,
         markdownFiles: [URL],
         candidateBasenames: [String: [URL]]
-    ) async -> RelatedPlan {
+    ) async throws -> RelatedPlan {
         let movingSource = movingSource.standardizedFileURL
         let movingDestination = movingDestination.standardizedFileURL
         let root = root.standardizedFileURL
-        return await Task.detached(priority: .userInitiated) {
+        return try await Task.detached(priority: .userInitiated) {
             func isInsideMove(_ url: URL) -> Bool {
                 let path = url.standardizedFileURL.path
                 return path == movingSource.path || path.hasPrefix(movingSource.path + "/")
@@ -108,26 +107,47 @@ enum WorkspaceLinkRelocation {
             var skippedUnavailable = 0
 
             for rawSource in markdownFiles {
-                guard !Task.isCancelled else { break }
+                try Task.checkCancellation()
                 let source = rawSource.standardizedFileURL
 
                 // The directly moved Markdown file has its own hydration-aware
                 // preparation above. Avoid a second writer for the same source.
                 if !movingIsDirectory && source == movingSource { continue }
 
-                if WorkspaceFiles.isDataless(source) {
-                    skippedCloud += 1
-                    continue
+                let sourceMoves = isInsideMove(source)
+                let original: String
+                let stamp: WorkspaceFileStamp
+                if movingIsDirectory && sourceMoves {
+                    if let currentStamp = WorkspaceFiles.fileStamp(source),
+                       currentStamp.size > 4_000_000 {
+                        throw CocoaError(.fileReadUnknown)
+                    }
+                    let snapshot = try await WorkspaceFiles.readUTF8ForOpening(source)
+                    guard snapshot.stamp.size <= 4_000_000 else {
+                        throw CocoaError(.fileReadUnknown)
+                    }
+                    original = snapshot.content
+                    stamp = snapshot.stamp
+                } else {
+                    if WorkspaceFiles.isDataless(source) {
+                        skippedCloud += 1
+                        continue
+                    }
+                    guard let currentStamp = WorkspaceFiles.fileStamp(source),
+                          currentStamp.size <= 4_000_000,
+                          let contents = try? String(contentsOf: source, encoding: .utf8),
+                          WorkspaceFiles.fileStamp(source) == currentStamp else {
+                        skippedUnavailable += 1
+                        continue
+                    }
+                    original = contents
+                    stamp = currentStamp
                 }
-                guard let stamp = WorkspaceFiles.fileStamp(source),
-                      stamp.size <= 4_000_000,
-                      let original = try? String(contentsOf: source, encoding: .utf8),
-                      WorkspaceFiles.fileStamp(source) == stamp else {
+                guard stamp.size <= 4_000_000 else {
                     skippedUnavailable += 1
                     continue
                 }
 
-                let sourceMoves = isInsideMove(source)
                 var updated = original
                 let rawTargets = Set(MindMapOutline.linkOccurrences(in: original, includeImages: true).map(\.link.target))
                 for raw in rawTargets.sorted() {
@@ -195,21 +215,20 @@ enum WorkspaceLinkRelocation {
         }.value
     }
 
-    /// Prepare only Markdown files that will exist in a copied folder. Original
-    /// sources outside the copied subtree are never mutated. Relative links
-    /// within the copied topology remain portable; links that would otherwise
-    /// escape to the wrong location are canonicalized through the same resolver.
+    /// Prepare Markdown files inside a copied folder. Original sources are read
+    /// through the hydration-aware reader so cloud-only descendants participate
+    /// in link rewriting; only the copied destination is ever mutated.
     static func prepareCopiedSources(
         from copyingSource: URL,
         to copyingDestination: URL,
         root: URL,
         markdownFiles: [URL],
         candidateBasenames: [String: [URL]]
-    ) async -> RelatedPlan {
+    ) async throws -> RelatedPlan {
         let copyingSource = copyingSource.standardizedFileURL
         let copyingDestination = copyingDestination.standardizedFileURL
         let root = root.standardizedFileURL
-        return await Task.detached(priority: .userInitiated) {
+        return try await Task.detached(priority: .userInitiated) {
             func isInsideCopy(_ url: URL) -> Bool {
                 let path = url.standardizedFileURL.path
                 return path == copyingSource.path || path.hasPrefix(copyingSource.path + "/")
@@ -224,26 +243,24 @@ enum WorkspaceLinkRelocation {
             }
 
             var edits: [RelatedEdit] = []
-            var skippedCloud = 0
-            var skippedUnavailable = 0
+            let skippedCloud = 0
+            let skippedUnavailable = 0
 
             for rawSource in markdownFiles {
-                guard !Task.isCancelled else { break }
+                try Task.checkCancellation()
                 let source = rawSource.standardizedFileURL
                 guard isInsideCopy(source) else { continue }
 
-                if WorkspaceFiles.isDataless(source) {
-                    skippedCloud += 1
-                    continue
+                if let currentStamp = WorkspaceFiles.fileStamp(source),
+                   currentStamp.size > 4_000_000 {
+                    throw CocoaError(.fileReadUnknown)
                 }
-                guard let stamp = WorkspaceFiles.fileStamp(source),
-                      stamp.size <= 4_000_000,
-                      let original = try? String(contentsOf: source, encoding: .utf8),
-                      WorkspaceFiles.fileStamp(source) == stamp else {
-                    skippedUnavailable += 1
-                    continue
+                let snapshot = try await WorkspaceFiles.readUTF8ForOpening(source)
+                guard snapshot.stamp.size <= 4_000_000 else {
+                    throw CocoaError(.fileReadUnknown)
                 }
-
+                let original = snapshot.content
+                let stamp = snapshot.stamp
                 var updated = original
                 let rawTargets = Set(MindMapOutline.linkOccurrences(
                     in: original,

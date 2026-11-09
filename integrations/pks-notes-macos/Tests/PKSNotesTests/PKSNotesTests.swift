@@ -986,7 +986,10 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertNil(model.selected)
         XCTAssertFalse(model.loadingNote)
         XCTAssertNil(defaults.string(forKey: "PKSNotesLastOpenedMarkdown"))
-        XCTAssertNil(model.message)
+        XCTAssertEqual(
+            model.message,
+            AppLanguage.current.text("Last opened note is no longer available. Choose another note.")
+        )
     }
 
     @MainActor
