@@ -123,6 +123,22 @@ extension MindMapOutlineTests {
         ))
     }
 
+    func testPreviewWikiLinksIgnoreCodeAndKeepMarkdownSource() {
+        let source = "# Guide\nSee [[/Notes/A.md|A]] and [[/Notes/B.md]].\n`[[Code.md]]`\n~~~md\n[[Fenced.md]]\n~~~"
+        let rendered = "# Guide\nSee [A](/Notes/A.md) and [/Notes/B.md](/Notes/B.md).\n`[[Code.md]]`\n~~~md\n[[Fenced.md]]\n~~~"
+        XCTAssertEqual(MindMapOutline.previewMarkdown(in: source), rendered)
+        XCTAssertEqual(MindMapOutline.linkOccurrences(in: source).map(\.link.target),
+                       ["/Notes/A.md", "/Notes/B.md"])
+    }
+
+    func testPreviewWikiLinksPreserveEscapedLiteralsAndEncodeCommonPathCharacters() {
+        let source = #"See \[[Literal.md]] and [[/Notes/My File (draft).md|Draft v2]]."#
+        let rendered = #"See \[[Literal.md]] and [Draft v2](/Notes/My%20File%20%28draft%29.md)."#
+        XCTAssertEqual(MindMapOutline.previewMarkdown(in: source), rendered)
+        XCTAssertEqual(MindMapOutline.linkOccurrences(in: source).map(\.link.target),
+                       ["/Notes/My File (draft).md"])
+    }
+
     func testMarkdownImagesDoNotBecomeKnowledgeLinks() {
         let line = "![Cover](assets/cover.png) and [Reference](/Refs.md)"
         XCTAssertEqual(MindMapOutline.links(in: line),

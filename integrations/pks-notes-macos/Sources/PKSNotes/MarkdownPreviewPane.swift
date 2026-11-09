@@ -24,7 +24,9 @@ enum MarkdownPreviewParsing {
         let parts = match != nil || anchorFragment != nil || lazySections
             ? MarkdownSection.sections(in: text)
             : [MarkdownSection(id: 0, heading: nil, markdown: text)]
-        return parts.map { ParsedMarkdownSection(source: $0, content: MarkdownContent($0.markdown)) }
+        return parts.map {
+            ParsedMarkdownSection(source: $0, content: MarkdownContent(MindMapOutline.previewMarkdown(in: $0.markdown)))
+        }
     }
 }
 

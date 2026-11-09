@@ -270,12 +270,38 @@ extension MindMapOutline {
         let link: MindMapLink
     }
 
+    private static func inlineCodeRanges(in text: String) -> [NSRange] {
+        let units = Array(text.utf16)
+        var ranges: [NSRange] = []
+        var opening: (start: Int, width: Int)?
+        var i = 0
+        while i < units.count {
+            guard units[i] == 96, i == 0 || units[i - 1] != 92 else { i += 1; continue }
+            let start = i
+            while i < units.count && units[i] == 96 { i += 1 }
+            let width = i - start
+            if let prior = opening {
+                if prior.width == width {
+                    ranges.append(NSRange(location: prior.start, length: i - prior.start))
+                    opening = nil
+                }
+            } else { opening = (start, width) }
+        }
+        return ranges
+    }
+
     private static func parsedLinks(in title: String) -> [ParsedLink] {
         var parsed: [ParsedLink] = []
         let fullRange = NSRange(title.startIndex..<title.endIndex, in: title)
+        let nsTitle = title as NSString
+        let codeRanges = inlineCodeRanges(in: title)
 
         for match in wikiLinkRegex.matches(in: title, range: fullRange) {
-            guard let labelRange = Range(match.range(at: 1), in: title) else { continue }
+            let start = match.range.location
+            guard (start == 0 || (nsTitle.character(at: start - 1) != 33
+                                   && nsTitle.character(at: start - 1) != 92)),
+                  !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }),
+                  let labelRange = Range(match.range(at: 1), in: title) else { continue }
             let raw = String(title[labelRange])
             let parts = raw.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
             let target = String(parts[0]).trimmingCharacters(in: .whitespaces)
@@ -293,12 +319,12 @@ extension MindMapOutline {
             ))
         }
 
-        let nsTitle = title as NSString
         for match in markdownLinkRegex.matches(in: title, range: fullRange) {
-            // Markdown image embeds are content, not knowledge relationships.
-            // Keep their syntax intact in node presentation and backlink scans.
-            guard match.range.location == 0
-                    || nsTitle.character(at: match.range.location - 1) != 33 else { continue }
+            let start = match.range.location
+            guard (start == 0 || (nsTitle.character(at: start - 1) != 33
+                                   && nsTitle.character(at: start - 1) != 92)),
+                  !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 })
+            else { continue }
             guard let labelRange = Range(match.range(at: 1), in: title),
                   let targetRange = Range(match.range(at: 2), in: title) else { continue }
             parsed.append(.init(
@@ -316,6 +342,33 @@ extension MindMapOutline {
 
     static func links(in title: String) -> [MindMapLink] {
         parsedLinks(in: title).map(\.link)
+    }
+
+    /// Display-only WikiLink conversion; Markdown source is never changed.
+    static func previewMarkdown(in source: String) -> String {
+        let linkedLines = Set(linkOccurrences(in: source).map(\.lineIndex))
+        guard !linkedLines.isEmpty else { return source }
+        var lines = source.components(separatedBy: "\n")
+        for index in linkedLines {
+            let original = lines[index] as NSString
+            let converted = NSMutableString(string: lines[index])
+            let links = parsedLinks(in: lines[index])
+                .filter { $0.range.length >= 4
+                    && original.substring(with: NSRange(location: $0.range.location, length: 2)) == "[[" }
+                .sorted { $0.range.location > $1.range.location }
+            for item in links {
+                let label = item.link.label
+                    .replacingOccurrences(of: "[", with: "\\[")
+                    .replacingOccurrences(of: "]", with: "\\]")
+                let target = item.link.target
+                    .replacingOccurrences(of: " ", with: "%20")
+                    .replacingOccurrences(of: "(", with: "%28")
+                    .replacingOccurrences(of: ")", with: "%29")
+                converted.replaceCharacters(in: item.range, with: "[\(label)](\(target))")
+            }
+            lines[index] = converted as String
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Explicit repair using the existing canonical link parser and Markdown writer.
