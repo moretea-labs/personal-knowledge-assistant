@@ -71,7 +71,12 @@ else
     if [[ -e "$previous" ]]; then mv "$previous" "$app"; fi
     exit 4
 fi
+# The QA bundle can retain an old security-scoped bookmark from manual testing.
+# NotesModel resolves bookmarks before PKSNotesWorkspace, so clear only the QA
+# bookmark before pinning this run to the isolated fixture vault.
+/usr/bin/defaults delete com.moretea.pks.notes.qa PKSNotesWorkspaceBookmark >/dev/null 2>&1 || true
 /usr/bin/defaults write com.moretea.pks.notes.qa PKSNotesWorkspace -string "$fixture"
+/usr/bin/defaults write com.moretea.pks.notes.qa PKSNotesLastOpenedMarkdown -string "$fixture/Map QA.md"
 /usr/bin/open -n -a "$app" --args --pks-qa-pro
 echo "Launched signed QA Debug app: $app"
 echo "QA workspace: $fixture"
