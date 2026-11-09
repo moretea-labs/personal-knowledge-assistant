@@ -924,7 +924,17 @@ final class NotesModel: ObservableObject {
     @Published private(set) var matchJumpSequence = 0
     @Published private(set) var matchedQuery = ""
     @Published private(set) var markdownAnchorRequest: MarkdownAnchorRequest?
-    @Published var query = ""
+    @Published var query = "" {
+        didSet {
+            guard query != oldValue else { return }
+            searchTask?.cancel()
+            searchTask = nil
+            hits = []
+            searching = false
+            searchFailed = false
+            searchStatus = "PKS search · 127.0.0.1:3217"
+        }
+    }
     @Published private(set) var hits: [SearchHit] = []
     @Published private(set) var searching = false
     @Published var message: String?
@@ -951,6 +961,7 @@ final class NotesModel: ObservableObject {
 
     private var savedFileStamp: WorkspaceFileStamp?
     private var autoSaveTask: Task<Void, Never>?
+    private var searchTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var noteLoadTask: Task<Void, Never>?
     @Published private(set) var requestedNote: URL?
@@ -2248,48 +2259,52 @@ final class NotesModel: ObservableObject {
         }
     }
 
-    func search() {
+    func search(using session: URLSession = .shared) {
+        // The latest submission is the sole owner of search presentation.
+        searchTask?.cancel()
+        searchTask = nil
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        hits = []
+        searchFailed = false
         guard !text.isEmpty else {
-            hits = []
             searching = false
-            searchFailed = false
             searchStatus = "PKS search · 127.0.0.1:3217"
             return
         }
         searching = true
-        searchFailed = false
         searchStatus = AppLanguage.current.text("Searching PKS…")
-        Task {
+        searchTask = Task { [weak self] in
+            guard let self else { return }
             do {
                 var parts = URLComponents(string: "http://127.0.0.1:3217/api/search")!
                 parts.queryItems = [URLQueryItem(name: "q", value: text),
                                     URLQueryItem(name: "limit", value: "30")]
                 var request = URLRequest(url: parts.url!)
                 request.timeoutInterval = 8
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await session.data(for: request)
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                     throw URLError(.badServerResponse)
                 }
                 let results = try JSONDecoder().decode([SearchHit].self, from: data)
-                guard query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
-                hits = results
-                searchFailed = false
-                searchStatus = String(
+                guard !Task.isCancelled,
+                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+                self.hits = results
+                self.searchStatus = String(
                     format: "%d %@ · %d %@ · PKS",
-                    hits.count, AppLanguage.current.text("matches"),
-                    groupedHits.count, AppLanguage.current.text("documents")
+                    self.hits.count, AppLanguage.current.text("matches"),
+                    self.groupedHits.count, AppLanguage.current.text("documents")
                 )
             } catch {
-                guard query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
-                hits = []
-                searchFailed = true
-                searchStatus = AppLanguage.current.text("PKS offline · no fallback index")
-                message = "\(AppLanguage.current.text("PKS search failed")): \(error.localizedDescription)"
+                guard !Task.isCancelled,
+                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+                self.searchFailed = true
+                self.searchStatus = AppLanguage.current.text("PKS offline · no fallback index")
+                self.message = "\(AppLanguage.current.text("PKS search failed")): \(error.localizedDescription)"
             }
-            if query.trimmingCharacters(in: .whitespacesAndNewlines) == text {
-                searching = false
-            }
+            guard !Task.isCancelled,
+                  self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+            self.searching = false
+            self.searchTask = nil
         }
     }
 
