@@ -15,9 +15,9 @@ enum MindMapKeyboard {
     static func command(for key: KeyEquivalent, modifiers: EventModifiers) -> Command? {
         guard !modifiers.contains(.control), !modifiers.contains(.option) else { return nil }
         if modifiers.contains(.command) {
-            if !modifiers.contains(.shift), key == "b" { return .boldTitle }
-            if !modifiers.contains(.shift), key == "i" { return .italicTitle }
-            if !modifiers.contains(.shift), key == .return { return .toggleTask }
+            // Cmd+B / Cmd+I / Cmd+Return are owned by the app menu so they
+            // work without relying on canvas first-responder focus. The menu
+            // routes them back here only while a Mind Map is actually mounted.
             if key == .delete, !modifiers.contains(.shift) { return .deleteBranch }
             if key == "0", !modifiers.contains(.shift) { return .fit }
             if key == "-", !modifiers.contains(.shift) { return .zoomOut }
@@ -441,6 +441,18 @@ struct MindMapCanvas: View {
                   let command = MindMapKeyboard.command(for: press.key, modifiers: press.modifiers)
             else { return .ignored }
             return performShortcut(command) ? .handled : .ignored
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .pksMindMapBold)) { _ in
+            guard editingNodeID == nil else { return }
+            _ = performShortcut(.boldTitle)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .pksMindMapItalic)) { _ in
+            guard editingNodeID == nil else { return }
+            _ = performShortcut(.italicTitle)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .pksMindMapToggleTask)) { _ in
+            guard editingNodeID == nil else { return }
+            _ = performShortcut(.toggleTask)
         }
         .onChange(of: showingShortcuts) { _, visible in
             if !visible { requestCanvasFocus() }
@@ -1388,4 +1400,7 @@ struct MindMapCanvas: View {
 
 extension Notification.Name {
     static let pksMindMapFit = Notification.Name("PKSNotesMindMapFit")
+    static let pksMindMapBold = Notification.Name("PKSNotesMindMapBold")
+    static let pksMindMapItalic = Notification.Name("PKSNotesMindMapItalic")
+    static let pksMindMapToggleTask = Notification.Name("PKSNotesMindMapToggleTask")
 }

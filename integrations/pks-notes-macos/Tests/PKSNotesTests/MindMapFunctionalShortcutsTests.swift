@@ -4,9 +4,9 @@ import XCTest
 
 final class MindMapFunctionalShortcutsTests: XCTestCase {
     func testNodeStyleShortcutsUseNativeMacKeyBindingsWithoutHijackingTextInput() {
-        XCTAssertEqual(MindMapKeyboard.command(for: "b", modifiers: .command), .boldTitle)
-        XCTAssertEqual(MindMapKeyboard.command(for: "i", modifiers: .command), .italicTitle)
-        XCTAssertEqual(MindMapKeyboard.command(for: .return, modifiers: .command), .toggleTask)
+        XCTAssertNil(MindMapKeyboard.command(for: "b", modifiers: .command))
+        XCTAssertNil(MindMapKeyboard.command(for: "i", modifiers: .command))
+        XCTAssertNil(MindMapKeyboard.command(for: .return, modifiers: .command))
         XCTAssertNil(MindMapKeyboard.command(for: "b", modifiers: [.command, .shift]))
         XCTAssertNil(MindMapKeyboard.command(for: "i", modifiers: [.command, .option]))
         XCTAssertNil(MindMapKeyboard.command(for: "b", modifiers: []))

@@ -80,10 +80,18 @@ struct PKSNotesApp: App {
                 .keyboardShortcut("v", modifiers: .command)
             }
             CommandMenu("Markdown") {
-                Button(language.text("Bold")) { MarkdownNativeCommand.perform("bold") }
-                    .keyboardShortcut("b", modifiers: .command)
-                Button(language.text("Italic")) { MarkdownNativeCommand.perform("italic") }
-                    .keyboardShortcut("i", modifiers: .command)
+                Button(language.text("Bold")) {
+                    if !MarkdownNativeCommand.perform("bold") {
+                        NotificationCenter.default.post(name: .pksMindMapBold, object: nil)
+                    }
+                }
+                .keyboardShortcut("b", modifiers: .command)
+                Button(language.text("Italic")) {
+                    if !MarkdownNativeCommand.perform("italic") {
+                        NotificationCenter.default.post(name: .pksMindMapItalic, object: nil)
+                    }
+                }
+                .keyboardShortcut("i", modifiers: .command)
                 Button(language.text("Inline Code")) { MarkdownNativeCommand.perform("code") }
                     .keyboardShortcut("e", modifiers: .command)
                 Button(language.text("Link")) { MarkdownNativeCommand.perform("link") }
@@ -742,7 +750,11 @@ struct NotesWindow: View {
             focusKnowledgeSearch()
         }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.toggleEdit)) { _ in
-            toggleEditPreview()
+            if showingMindMap {
+                NotificationCenter.default.post(name: .pksMindMapToggleTask, object: nil)
+            } else {
+                toggleEditPreview()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.paste)) { _ in
             handlePaste()
