@@ -1966,7 +1966,11 @@ struct NotesWindow: View {
 
     private func fileTreeRow(_ row: NoteTreePresentation.Row) -> some View {
                         let isSelected = model.selected == row.item.url || model.previewPDF == row.item.url
-                        return HStack(spacing: 0) {
+                        return Group {
+                            if !row.item.isFolder {
+                                fileTreeDocumentRow(row, isSelected: isSelected)
+                            } else {
+                                HStack(spacing: 0) {
                             // Both folders and documents reserve the same disclosure column.
                             if row.item.isFolder {
                                 Button {
@@ -2079,6 +2083,8 @@ struct NotesWindow: View {
                                 .accessibilityIdentifier("pks-note-\(row.item.name)")
                             }
                         }
+                        }
+                    }
                         .padding(.leading, CGFloat(row.depth) * NotesGeometry.treeIndent)
                         .background(isSelected ? Color.primary.opacity(colorScheme == .dark ? 0.15 : 0.075)
                                     : fileDropTargetPath == row.id
@@ -2110,6 +2116,50 @@ struct NotesWindow: View {
                         .help(row.item.url.path)
                         .id(row.id)
                         .accessibilityIdentifier(row.item.isFolder ? "pks-folder-\(row.item.name)" : row.item.id)
+    }
+
+    private func fileTreeDocumentRow(_ row: NoteTreePresentation.Row, isSelected: Bool) -> some View {
+        Button {
+            treeCursorPath = row.id
+            treeFocused = true
+            model.openFile(row.item.url)
+        } label: {
+            HStack(spacing: 0) {
+                Color.clear.frame(width: NotesGeometry.disclosureWidth,
+                                  height: NotesGeometry.treeRowHeight)
+                if model.fileOperationInProgress?.standardizedFileURL == row.item.url.standardizedFileURL {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .frame(width: NotesGeometry.treeIconWidth,
+                               height: NotesGeometry.treeRowHeight)
+                        .accessibilityLabel(language.text("Updating files…"))
+                } else if model.loadingNote && model.requestedNote?.standardizedFileURL == row.item.url.standardizedFileURL {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .frame(width: NotesGeometry.treeIconWidth,
+                               height: NotesGeometry.treeRowHeight)
+                        .accessibilityLabel(language.text("Opening note…"))
+                } else {
+                    Image(systemName: row.item.iconName)
+                        .font(.system(size: NotesGeometry.symbolSize))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                        .frame(width: NotesGeometry.treeIconWidth,
+                               height: NotesGeometry.treeRowHeight)
+                }
+                Text(row.item.name)
+                    .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(1)
+                    .frame(height: NotesGeometry.treeRowHeight)
+                    .padding(.leading, NotesGeometry.treeTextGap)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .draggable(row.item.url)
+        .accessibilityIdentifier("pks-note-\(row.item.name)")
     }
 
     @ViewBuilder
