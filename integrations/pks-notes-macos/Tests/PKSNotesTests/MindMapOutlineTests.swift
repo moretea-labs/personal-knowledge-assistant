@@ -416,7 +416,6 @@ extension MindMapOutlineTests {
             (.leftArrow, [], .parentOrCollapse),
             (.rightArrow, [], .childOrExpand),
             (.tab, [], .addChild),
-            (.tab, .shift, .promote),
             (.return, [], .addSibling),
             ("e", [], .rename),
             (.space, [], .toggleBranch),
@@ -434,6 +433,7 @@ extension MindMapOutlineTests {
                 expected, "Unexpected shortcut command for key \(key)"
             )
         }
+        XCTAssertNil(MindMapKeyboard.command(for: .tab, modifiers: .shift))
         XCTAssertNil(MindMapKeyboard.command(for: .tab, modifiers: .command))
         XCTAssertNil(MindMapKeyboard.command(for: .return, modifiers: .shift))
         XCTAssertNil(MindMapKeyboard.command(for: "e", modifiers: .option))

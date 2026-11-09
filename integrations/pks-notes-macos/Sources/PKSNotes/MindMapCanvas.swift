@@ -24,7 +24,9 @@ enum MindMapKeyboard {
             if key == "=" || key == "+" { return .zoomIn }
             return nil
         }
-        if key == .tab { return modifiers.contains(.shift) ? .promote : .addChild }
+        // macOS consumes Shift+Tab as backward focus traversal before a
+        // SwiftUI canvas onKeyPress, so do not advertise an unreachable shortcut.
+        if key == .tab, !modifiers.contains(.shift) { return .addChild }
         guard !modifiers.contains(.shift) else { return nil }
         switch key {
         case .upArrow: return .previous
@@ -364,8 +366,12 @@ struct MindMapCanvas: View {
                     collapsed.removeAll()
                 }
                 branchDeleteCandidateID = nil
+                restoreCanvasFocusAfterMenu()
             }
-            Button(language.text("Cancel"), role: .cancel) { branchDeleteCandidateID = nil }
+            Button(language.text("Cancel"), role: .cancel) {
+                branchDeleteCandidateID = nil
+                restoreCanvasFocusAfterMenu()
+            }
         } message: {
             Text(language.text("The selected list branch and its child nodes will be removed from this note."))
         }
@@ -535,27 +541,31 @@ struct MindMapCanvas: View {
             Menu {
                 Button(language.text("Promote node"), systemImage: "arrow.left") {
                     _ = performShortcut(.promote)
+                    restoreCanvasFocusAfterMenu()
                 }
-                .disabled(selectedID == nil || !canPromote)
+                .disabled(editingNodeID != nil || selectedID == nil || !canPromote)
                 Button(language.text("Make child of previous sibling"), systemImage: "arrow.right") {
                     shiftSelected(deeper: true)
-                    requestCanvasFocus()
+                    restoreCanvasFocusAfterMenu()
                 }
                 .disabled(selectedID == nil || !canDemote)
                 Divider()
                 Button(language.text("Bold node title"), systemImage: "bold") {
                     if let selectedID { toggleTitleEmphasis(nodeID: selectedID, marker: "**") }
+                    restoreCanvasFocusAfterMenu()
                 }
                 .disabled(selectedID == nil)
                 .accessibilityIdentifier("pks-mind-map-node-bold")
                 Button(language.text("Italic node title"), systemImage: "italic") {
                     if let selectedID { toggleTitleEmphasis(nodeID: selectedID, marker: "*") }
+                    restoreCanvasFocusAfterMenu()
                 }
                 .disabled(selectedID == nil)
                 .accessibilityIdentifier("pks-mind-map-node-italic")
                 Divider()
                 Button(language.text("Delete Leaf"), systemImage: "trash") {
                     _ = performShortcut(.deleteLeaf)
+                    restoreCanvasFocusAfterMenu()
                 }
                 .disabled(selectedID == nil || !canDeleteLeaf)
                 Button(language.text("Delete Branch"), systemImage: "trash.slash", role: .destructive) {
@@ -575,7 +585,7 @@ struct MindMapCanvas: View {
                 ForEach(MindMapVisualStyle.allCases) { style in
                     Button {
                         mapStyleID = style.rawValue
-                        requestCanvasFocus()
+                        restoreCanvasFocusAfterMenu()
                     } label: {
                         Label(language.text(style.label), systemImage: style.symbol)
                         if mapStyle == style {
@@ -589,7 +599,7 @@ struct MindMapCanvas: View {
                 ForEach(MindMapLayoutDensity.allCases) { density in
                     Button {
                         layoutDensityID = density.rawValue
-                        requestCanvasFocus()
+                        restoreCanvasFocusAfterMenu()
                     } label: {
                         Label(language.text(density.label), systemImage: density.symbol)
                         if layoutDensity == density {
@@ -684,7 +694,6 @@ struct MindMapCanvas: View {
             ("← / →", "Parent / child; collapse / expand"),
             ("Tab", "Add Child"),
             ("Return", "Add Sibling"),
-            ("⇧ Tab", "Promote node"),
             ("E", "Rename node"),
             ("⌘ B / ⌘ I", "Bold / Italic node title"),
             ("⌘ Return", "Toggle task completion"),
@@ -721,6 +730,19 @@ struct MindMapCanvas: View {
         Task { @MainActor in
             await Task.yield()
             if editingNodeID == nil { canvasFocused = true }
+        }
+    }
+
+    // SwiftUI Menu restores first responder to its label after the action
+    // closure returns. Force one focus-state transition after dismissal so
+    // the next map shortcut is not silently consumed by toolbar focus.
+    private func restoreCanvasFocusAfterMenu() {
+        Task { @MainActor in
+            canvasFocused = false
+            try? await Task.sleep(for: .milliseconds(80))
+            if editingNodeID == nil, branchDeleteCandidateID == nil {
+                canvasFocused = true
+            }
         }
     }
 
