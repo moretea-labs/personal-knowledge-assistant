@@ -13,12 +13,15 @@ enum PDFDocumentLoading {
                 return nil
             }
         }
-        let loaded = await loader.value
-        guard !Task.isCancelled else {
+        // Detached workers do not inherit cancellation. When SwiftUI replaces
+        // the active PDF task, propagate cancellation to an in-flight iCloud
+        // hydration rather than leaving it running after a rapid file switch.
+        let loaded = await withTaskCancellationHandler {
+            await loader.value
+        } onCancel: {
             loader.cancel()
-            return nil
         }
-        return loaded
+        return Task.isCancelled ? nil : loaded
     }
 }
 
@@ -156,12 +159,19 @@ enum PDFPageReference {
         guard canonicalURL.path.hasPrefix(rootPath + "/") else { return nil }
         let relative = String(canonicalURL.path.dropFirst(rootPath.count + 1))
         var allowed = CharacterSet.urlPathAllowed
-        allowed.remove(charactersIn: "#?")
+        // Parentheses are legal in a URL but terminate Markdown destinations.
+        // Encode them here, as with spaces and '#', so copied references and
+        // PDF-to-note captures resolve to filenames such as "Plan (v2).pdf".
+        allowed.remove(charactersIn: "#?()")
         guard let encoded = relative.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
 
+        // Keep the readable filename in Markdown without inserting escaped
+        // square brackets into the relationship parser's link-label grammar.
+        // Markdown renderers display HTML numeric character references as
+        // brackets, while the canonical target path stays fully URL encoded.
         let label = canonicalURL.lastPathComponent
-            .replacingOccurrences(of: "[", with: "\\[")
-            .replacingOccurrences(of: "]", with: "\\]")
+            .replacingOccurrences(of: "[", with: "&#91;")
+            .replacingOccurrences(of: "]", with: "&#93;")
         let fragment = anchor?.page == page ? anchor!.fragment : "page=\(page)"
         return "[\(label) · p. \(page)](/\(encoded)#\(fragment))"
     }
@@ -248,6 +258,7 @@ final class PDFReaderController: ObservableObject {
     @Published private(set) var outline: [PDFOutlineEntry] = []
     @Published private(set) var searchMatchIndex = 0
     @Published private(set) var searchMatchCount = 0
+    @Published private(set) var completedSearchQuery = ""
     @Published private(set) var isSearching = false
     @Published private(set) var invalidRequestedPage: Int?
     @Published private(set) var invalidRequestedSelection = false
@@ -324,9 +335,14 @@ final class PDFReaderController: ObservableObject {
             view.go(to: first)
         }
         syncFromView()
-        Task { @MainActor [weak self] in
+        Task { @MainActor [weak self, weak view, weak document] in
             await Task.yield()
-            self?.fitWidth()
+            // A prior document's deferred layout must not resize the newly
+            // opened PDF after the user switches A → B in the same window.
+            guard let self, let view, let document,
+                  self.pdfView === view, self.document === document,
+                  self.documentURL == url else { return }
+            self.fitWidth()
         }
     }
 
@@ -459,10 +475,17 @@ final class PDFReaderController: ObservableObject {
     }
 
     func goToPage(_ oneBasedPage: Int) {
+        guard let document, pageCount > 0 else { return }
+        guard (1...pageCount).contains(oneBasedPage) else {
+            // The old clamping behavior silently opened a different page.
+            // Keep the current position and expose the invalid requested page
+            // through the same warning used by anchored PDF references.
+            invalidRequestedPage = oneBasedPage
+            return
+        }
+        guard let page = document.page(at: oneBasedPage - 1) else { return }
+        invalidRequestedPage = nil
         invalidRequestedSelection = false
-        guard let document,
-              let page = document.page(at: min(max(0, oneBasedPage - 1), max(0, pageCount - 1)))
-        else { return }
         pdfView?.go(to: page)
         syncFromView()
     }
@@ -503,10 +526,7 @@ final class PDFReaderController: ObservableObject {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         cancelSearch()
 
-        guard !text.isEmpty else {
-            pdfView?.currentSelection = nil
-            return
-        }
+        guard !text.isEmpty else { return }
 
         searchGeneration &+= 1
         let generation = searchGeneration
@@ -515,13 +535,22 @@ final class PDFReaderController: ObservableObject {
             let worker = Task.detached(priority: .userInitiated) {
                 document.findString(text, withOptions: .caseInsensitive)
             }
-            let matches = await worker.value
+            // Detached tasks do not inherit cancellation. Signal the worker
+            // when the query/document changes; PDFKit's synchronous findString
+            // is not forcibly preemptible, so the generation guard below
+            // remains authoritative for discarding late results.
+            let matches = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
             guard !Task.isCancelled,
                   let self,
                   self.searchGeneration == generation,
                   self.document === document else { return }
 
             self.searchMatches = matches
+            self.completedSearchQuery = text
             self.searchMatchCount = matches.count
             self.searchMatchIndex = 0
             self.isSearching = false
@@ -551,8 +580,10 @@ final class PDFReaderController: ObservableObject {
         syncFromView()
     }
 
-    private func syncPageFromView() {
-        guard let view = pdfView, let document, let page = view.currentPage else { return }
+    private func syncPageFromView(preferredPage: PDFPage? = nil) {
+        guard let view = pdfView,
+              let document,
+              let page = preferredPage ?? view.currentPage else { return }
         let pageIndex = max(0, document.index(for: page))
         if currentPageIndex != pageIndex {
             currentPageIndex = pageIndex
@@ -594,7 +625,12 @@ final class PDFReaderController: ObservableObject {
         selection.color = NSColor.systemYellow.withAlphaComponent(0.45)
         view.currentSelection = selection
         view.go(to: selection)
-        syncFromView()
+        // In continuous mode PDFView.currentPage may remain the mostly-visible
+        // previous page even after the search match is revealed. The match's
+        // own page is the canonical navigation destination for toolbar state
+        // and persisted reading position.
+        syncPageFromView(preferredPage: selection.pages.first)
+        syncScaleFromView()
     }
 
     private func cancelSearch() {
@@ -602,6 +638,10 @@ final class PDFReaderController: ObservableObject {
         searchTask?.cancel()
         searchTask = nil
         searchMatches.removeAll()
+        // A previous match must not remain highlighted when a different
+        // search is pending or the new query has no results.
+        pdfView?.currentSelection = nil
+        completedSearchQuery = ""
         searchMatchCount = 0
         searchMatchIndex = 0
         isSearching = false
@@ -651,16 +691,16 @@ struct NativePDFPreview: View {
     @Environment(\.notesLanguage) private var language
     let url: URL
     let root: URL?
+    let document: PDFDocument?
+    let attemptedURL: URL?
+    @ObservedObject var controller: PDFReaderController
     let requestedPage: Int?
     let requestedAnchor: PDFSourceAnchor?
     let onAddPageToNote: (Int, String?, PDFSourceAnchor?) -> Void
 
-    @State private var document: PDFDocument?
-    @State private var attemptedURL: URL?
     @State private var pageText = "1"
     @State private var searchText = ""
     @State private var copiedPage: Int?
-    @StateObject private var controller = PDFReaderController()
 
     var body: some View {
         Group {
@@ -670,7 +710,7 @@ struct NativePDFPreview: View {
                     if let invalid = controller.invalidRequestedPage {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle")
-                            Text(language.text("Referenced PDF page is unavailable.")
+                            Text(language.text("PDF page is unavailable.")
                                  + " \(invalid) / \(max(1, controller.pageCount))")
                             Spacer()
                         }
@@ -708,14 +748,15 @@ struct NativePDFPreview: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task(id: url) {
-            document = nil
-            attemptedURL = nil
-            let requestedURL = url
-            let loaded = await PDFDocumentLoading.load(requestedURL)
-            guard !Task.isCancelled else { return }
-            document = loaded
-            attemptedURL = requestedURL
+        .onAppear {
+            pageText = String(controller.currentPageIndex + 1)
+        }
+        .onChange(of: url) { _, _ in
+            // Loading belongs to NotesWindow. Reset only this reader's
+            // transient controls when SwiftUI reuses it for another PDF.
+            searchText = ""
+            pageText = "1"
+            copiedPage = nil
         }
         .onChange(of: controller.currentPageIndex) { _, page in
             pageText = String(page + 1)
@@ -724,7 +765,44 @@ struct NativePDFPreview: View {
     }
 
     private var readerToolbar: some View {
-        HStack(spacing: 8) {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                pdfOutlineControls
+                Divider().frame(height: 18)
+                pdfNavigationControls
+                pdfCaptureControls
+                Spacer(minLength: 12)
+                pdfSearchControls
+                Divider().frame(height: 18)
+                pdfZoomControls
+            }
+            .padding(.horizontal, 12)
+            .frame(minWidth: 860, minHeight: 38)
+
+            // A narrow PDF column gets two readable tool rows, never an
+            // overflowing single row of invisible / compressed controls.
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    pdfOutlineControls
+                    pdfNavigationControls
+                    Spacer(minLength: 0)
+                    pdfCaptureControls
+                }
+                .frame(height: 36)
+                HStack(spacing: 8) {
+                    pdfSearchControls
+                    Spacer(minLength: 0)
+                    pdfZoomControls
+                }
+                .frame(height: 36)
+            }
+            .padding(.horizontal, 12)
+        }
+        .controlSize(.small)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var pdfOutlineControls: some View {
             Menu {
                 if controller.outline.isEmpty {
                     Text(language.text("No document outline"))
@@ -745,9 +823,13 @@ struct NativePDFPreview: View {
             .disabled(controller.outline.isEmpty)
             .help(language.text("Document Outline"))
             .accessibilityIdentifier("pks-pdf-outline")
+            // AppKit menus otherwise claim leftover toolbar width and
+            // squeeze page/search controls at the split-pane threshold.
+            .frame(width: 24, height: 26)
+    }
 
-            Divider().frame(height: 18)
-
+    private var pdfNavigationControls: some View {
+        HStack(spacing: 8) {
             Button { controller.goPrevious() } label: {
                 Image(systemName: "chevron.left")
             }
@@ -781,7 +863,11 @@ struct NativePDFPreview: View {
             .disabled(controller.pageCount == 0 || controller.currentPageIndex >= controller.pageCount - 1)
             .help(language.text("Next Page"))
             .accessibilityIdentifier("pks-pdf-next-page")
+        }
+    }
 
+    private var pdfCaptureControls: some View {
+        HStack(spacing: 8) {
             Button {
                 let selectedText = controller.selectedText()
                 let anchor = controller.selectedSourceAnchor()
@@ -810,9 +896,10 @@ struct NativePDFPreview: View {
                                 ? "PDF page link copied"
                                 : "Copy PDF page link"))
             .accessibilityIdentifier("pks-pdf-copy-page-link")
+        }
+    }
 
-            Spacer(minLength: 12)
-
+    private var pdfSearchControls: some View {
             HStack(spacing: 5) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -840,6 +927,13 @@ struct NativePDFPreview: View {
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("pks-pdf-search-count")
+                } else if !controller.completedSearchQuery.isEmpty,
+                          controller.completedSearchQuery ==
+                            searchText.trimmingCharacters(in: .whitespacesAndNewlines) {
+                    Text(language.text("No matches"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("pks-pdf-search-empty")
                 }
                 Button { controller.previousSearchMatch() } label: {
                     Image(systemName: "chevron.up")
@@ -857,9 +951,10 @@ struct NativePDFPreview: View {
             .padding(.horizontal, 8)
             .frame(height: 26)
             .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 7))
+    }
 
-            Divider().frame(height: 18)
-
+    private var pdfZoomControls: some View {
+        HStack(spacing: 8) {
             Button { controller.zoomOut() } label: {
                 Image(systemName: "minus.magnifyingglass")
             }
@@ -891,10 +986,6 @@ struct NativePDFPreview: View {
             .help(language.text("Fit Width"))
             .accessibilityIdentifier("pks-pdf-fit-width")
         }
-        .controlSize(.small)
-        .padding(.horizontal, 12)
-        .frame(height: 38)
-        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private func copyCurrentPageReference() {

@@ -24,7 +24,9 @@ enum MarkdownPreviewParsing {
         let parts = match != nil || anchorFragment != nil || lazySections
             ? MarkdownSection.sections(in: text)
             : [MarkdownSection(id: 0, heading: nil, markdown: text)]
-        return parts.map { ParsedMarkdownSection(source: $0, content: MarkdownContent($0.markdown)) }
+        return parts.map {
+            ParsedMarkdownSection(source: $0, content: MarkdownContent(MindMapOutline.previewMarkdown(in: $0.markdown)))
+        }
     }
 }
 
@@ -53,6 +55,7 @@ struct MarkdownPreviewPane: View {
     let fontAdjustment: Double
     let lineAdjustment: Double
     let widthAdjustment: Double
+    let onRepairLink: (String) -> Void
     @Binding var cache: MarkdownPreviewSnapshot?
 
     private struct RenderKey: Hashable {
@@ -98,9 +101,10 @@ struct MarkdownPreviewPane: View {
                                 .markdownImageProvider(LocalMarkdownImageProvider(note: model.selected, root: model.root))
                                 .environment(\.openURL, OpenURLAction { url in
                                     if url.scheme == nil || url.isFileURL {
-                                        if !model.openInternalLink(url) {
-                                            model.message = language.text("Link target not available in this workspace.")
-                                        }
+                                        _ = model.openInternalLink(
+                                            url,
+                                            onUnresolved: { onRepairLink(url.relativeString) }
+                                        )
                                         return .handled
                                     }
                                     return ["http", "https"].contains(url.scheme?.lowercased() ?? "")

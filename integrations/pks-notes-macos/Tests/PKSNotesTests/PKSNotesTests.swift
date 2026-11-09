@@ -127,6 +127,24 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(model.message?.contains(AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")) == true)
     }
 
+    func testPDFDocumentLoadingCompletesForLocalPDF() async throws {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+
+        let url = folder.appendingPathComponent("Local.pdf")
+        await MainActor.run {
+            let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
+            view.string = "Local PDF loading regression"
+            try? view.dataWithPDF(inside: view.bounds).write(to: url)
+        }
+
+        let document = await PDFDocumentLoading.load(url)
+        XCTAssertNotNil(document)
+        XCTAssertEqual(document?.pageCount, 1)
+    }
+
     @MainActor
     func testPDFReaderAttachDoesNotReconfigureUnchangedNativeView() {
         let controller = PDFReaderController()
@@ -340,6 +358,10 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Markdown"), "Markdown")
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("On"), "开启")
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Off"), "关闭")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Preparing mind map…"), "正在准备思维导图…")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Reveal selected node in Markdown"), "在 Markdown 中定位所选节点")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Selected"), "已选择")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Show in Markdown"), "在 Markdown 中显示")
     }
 
     func testReadingThemeDefaultsAndParsedPreviewCacheIdentity() {
@@ -963,10 +985,12 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(model.openWorkspace(folderA))
         XCTAssertNil(model.selected)
         XCTAssertFalse(model.loadingNote)
+        XCTAssertNil(defaults.string(forKey: "PKSNotesLastOpenedMarkdown"))
+        XCTAssertNil(model.message)
     }
 
     @MainActor
-    func testAutomaticRestoreFailureIsSilentButExplicitOpenStillReportsError() async throws {
+    func testAutomaticRestoreFailureReportsRetryAndExplicitOpenStillReportsError() async throws {
         let defaults = UserDefaults.standard
         let previousWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
         let previousNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
@@ -991,7 +1015,9 @@ final class PKSNotesTests: XCTestCase {
         }
         XCTAssertNil(model.selected)
         XCTAssertFalse(model.loadingNote)
-        XCTAssertNil(model.message)
+        XCTAssertEqual(model.message,
+                       AppLanguage.current.text("Could not reopen the last note. Select it again to retry."))
+        XCTAssertEqual(defaults.string(forKey: "PKSNotesLastOpenedMarkdown"), invalid.path)
 
         model.openNote(invalid)
         for _ in 0..<100 where model.loadingNote {
@@ -999,6 +1025,15 @@ final class PKSNotesTests: XCTestCase {
         }
         XCTAssertNil(model.selected)
         XCTAssertTrue(model.message?.contains(AppLanguage.current.text("Cannot open the note")) == true)
+    }
+
+    func testCanonicalWikiTargetEscapesParenthesesForMarkdownDestinations() throws {
+        let root = URL(fileURLWithPath: "/tmp/Vault", isDirectory: true)
+        let target = root.appendingPathComponent("Research (draft).md")
+        XCTAssertEqual(
+            WorkspaceFiles.canonicalWikiTarget(for: target, in: root),
+            "/Research%20%28draft%29"
+        )
     }
 
     func testCanonicalWikiTargetIsRootRelativeEncodedAndRoundTrips() throws {
@@ -1342,6 +1377,39 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
+    func testCreateFolderStaysInsideWorkspaceAndNeverOverwritesExistingItem() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let parent = root.appendingPathComponent("Parent", isDirectory: true)
+        let outside = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer {
+            try? fm.removeItem(at: root)
+            try? fm.removeItem(at: outside)
+        }
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+
+        let created = try XCTUnwrap(model.newFolder(named: "Research", in: parent))
+        XCTAssertEqual(created, parent.appendingPathComponent("Research", isDirectory: true))
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(fm.fileExists(atPath: created.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
+
+        let sentinel = parent.appendingPathComponent("Existing", isDirectory: true)
+        try fm.createDirectory(at: sentinel, withIntermediateDirectories: false)
+        XCTAssertNil(model.newFolder(named: "Existing", in: parent))
+        XCTAssertTrue(fm.fileExists(atPath: sentinel.path))
+
+        XCTAssertNil(model.newFolder(named: "../Escape", in: parent))
+        XCTAssertNil(model.newFolder(named: ".hidden", in: parent))
+        XCTAssertNil(model.newFolder(named: "Outside", in: outside))
+        XCTAssertFalse(fm.fileExists(atPath: outside.appendingPathComponent("Outside").path))
+    }
+
+    @MainActor
     func testInactiveNewNoteCreationKeepsCurrentMarkdownAuthority() async throws {
         let defaults = UserDefaults.standard
         let previousRoot = defaults.string(forKey: "PKSNotesWorkspace")
@@ -1428,12 +1496,14 @@ final class PKSNotesTests: XCTestCase {
         await waitForNote(model, original)
 
         model.draft = "# Changes saved before rename"
-        XCTAssertNil(model.renameItem(original, to: "Taken"))
+        let collisionRename = await model.renameItem(original, to: "Taken")
+        XCTAssertNil(collisionRename)
         XCTAssertTrue(fm.fileExists(atPath: original.path))
         XCTAssertEqual(model.draft, "# Changes saved before rename")
         XCTAssertEqual(try String(contentsOf: other, encoding: .utf8), "# Other")
 
-        XCTAssertEqual(model.renameItem(original, to: "Renamed"), renamed)
+        let renameResult = await model.renameItem(original, to: "Renamed")
+        XCTAssertEqual(renameResult, renamed)
         await waitForNote(model, renamed)
         XCTAssertEqual(model.selected, renamed)
         XCTAssertEqual(model.draft, "# Changes saved before rename")
@@ -1495,13 +1565,15 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertNil(model.moveToTrash(outsideNote))
         XCTAssertNil(model.moveToTrash(link))
         XCTAssertNil(model.moveToTrash(vault))
-        XCTAssertNil(model.renameItem(folder, to: "../Escape"))
+        let invalidRename = await model.renameItem(folder, to: "../Escape")
+        XCTAssertNil(invalidRename)
         XCTAssertTrue(fm.fileExists(atPath: markdown.path))
         XCTAssertTrue(fm.fileExists(atPath: outsideNote.path))
 
         model.openNote(markdown)
         await waitForNote(model, markdown)
-        XCTAssertEqual(model.renameItem(folder, to: "Archive")?.path, renamed.path)
+        let folderRename = await model.renameItem(folder, to: "Archive")
+        XCTAssertEqual(folderRename?.path, renamed.path)
         let movedNote = renamed.appendingPathComponent("Note.md")
         await waitForNote(model, movedNote)
         XCTAssertEqual(model.selected, movedNote)
@@ -2101,12 +2173,13 @@ extension PKSNotesTests {
         model.openNote(note)
         await waitForNote(model, note)
 
-        let copied = model.copyItem(note, to: copies)
+        let copied = await model.copyItem(note, to: copies)
         XCTAssertEqual(copied, copies.appendingPathComponent("Note.md"))
         XCTAssertEqual(try String(contentsOf: copied!, encoding: .utf8), "# Original")
-        XCTAssertNil(model.copyItem(note, to: outside))
+        let outsideCopy = await model.copyItem(note, to: outside)
+        XCTAssertNil(outsideCopy)
 
-        let moved = model.moveItem(note, to: archive, navigationDecision: .discard)
+        let moved = await model.moveItem(note, to: archive, navigationDecision: .discard)
         XCTAssertEqual(moved, archive.appendingPathComponent("Note.md"))
         await waitForNote(model, archive.appendingPathComponent("Note.md"))
         XCTAssertFalse(fm.fileExists(atPath: note.path))
@@ -2114,12 +2187,12 @@ extension PKSNotesTests {
 
         // The workspace root is a valid destination even though path containment
         // intentionally excludes root itself when validating document paths.
-        let copiedToRoot = model.copyItem(copied!, to: root)
+        let copiedToRoot = await model.copyItem(copied!, to: root)
         XCTAssertEqual(copiedToRoot, note)
         XCTAssertEqual(try String(contentsOf: copiedToRoot!, encoding: .utf8), "# Original")
         try fm.removeItem(at: copiedToRoot!)
 
-        let returned = model.moveItem(moved!, to: root, navigationDecision: .discard)
+        let returned = await model.moveItem(moved!, to: root, navigationDecision: .discard)
         XCTAssertEqual(returned, note)
         await waitForNote(model, note)
         XCTAssertEqual(model.selected, note)
@@ -2129,7 +2202,7 @@ extension PKSNotesTests {
 
 extension PKSNotesTests {
     @MainActor
-    func testMoveAndCopyFolderRejectDescendantDestination() throws {
+    func testMoveAndCopyFolderRejectDescendantDestination() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")
         defer {
@@ -2146,9 +2219,11 @@ extension PKSNotesTests {
 
         let model = NotesModel()
         model.openWorkspace(root)
-        XCTAssertNil(model.moveItem(parent, to: child, navigationDecision: .discard))
+        let descendantMove = await model.moveItem(parent, to: child, navigationDecision: .discard)
+        XCTAssertNil(descendantMove)
         XCTAssertTrue(fm.fileExists(atPath: parent.path))
-        XCTAssertNil(model.copyItem(parent, to: child))
+        let descendantCopy = await model.copyItem(parent, to: child)
+        XCTAssertNil(descendantCopy)
         XCTAssertTrue(fm.fileExists(atPath: parent.path))
     }
 }
@@ -2191,6 +2266,55 @@ extension PKSNotesTests {
         XCTAssertEqual(PDFPageReference.page(from: link), 7)
         XCTAssertEqual(
             WorkspaceFiles.resolve(link, from: root.appendingPathComponent("Note.md"), in: root),
+            pdf.standardizedFileURL
+        )
+    }
+
+    @MainActor
+    func testPDFManualPageJumpRejectsOutOfRangeInsteadOfClampingSilently() throws {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
+        textView.string = "PDF Page One"
+        let pdf = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: textView.bounds)))
+        let view = PDFView(frame: NSRect(x: 0, y: 0, width: 700, height: 800))
+        let controller = PDFReaderController()
+        let uniqueURL = URL(fileURLWithPath: "/tmp/PKS-PDF-Page-\(UUID().uuidString).pdf")
+
+        controller.attach(view: view, document: pdf, url: uniqueURL,
+                          requestedPage: nil, requestedAnchor: nil)
+        XCTAssertEqual(controller.pageCount, 1)
+        XCTAssertEqual(controller.currentPageIndex, 0)
+
+        controller.goToPage(0)
+        XCTAssertEqual(controller.invalidRequestedPage, 0)
+        XCTAssertEqual(controller.currentPageIndex, 0)
+
+        controller.goToPage(100)
+        XCTAssertEqual(controller.invalidRequestedPage, 100)
+        XCTAssertEqual(controller.currentPageIndex, 0)
+
+        controller.goToPage(1)
+        XCTAssertNil(controller.invalidRequestedPage)
+        XCTAssertEqual(controller.currentPageIndex, 0)
+        controller.detach(view: view)
+    }
+
+    func testPDFReferenceEscapesParenthesesAndKeepsExactFileDestination() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let pdf = root.appendingPathComponent("Research (final) [v2].pdf")
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+        let markdown = try XCTUnwrap(PDFPageReference.markdown(for: pdf, page: 3, root: root))
+        XCTAssertTrue(markdown.contains("Research%20%28final%29%20%5Bv2%5D.pdf#page=3"),
+                      "A literal ')' inside a Markdown link target is interpreted as the end of the link.")
+        let occurrences = MindMapOutline.linkOccurrences(in: markdown)
+        let link = try XCTUnwrap(occurrences.first?.link.target)
+        XCTAssertEqual(occurrences.count, 1)
+        XCTAssertEqual(PDFPageReference.page(from: try XCTUnwrap(URL(string: link))), 3)
+        XCTAssertEqual(
+            WorkspaceFiles.resolveLinkedTarget(link, from: root.appendingPathComponent("Note.md"), in: root),
             pdf.standardizedFileURL
         )
     }
@@ -2268,6 +2392,47 @@ extension PKSNotesTests {
     }
 
     @MainActor
+    func testPDFRelationshipsFindCanonicalCitationThroughNotesModel() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let materials = root.appendingPathComponent("Materials", isDirectory: true)
+        try fm.createDirectory(at: materials, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = root.appendingPathComponent("Study.md")
+        let pdf = materials.appendingPathComponent("Source.pdf")
+        try "# Study\n\n[Source.pdf · p. 1](/Materials/Source.pdf#page=1)\n".write(
+            to: note,
+            atomically: true,
+            encoding: .utf8
+        )
+        try Data("%PDF-1.4\n%%EOF".utf8).write(to: pdf)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<200 where model.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.openNote(note)
+        await waitForNote(model, note)
+        model.openFile(pdf)
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+
+        model.loadRelationships()
+        for _ in 0..<400 where model.loadingBacklinks {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertFalse(model.loadingBacklinks)
+        XCTAssertEqual(model.backlinks.count, 1)
+        XCTAssertEqual(model.backlinks.first?.source, note.standardizedFileURL)
+        XCTAssertEqual(
+            model.backlinks.first?.locations,
+            [NoteBacklinkLocation(lineIndex: 2, count: 1)]
+        )
+    }
+
+    @MainActor
     func testInternalPDFLinkOpensRequestedPageThroughSingleFileAuthority() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")
@@ -2297,6 +2462,38 @@ extension PKSNotesTests {
         XCTAssertEqual(model.previewPDFPage, 7)
         XCTAssertEqual(model.selected, note.standardizedFileURL)
         XCTAssertEqual(model.draft, "# Note")
+    }
+
+    @MainActor
+    func testInternalRelativeEncodedPDFLinkOpensRequestedPage() async throws {
+        let defaults = UserDefaults.standard
+        let prior = defaults.string(forKey: "PKSNotesWorkspace")
+        defer {
+            if let prior { defaults.set(prior, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = root.appendingPathComponent("PDF QA.md")
+        let pdf = root.appendingPathComponent("PDF QA.pdf")
+        try "# PDF QA".write(to: note, atomically: true, encoding: .utf8)
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+
+        let model = NotesModel()
+        model.openWorkspace(root)
+        model.openNote(note)
+        await waitForNote(model, note)
+
+        let link = try XCTUnwrap(URL(string: "PDF%20QA.pdf#page=2"))
+        XCTAssertTrue(model.openInternalLink(link))
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        XCTAssertEqual(model.previewPDFPage, 2)
+        XCTAssertEqual(model.selected, note.standardizedFileURL)
+        XCTAssertEqual(model.draft, "# PDF QA")
     }
 
     @MainActor
@@ -2724,6 +2921,63 @@ extension PKSNotesTests {
         cache.removeAll()
         XCTAssertEqual(cache.entryCount, 0)
     }
+
+    func testLinkOccurrencesSkipFencedCodeBlocks() {
+        let markdown = """
+        [Real](/Beta.md)
+
+        ```markdown
+        [Example](/Beta.md)
+        [[Beta]]
+        ```
+
+        [Also real](/Beta.md)
+        """
+
+        let occurrences = MindMapOutline.linkOccurrences(in: markdown)
+        XCTAssertEqual(occurrences.map(\.lineIndex), [0, 7])
+        XCTAssertEqual(occurrences.map(\.link.target), ["/Beta.md", "/Beta.md"])
+    }
+
+    func testBacklinksIgnoreLinksInsideFencedCodeBlocks() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let target = root.appendingPathComponent("Beta.md")
+        let source = root.appendingPathComponent("Source.md")
+        try "# Beta".write(to: target, atomically: true, encoding: .utf8)
+        try """
+        Intro line.
+
+        ```markdown
+        [Example](/Beta.md)
+        [[Beta]]
+        ```
+
+        [Real](/Beta.md)
+        """.write(to: source, atomically: true, encoding: .utf8)
+
+        let files = [
+            NoteItem(url: source, children: nil),
+            NoteItem(url: target, children: nil)
+        ]
+        let index = WorkspaceLinkCandidateIndex(markdownFiles: [source, target])
+        let scan = WorkspaceBacklinks.scan(
+            target: target,
+            root: root,
+            files: files,
+            candidateIndex: index
+        )
+
+        // Only the real link below the fence is a backlink; the fenced example
+        // markup must not be reported as a reference to Beta.
+        let backlink = try XCTUnwrap(scan.backlinks.first)
+        XCTAssertEqual(backlink.source, source.standardizedFileURL)
+        XCTAssertEqual(backlink.count, 1)
+        XCTAssertEqual(backlink.locations, [NoteBacklinkLocation(lineIndex: 7, count: 1)])
+    }
 }
 
 
@@ -2806,4 +3060,56 @@ extension PKSNotesTests {
         await waitForNote(model, first)
         XCTAssertEqual(model.draft, "# First\nSaved")
     }
+    @MainActor
+    func testFirstOpenOfMaterializedMarkdownReadsWithoutCloudHandshake() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let first = root.appendingPathComponent("第一篇.md")
+        let expected = "# 第一篇\nHello, PKS Notes.\n"
+        try expected.write(to: first, atomically: true, encoding: .utf8)
+        XCTAssertFalse(WorkspaceFiles.isDataless(first))
+
+        let loaded = try await WorkspaceFiles.readUTF8ForOpening(first)
+        XCTAssertEqual(loaded.content, expected)
+        XCTAssertEqual(loaded.stamp, WorkspaceFiles.fileStamp(first))
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(first)
+        await waitForNote(model, first)
+        XCTAssertFalse(model.loadingNote)
+        XCTAssertEqual(model.draft, expected)
+        XCTAssertNil(model.message)
+    }
+
+    @MainActor
+    func testMissingLastOpenedNoteIsReportedAndClearsStalePath() async throws {
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        let previousLast = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let previousWorkspace { defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousLast { defaults.set(previousLast, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+
+        let missing = folder.appendingPathComponent("Missing.md")
+        defaults.set(missing.path, forKey: "PKSNotesLastOpenedMarkdown")
+        let missingModel = NotesModel()
+        XCTAssertTrue(missingModel.openWorkspace(folder))
+        XCTAssertNil(missingModel.selected)
+        XCTAssertEqual(missingModel.message,
+                       AppLanguage.current.text("Last opened note is no longer available. Choose another note."))
+        XCTAssertNil(defaults.string(forKey: "PKSNotesLastOpenedMarkdown"))
+
+    }
+
 }

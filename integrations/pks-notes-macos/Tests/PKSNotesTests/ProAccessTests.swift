@@ -3,6 +3,10 @@ import XCTest
 @testable import PKSNotes
 
 final class ProAccessTests: XCTestCase {
+    func testUnitTestProcessIsNotAnAuthorizedQABundle() {
+        XCTAssertFalse(ProAccess.isLocalQA)
+    }
+
     func testFreeTierKeepsAdvancedActionsLocked() {
         XCTAssertFalse(ProAccess.allows(.mindMap, unlocked: false))
         XCTAssertFalse(ProAccess.allows(.relationships, unlocked: false))

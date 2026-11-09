@@ -1,4 +1,37 @@
+import AppKit
 import CoreGraphics
+
+/// Visual spacing is an app preference, not a second node/document authority.
+enum MindMapLayoutDensity: String, CaseIterable, Identifiable {
+    case compact, standard, spacious
+
+    static let defaultsKey = "PKSNotesMindMapDensity"
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .compact: "Compact"
+        case .standard: "Standard"
+        case .spacious: "Spacious"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .compact: "rectangle.compress.vertical"
+        case .standard: "rectangle"
+        case .spacious: "rectangle.expand.vertical"
+        }
+    }
+
+    var scale: CGFloat {
+        switch self {
+        case .compact: 0.86
+        case .standard: 1
+        case .spacious: 1.18
+        }
+    }
+}
 
 struct MindMapPlacement: Identifiable, Equatable {
     let node: MindMapNode
@@ -15,12 +48,16 @@ struct MindMapLayoutSnapshot: Equatable {
 }
 
 enum MindMapSpatialLayout {
-    private static let margin: CGFloat = 42
-    private static let columnStride: CGFloat = 270
-    private static let siblingGap: CGFloat = 24
-    private static let rootGap: CGFloat = 40
-
-    static func layout(_ nodes: [MindMapNode]) -> MindMapLayoutSnapshot {
+    static func layout(
+        _ nodes: [MindMapNode],
+        density: MindMapLayoutDensity = .standard
+    ) -> MindMapLayoutSnapshot {
+        // Keep node dimensions and connector spacing from a single layout
+        // scale so compact maps never overlap and exports match the canvas.
+        let margin: CGFloat = 42 * density.scale
+        let columnStride: CGFloat = 270 * density.scale
+        let siblingGap: CGFloat = 24 * density.scale
+        let rootGap: CGFloat = 40 * density.scale
         guard !nodes.isEmpty else {
             return .init(placements: [], size: CGSize(width: 560, height: 320))
         }
@@ -44,10 +81,38 @@ enum MindMapSpatialLayout {
             }
         }
 
+        // Compute visible text height once per layout, not once per subtree
+        // traversal or SwiftUI redraw. Card width remains column-safe and the
+        // full Markdown node title remains readable instead of being clipped
+        // to an arbitrary line count.
+        var nodeSizes: [Int: CGSize] = [:]
+        nodeSizes.reserveCapacity(nodes.count)
+        for node in nodes {
+            let isRoot = node.depth == 0
+            let width: CGFloat = (isRoot ? 230 : 210) * density.scale
+            let baseHeight: CGFloat = (isRoot ? 58 : 50) * density.scale
+            var height = baseHeight
+            if node.title.count > 8 {
+                let label = MindMapOutline.presentation(for: node.title).title
+                let font = NSFont.systemFont(
+                    ofSize: isRoot ? 16 : 14,
+                    weight: isRoot ? .semibold : .medium
+                )
+                // Reserve space for padding, disclosure, branch accent and
+                // link affordances. Readable font size is not shrunk by density.
+                let textWidth = max(72, width - 78)
+                let bounds = (label as NSString).boundingRect(
+                    with: CGSize(width: textWidth, height: 10_000),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading],
+                    attributes: [.font: font]
+                )
+                height = max(baseHeight, ceil(bounds.height + 20))
+            }
+            nodeSizes[node.id] = CGSize(width: width, height: height)
+        }
+
         func nodeSize(_ node: MindMapNode) -> CGSize {
-            node.depth == 0
-                ? CGSize(width: 230, height: 58)
-                : CGSize(width: 210, height: 50)
+            nodeSizes[node.id] ?? .zero
         }
 
         var heightCache: [Int: CGFloat] = [:]

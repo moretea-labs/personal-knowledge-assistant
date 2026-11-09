@@ -146,6 +146,19 @@ extension MindMapOutline {
         "# \(title)\n"
     }
 
+    /// Both Add Child and drag-to-reparent insert immediately after the
+    /// target node. Reject attached prose/code at that boundary, otherwise
+    /// it silently becomes part of the newly inserted child.
+    private static func canInsertChild(
+        after parentID: Int, in lines: [String], nodes parsed: [MindMapNode]
+    ) -> Bool {
+        guard lines.indices.contains(parentID) else { return false }
+        let nextNodeLine = parsed.first(where: { $0.id > parentID })?.id ?? lines.count
+        return !lines[(parentID + 1)..<nextNodeLine].contains {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
     /// Return/Enter creates a list sibling after the whole selected subtree.
     /// Headings are structural anchors, so Return on a heading creates its first child.
     static func addSibling(in source: String, nodeID: Int, title: String = "New idea") -> String? {
@@ -226,11 +239,7 @@ extension MindMapOutline {
         let line = lines[parentID]
         let indent = line.prefix(while: { $0 == " " }).count
         let isList = ["- ", "* ", "+ "].contains(where: { line.trimmingCharacters(in: .whitespaces).hasPrefix($0) })
-        // Inserting ahead of attached prose would accidentally make that prose
-        // part of the newly created child instead of the original parent.
-        let nextParsedID = nodes(in: source).first(where: { $0.id > parentID })?.id ?? lines.count
-        guard !lines[(parentID + 1)..<nextParsedID]
-            .contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        guard canInsertChild(after: parentID, in: lines, nodes: nodes(in: source))
         else { return nil }
         lines.insert(String(repeating: " ", count: indent + (isList ? 2 : 0)) + "- " + title, at: parentID + 1)
         return lines.joined(separator: "\n")
@@ -257,28 +266,73 @@ struct MindMapNodePresentation: Equatable {
 extension MindMapOutline {
     private struct ParsedLink {
         let range: NSRange
+        let targetRange: NSRange
         let link: MindMapLink
     }
 
-    private static func parsedLinks(in title: String) -> [ParsedLink] {
+    private static func inlineCodeRanges(in text: String) -> [NSRange] {
+        let units = Array(text.utf16)
+        var ranges: [NSRange] = []
+        var opening: (start: Int, width: Int)?
+        var i = 0
+        while i < units.count {
+            guard units[i] == 96, i == 0 || units[i - 1] != 92 else { i += 1; continue }
+            let start = i
+            while i < units.count && units[i] == 96 { i += 1 }
+            let width = i - start
+            if let prior = opening {
+                if prior.width == width {
+                    ranges.append(NSRange(location: prior.start, length: i - prior.start))
+                    opening = nil
+                }
+            } else { opening = (start, width) }
+        }
+        return ranges
+    }
+
+    private static func parsedLinks(
+        in title: String,
+        includeImages: Bool = false
+    ) -> [ParsedLink] {
         var parsed: [ParsedLink] = []
         let fullRange = NSRange(title.startIndex..<title.endIndex, in: title)
+        let nsTitle = title as NSString
+        let codeRanges = inlineCodeRanges(in: title)
 
         for match in wikiLinkRegex.matches(in: title, range: fullRange) {
-            guard let labelRange = Range(match.range(at: 1), in: title) else { continue }
+            let start = match.range.location
+            guard (start == 0 || (nsTitle.character(at: start - 1) != 92
+                                   && (includeImages || nsTitle.character(at: start - 1) != 33))),
+                  !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }),
+                  let labelRange = Range(match.range(at: 1), in: title) else { continue }
             let raw = String(title[labelRange])
             let parts = raw.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
             let target = String(parts[0]).trimmingCharacters(in: .whitespaces)
             let label = parts.count == 2 ? String(parts[1]) : target
             guard !target.isEmpty else { continue }
-            parsed.append(.init(range: match.range(at: 0), link: .init(label: label, target: target)))
+            let leading = String(parts[0]).prefix(while: { $0.isWhitespace }).utf16.count
+            let targetRange = NSRange(
+                location: match.range(at: 1).location + leading,
+                length: target.utf16.count
+            )
+            parsed.append(.init(
+                range: match.range(at: 0),
+                targetRange: targetRange,
+                link: .init(label: label, target: target)
+            ))
         }
 
         for match in markdownLinkRegex.matches(in: title, range: fullRange) {
+            let start = match.range.location
+            guard (start == 0 || (nsTitle.character(at: start - 1) != 92
+                                   && (includeImages || nsTitle.character(at: start - 1) != 33))),
+                  !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 })
+            else { continue }
             guard let labelRange = Range(match.range(at: 1), in: title),
                   let targetRange = Range(match.range(at: 2), in: title) else { continue }
             parsed.append(.init(
                 range: match.range(at: 0),
+                targetRange: match.range(at: 2),
                 link: .init(
                     label: String(title[labelRange]),
                     target: String(title[targetRange])
@@ -293,14 +347,98 @@ extension MindMapOutline {
         parsedLinks(in: title).map(\.link)
     }
 
+    /// Display-only WikiLink conversion; Markdown source is never changed.
+    static func previewMarkdown(in source: String) -> String {
+        let linkedLines = Set(linkOccurrences(in: source).map(\.lineIndex))
+        guard !linkedLines.isEmpty else { return source }
+        var lines = source.components(separatedBy: "\n")
+        for index in linkedLines {
+            let original = lines[index] as NSString
+            let converted = NSMutableString(string: lines[index])
+            let links = parsedLinks(in: lines[index])
+                .filter { $0.range.length >= 4
+                    && original.substring(with: NSRange(location: $0.range.location, length: 2)) == "[[" }
+                .sorted { $0.range.location > $1.range.location }
+            for item in links {
+                let label = item.link.label
+                    .replacingOccurrences(of: "[", with: "\\[")
+                    .replacingOccurrences(of: "]", with: "\\]")
+                let target = item.link.target
+                    .replacingOccurrences(of: " ", with: "%20")
+                    .replacingOccurrences(of: "(", with: "%28")
+                    .replacingOccurrences(of: ")", with: "%29")
+                converted.replaceCharacters(in: item.range, with: "[\(label)](\(target))")
+            }
+            lines[index] = converted as String
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Explicit repair using the existing canonical link parser and Markdown writer.
+    /// Images stay outside knowledge-link semantics by default; path relocation
+    /// explicitly opts them in so attachment references survive file moves.
+    static func retargetLinks(
+        in source: String,
+        from oldTarget: String,
+        to newTarget: String,
+        includeImages: Bool = false
+    ) -> String? {
+        guard !oldTarget.isEmpty, !newTarget.isEmpty,
+              !newTarget.contains("]"), !newTarget.contains(")"),
+              !newTarget.contains("|"), !newTarget.contains("\n"),
+              !newTarget.contains("\r") else { return nil }
+        let touched = Set(linkOccurrences(in: source, includeImages: includeImages)
+            .filter { $0.link.target == oldTarget }
+            .map(\.lineIndex))
+        guard !touched.isEmpty else { return nil }
+        var lines = source.components(separatedBy: "\n")
+        for lineIndex in touched {
+            let changed = NSMutableString(string: lines[lineIndex])
+            let matches = parsedLinks(in: lines[lineIndex], includeImages: includeImages)
+                .filter { $0.link.target == oldTarget }
+                .sorted { $0.targetRange.location > $1.targetRange.location }
+            for match in matches {
+                let full = changed.substring(with: match.range)
+                let isWiki = full.hasPrefix("[[") && full.hasSuffix("]]")
+                let hasAlias = isWiki && full.dropFirst(2).dropLast(2).contains("|")
+                let isImage = match.range.location > 0
+                    && changed.character(at: match.range.location - 1) == 33
+                if isWiki && !hasAlias && !isImage {
+                    changed.replaceCharacters(
+                        in: match.range,
+                        with: "[[\(newTarget)|\(match.link.label)]]"
+                    )
+                } else {
+                    changed.replaceCharacters(in: match.targetRange, with: newTarget)
+                }
+            }
+            lines[lineIndex] = changed as String
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// Preserve every Markdown link occurrence and its canonical source line.
     /// Backlinks reuse this parse result; there is no second occurrence index.
-    static func linkOccurrences(in markdown: String) -> [MarkdownLinkOccurrence] {
+    /// Fenced code blocks are skipped so example markup never reports as a
+    /// real backlink — matching the outgoing-link parser's fence handling.
+    static func linkOccurrences(
+        in markdown: String,
+        includeImages: Bool = false
+    ) -> [MarkdownLinkOccurrence] {
         var result: [MarkdownLinkOccurrence] = []
+        var fenceMarker: Character?
         for (lineIndex, line) in markdown.components(separatedBy: "\n").enumerated() {
-            guard line.contains("["), line.contains("]") else { continue }
-            for link in links(in: line) {
-                result.append(.init(link: link, lineIndex: lineIndex))
+            let trimmed = line.drop(while: { $0.isWhitespace })
+            if let marker = trimmed.first, marker == "\u{60}" || marker == "~",
+               trimmed.prefix(while: { $0 == marker }).count >= 3 {
+                if fenceMarker == nil { fenceMarker = marker }
+                else if fenceMarker == marker { fenceMarker = nil }
+                continue
+            }
+            guard fenceMarker == nil,
+                  line.contains("["), line.contains("]") else { continue }
+            for item in parsedLinks(in: line, includeImages: includeImages) {
+                result.append(.init(link: item.link, lineIndex: lineIndex))
             }
         }
         return result
@@ -401,6 +539,14 @@ extension MindMapOutline {
     /// Move a pure Markdown list subtree under another structural node.
     /// The moved list remains canonical Markdown; headings are anchors, not movable nodes.
     static func moveListSubtree(in source: String, nodeID: Int, asChildOf targetID: Int) -> String? {
+        moveListSubtreeWithOutcome(in: source, nodeID: nodeID, asChildOf: targetID)?.source
+    }
+
+    /// Same move, but also reports the moved root's new canonical line index so
+    /// callers can keep the moved node selected instead of dropping selection.
+    static func moveListSubtreeWithOutcome(
+        in source: String, nodeID: Int, asChildOf targetID: Int
+    ) -> (source: String, movedNodeID: Int)? {
         guard nodeID != targetID else { return nil }
         let parsed = nodes(in: source)
         guard let sourcePosition = parsed.firstIndex(where: { $0.id == nodeID }),
@@ -438,6 +584,10 @@ extension MindMapOutline {
         guard targetIsList || ((1...6).contains(targetHashes) && targetTrimmed.dropFirst(targetHashes).first == " ") else {
             return nil
         }
+        // Use the same target-side protection as Add Child. The dragged
+        // subtree may be pure list markup even when its destination has prose
+        // or code that would become attached to the newly inserted child.
+        guard canInsertChild(after: targetID, in: lines, nodes: parsed) else { return nil }
 
         let sourceIndent = lines[nodeID].prefix(while: { $0 == " " }).count
         let targetIndent = targetLine.prefix(while: { $0 == " " }).count
@@ -457,7 +607,7 @@ extension MindMapOutline {
         let adjustedTarget = targetID > nodeID ? targetID - removedCount : targetID
         guard lines.indices.contains(adjustedTarget) else { return nil }
         lines.insert(contentsOf: moved, at: adjustedTarget + 1)
-        return lines.joined(separator: "\n")
+        return (lines.joined(separator: "\n"), adjustedTarget + 1)
     }
 }
 

@@ -1,4 +1,5 @@
 import AppKit
+import PDFKit
 import SwiftUI
 import MarkdownUI
 
@@ -79,10 +80,18 @@ struct PKSNotesApp: App {
                 .keyboardShortcut("v", modifiers: .command)
             }
             CommandMenu("Markdown") {
-                Button(language.text("Bold")) { MarkdownNativeCommand.perform("bold") }
-                    .keyboardShortcut("b", modifiers: .command)
-                Button(language.text("Italic")) { MarkdownNativeCommand.perform("italic") }
-                    .keyboardShortcut("i", modifiers: .command)
+                Button(language.text("Bold")) {
+                    if !MarkdownNativeCommand.perform("bold") {
+                        NotificationCenter.default.post(name: .pksMindMapBold, object: nil)
+                    }
+                }
+                .keyboardShortcut("b", modifiers: .command)
+                Button(language.text("Italic")) {
+                    if !MarkdownNativeCommand.perform("italic") {
+                        NotificationCenter.default.post(name: .pksMindMapItalic, object: nil)
+                    }
+                }
+                .keyboardShortcut("i", modifiers: .command)
                 Button(language.text("Inline Code")) { MarkdownNativeCommand.perform("code") }
                     .keyboardShortcut("e", modifiers: .command)
                 Button(language.text("Link")) { MarkdownNativeCommand.perform("link") }
@@ -375,7 +384,12 @@ struct NotesWindow: View {
     @State private var quickOpenFallbackRescanRequested = false
     @State private var pdfCaptureRequest: PDFCaptureRequest?
     @State private var pdfCaptureCommentary = ""
+    @State private var loadedPDFDocument: PDFDocument?
+    @State private var loadedPDFURL: URL?
+    @State private var compactStudyShowsNote = false
+    @StateObject private var pdfReaderController = PDFReaderController()
     @State private var mindMapLinkNodeID: Int?
+    @State private var linkRepairRequest: (source: URL, target: String, revision: UInt64)?
     @State private var mindMapLinkSectionMode = false
     @State private var mindMapSectionTarget: URL?
     @State private var mindMapSectionHeadings: [MarkdownOutlineHeading] = []
@@ -440,6 +454,9 @@ struct NotesWindow: View {
     @State private var renameCandidate: URL?
     @State private var renameValue = ""
     @State private var showingRename = false
+    @State private var newFolderParent: URL?
+    @State private var newFolderValue = ""
+    @State private var showingNewFolder = false
     @State private var folderTrashCandidate: URL?
     @State private var confirmingFolderTrash = false
     @State private var expandedFolderPaths: Set<String> = []
@@ -461,7 +478,7 @@ struct NotesWindow: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
+                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil && !showingMindMap {
                     HStack(spacing: 2) {
                         ForEach(ReadingMode.allCases, id: \.self) { choice in
                             Button {
@@ -580,7 +597,15 @@ struct NotesWindow: View {
                                                 symbol: "arrow.up.right"
                                             ) {
                                                 showingBacklinks = false
-                                                _ = model.openKnowledgeLink(link.target)
+                                                _ = model.openKnowledgeLink(
+                                                    link.target,
+                                                    onUnresolved: { beginLinkRepair(link.target) }
+                                                )
+                                            }
+                                            .contextMenu {
+                                                Button(language.text("Change link target…")) {
+                                                    beginLinkRepair(link.target)
+                                                }
                                             }
                                         }
                                     }
@@ -595,9 +620,11 @@ struct NotesWindow: View {
                                                                     ? "Finding notes that link here…"
                                                                     : "Finding notes linked to this PDF…"))
                                 } else if model.backlinks.isEmpty {
-                                    relationshipEmpty(language.text(model.previewPDF == nil
-                                                                    ? "No backlinks in this workspace."
-                                                                    : "No notes link to this PDF yet."))
+                                    relationshipEmpty(language.text(model.backlinkSkippedCloudFiles > 0
+                                                                    ? "No local backlinks found yet."
+                                                                    : (model.previewPDF == nil
+                                                                        ? "No backlinks in this workspace."
+                                                                        : "No notes link to this PDF yet.")))
                                 } else {
                                     ForEach(model.backlinks) { backlink in
                                         ForEach(backlink.locations) { location in
@@ -618,6 +645,14 @@ struct NotesWindow: View {
                                         format: language.text("Cloud-only notes skipped: %d"),
                                         model.backlinkSkippedCloudFiles
                                     ))
+                                    Button(language.text("Check up to 6 more cloud notes")) {
+                                        model.loadMoreCloudBacklinks()
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .disabled(model.loadingBacklinks)
+                                    .help(language.text("Download a small batch only when requested."))
+                                    .padding(.horizontal, 14)
+                                    .padding(.bottom, 10)
                                 }
 
                                 if model.previewPDF == nil {
@@ -653,6 +688,12 @@ struct NotesWindow: View {
                         .help("\(language.text("Opening note…")) \(requested.deletingPathExtension().lastPathComponent)")
                         .accessibilityLabel(language.text("Opening note…"))
                         .accessibilityIdentifier("pks-note-open-progress")
+                } else if let path = model.fileOperationInProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                        .help("\(language.text("Updating files…")) \(path.lastPathComponent)")
+                        .accessibilityLabel(language.text("Updating files…"))
+                        .accessibilityIdentifier("pks-path-change-progress")
                 } else if model.autoSavePending && model.selected != nil {
                     ProgressView()
                         .controlSize(.small)
@@ -716,10 +757,32 @@ struct NotesWindow: View {
             focusKnowledgeSearch()
         }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.toggleEdit)) { _ in
-            toggleEditPreview()
+            if showingMindMap {
+                NotificationCenter.default.post(name: .pksMindMapToggleTask, object: nil)
+            } else {
+                toggleEditPreview()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.paste)) { _ in
             handlePaste()
+        }
+        .task(id: model.previewPDF?.standardizedFileURL.path ?? "") {
+            guard let requestedURL = model.previewPDF?.standardizedFileURL else {
+                loadedPDFDocument = nil
+                loadedPDFURL = nil
+                return
+            }
+            if loadedPDFURL?.standardizedFileURL == requestedURL {
+                return
+            }
+
+            loadedPDFDocument = nil
+            loadedPDFURL = nil
+            let loaded = await PDFDocumentLoading.load(requestedURL)
+            guard !Task.isCancelled,
+                  model.previewPDF?.standardizedFileURL == requestedURL else { return }
+            loadedPDFDocument = loaded
+            loadedPDFURL = requestedURL
         }
         .task(id: OutlineWarmupKey(
             identity: model.selected?.path ?? "",
@@ -862,13 +925,42 @@ struct NotesWindow: View {
         .sheet(isPresented: $showingQuickOpen) {
             quickOpenSheet
         }
+        .alert(language.text("New Folder"), isPresented: $showingNewFolder) {
+            TextField(language.text("Folder Name"), text: $newFolderValue)
+                .accessibilityIdentifier("pks-new-folder-field")
+            Button(language.text("Create")) {
+                if let parent = newFolderParent,
+                   let created = model.newFolder(named: newFolderValue, in: parent) {
+                    if parent != model.root?.standardizedFileURL {
+                        expandedFolderPaths.insert(parent.path)
+                        model.loadExpandedFolder(parent)
+                    }
+                    treeCursorPath = created.path
+                }
+                newFolderParent = nil
+                newFolderValue = ""
+            }
+            Button(language.text("Cancel"), role: .cancel) {
+                newFolderParent = nil
+                newFolderValue = ""
+            }
+        } message: {
+            Text(language.text("Create a folder inside the current notes workspace."))
+        }
         .alert(language.text("Rename"), isPresented: $showingRename) {
             TextField(language.text("Name"), text: $renameValue)
                 .accessibilityIdentifier("pks-rename-field")
             Button(language.text("Rename")) {
-                if let item = renameCandidate { _ = model.renameItem(item, to: renameValue) }
+                let item = renameCandidate
+                let value = renameValue
                 renameCandidate = nil
+                if let item {
+                    Task { @MainActor in
+                        _ = await model.renameItem(item, to: value)
+                    }
+                }
             }
+            .disabled(model.fileOperationInProgress != nil)
             Button(language.text("Cancel"), role: .cancel) { renameCandidate = nil }
         } message: {
             Text(language.text("Change the name without moving the item. File extensions are preserved."))
@@ -912,6 +1004,15 @@ struct NotesWindow: View {
     private func toggleEditPreview() {
         guard model.selected != nil, model.previewPDF == nil, model.externalBody == nil else { return }
         switchReadingMode(to: mode == .edit ? .read : .edit)
+    }
+
+    private func beginNewFolder(in parent: URL) {
+        guard let root = model.root else { return }
+        let folder = parent.standardizedFileURL
+        guard folder == root.standardizedFileURL || WorkspaceFiles.contains(folder, in: root) else { return }
+        newFolderParent = folder
+        newFolderValue = ""
+        showingNewFolder = true
     }
 
     private func beginRename(_ item: URL) {
@@ -1001,11 +1102,13 @@ struct NotesWindow: View {
 
     private func rebuildQuickOpenMatches() {
         let matches = NoteTreePresentation.quickOpen(quickOpenEntries, query: quickOpenQuery)
-        if pdfCaptureRequest != nil || mindMapLinkNodeID != nil {
+        if pdfCaptureRequest != nil || mindMapLinkNodeID != nil || linkRepairRequest != nil {
             quickOpenMatches = matches.filter { item in
-                guard !item.isFolder,
-                      ["md", "markdown"].contains(item.url.pathExtension.lowercased())
-                else { return false }
+                guard !item.isFolder else { return false }
+                if linkRepairRequest != nil {
+                    return item.isMarkdown || item.isPDF
+                }
+                guard item.isMarkdown else { return false }
                 if mindMapLinkNodeID != nil, let selected = model.selected,
                    item.url.standardizedFileURL == selected.standardizedFileURL {
                     return false
@@ -1062,6 +1165,7 @@ struct NotesWindow: View {
     }
 
     private func openQuickPicker() {
+        linkRepairRequest = nil
         pdfCaptureRequest = nil
         pdfCaptureCommentary = ""
         resetMindMapLinkState()
@@ -1072,6 +1176,7 @@ struct NotesWindow: View {
 
     private func beginMindMapLink(nodeID: Int, section: Bool = false) {
         guard model.selected != nil else { return }
+        linkRepairRequest = nil
         pdfCaptureRequest = nil
         pdfCaptureCommentary = ""
         mindMapLinkNodeID = nodeID
@@ -1090,6 +1195,7 @@ struct NotesWindow: View {
         selectedText: String?,
         anchor: PDFSourceAnchor?
     ) {
+        linkRepairRequest = nil
         resetMindMapLinkState()
         pdfCaptureRequest = PDFCaptureRequest(
             pdf: pdf,
@@ -1103,8 +1209,25 @@ struct NotesWindow: View {
         prepareQuickOpenPresentation()
     }
 
+    private func beginLinkRepair(_ target: String) {
+        guard let source = model.selected, model.externalBody == nil,
+              model.previewPDF == nil else { return }
+        showingBacklinks = false
+        resetMindMapLinkState()
+        pdfCaptureRequest = nil
+        model.message = nil
+        linkRepairRequest = (source, target, model.draftRevision)
+        // Prior filename only seeds search. The user selects the new authority.
+        let path = String(target.split(separator: "#", maxSplits: 1).first ?? "")
+        let decoded = path.removingPercentEncoding ?? path
+        quickOpenQuery = URL(fileURLWithPath: decoded).deletingPathExtension().lastPathComponent
+        quickOpenIndex = 0
+        prepareQuickOpenPresentation()
+    }
+
     private func closeQuickPicker() {
         showingQuickOpen = false
+        linkRepairRequest = nil
         quickOpenMatches = []
         quickOpenFallbackRescanRequested = false
         pdfCaptureRequest = nil
@@ -1124,6 +1247,8 @@ struct NotesWindow: View {
         ) else { return }
 
         closeQuickPicker()
+        // In narrow windows, show the citation in the note immediately.
+        compactStudyShowsNote = true
         pendingEditorFocus = studyNote
         model.openStudyNote(studyNote)
         if model.selected == studyNote {
@@ -1170,6 +1295,57 @@ struct NotesWindow: View {
     }
 
     private func openQuickMatch(_ item: NoteItem) {
+        // The cached full-vault index can outlive an external/iCloud rename.
+        // Do not dismiss Quick Open or navigate to a vanished path; refresh
+        // its one existing index, at most once per picker session.
+        guard FileManager.default.fileExists(atPath: item.url.path) else {
+            if !quickOpenFallbackRescanRequested && !model.indexingFiles {
+                quickOpenFallbackRescanRequested = true
+                model.refreshGlobalFileIndex()
+            }
+            return
+        }
+        if let request = linkRepairRequest {
+            // Never mutate a different document or a draft that changed while
+            // the picker was open. Repair is a source-scoped user action.
+            guard model.selected?.standardizedFileURL == request.source.standardizedFileURL,
+                  model.draftRevision == request.revision,
+                  !model.loadingNote else {
+                closeQuickPicker()
+                model.message = language.text("Note changed while choosing a replacement. Try again.")
+                return
+            }
+            guard let root = model.root,
+                  let canonicalTarget = WorkspaceFiles.canonicalLinkTarget(for: item.url, in: root)
+            else {
+                model.message = language.text("Link target not available in this workspace.")
+                return
+            }
+            let oldPath = String(request.target.split(
+                separator: "#",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            ).first ?? "")
+            let oldFragment = request.target.firstIndex(of: "#").map {
+                String(request.target[$0...])
+            } ?? ""
+            let preservePDFFRagment = item.isPDF
+                && URL(fileURLWithPath: oldPath).pathExtension.lowercased() == "pdf"
+                && PDFPageReference.page(
+                    from: URL(string: request.target) ?? URL(fileURLWithPath: request.target)
+                ) != nil
+            let newTarget = canonicalTarget + (preservePDFFRagment ? oldFragment : "")
+            guard let updated = MindMapOutline.retargetLinks(
+                    in: model.draft, from: request.target, to: newTarget
+                  ) else {
+                model.message = language.text("Link target not available in this workspace.")
+                return
+            }
+            model.draft = updated
+            closeQuickPicker()
+            model.message = nil
+            return
+        }
         if let nodeID = mindMapLinkNodeID {
             if mindMapLinkSectionMode {
                 prepareMindMapSectionTarget(nodeID: nodeID, target: item.url)
@@ -1263,17 +1439,29 @@ struct NotesWindow: View {
             return
         }
 
+        let linkedNoteContent = "# \(title)\n\n"
         guard let created = model.newNote(
             named: filename,
             in: folder,
-            initialContent: "# \(title)\n\n",
+            initialContent: linkedNoteContent,
             activateAfterCreation: false
         ) else { return }
 
+        let sourceBeforeLink = model.draft
         model.draft = updated
         model.save()
         mindMapSelectionLine = nodeID
-        guard !model.isDirty else { return }
+        guard !model.isDirty else {
+            let rolledBack = model.rollbackNewNoteIfUnchanged(
+                created,
+                expectedContent: linkedNoteContent
+            )
+            model.draft = sourceBeforeLink
+            model.message = rolledBack
+                ? language.text("Could not save the link, so the new note was not kept.")
+                : language.text("Could not save the link. The new note changed before rollback; review both notes.")
+            return
+        }
         model.message = "\(language.text("Created linked note")): \(created.deletingPathExtension().lastPathComponent)"
     }
 
@@ -1360,6 +1548,13 @@ struct NotesWindow: View {
         let linkingMindMapNode = mindMapLinkNodeID != nil
         let markdownOnly = pdfCaptureRequest != nil || linkingMindMapNode
         return VStack(alignment: .leading, spacing: 0) {
+            if linkRepairRequest != nil {
+                Label(language.text("Choose replacement file"), systemImage: "link")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
+                    .padding(.bottom, 4)
+            }
             if linkingMindMapNode {
                 Label(
                     language.text(mindMapLinkSectionMode
@@ -1498,9 +1693,13 @@ struct NotesWindow: View {
                                    ? (quickOpenQuery.isEmpty
                                       ? "Choose a Markdown note for this PDF page."
                                       : "No Markdown notes match your search.")
-                                   : (quickOpenQuery.isEmpty
-                                      ? "Type a name to find a note in your library."
-                                      : "No files match your search."))
+                                   : (linkRepairRequest != nil
+                                      ? (quickOpenQuery.isEmpty
+                                         ? "Choose a replacement Markdown or PDF file."
+                                         : "No Markdown or PDF files match your search.")
+                                      : (quickOpenQuery.isEmpty
+                                         ? "Type a name to find a note in your library."
+                                         : "No files match your search.")))
                         ))
                     }
                 }
@@ -1508,53 +1707,65 @@ struct NotesWindow: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(matches.indices, id: \.self) { i in
-                            let item = matches[i]
-                            Button {
-                                openQuickMatch(item)
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: item.iconName)
-                                        .font(.system(size: NotesGeometry.symbolSize))
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: NotesGeometry.treeIconWidth)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(item.name)
-                                            .font(.system(size: 14, weight: i == quickOpenIndex ? .semibold : .regular))
-                                            .foregroundStyle(.primary)
-                                            .lineLimit(1)
-                                        Text(NoteTreePresentation.quickOpenFolder(for: item.url, in: model.root))
-                                            .font(.system(size: 11))
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 2) {
+                            ForEach(matches.indices, id: \.self) { i in
+                                let item = matches[i]
+                                Button {
+                                    openQuickMatch(item)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: item.iconName)
+                                            .font(.system(size: NotesGeometry.symbolSize))
                                             .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                            .truncationMode(.middle)
-                                            .help(NoteTreePresentation.quickOpenFolder(for: item.url, in: model.root))
+                                            .frame(width: NotesGeometry.treeIconWidth)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(item.name)
+                                                .font(.system(size: 14, weight: i == quickOpenIndex ? .semibold : .regular))
+                                                .foregroundStyle(.primary)
+                                                .lineLimit(1)
+                                            Text(NoteTreePresentation.quickOpenFolder(for: item.url, in: model.root))
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
+                                                .help(NoteTreePresentation.quickOpenFolder(for: item.url, in: model.root))
+                                        }
+                                        Spacer()
+                                        if i == quickOpenIndex {
+                                            Image(systemName: "return")
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.tertiary)
+                                        }
                                     }
-                                    Spacer()
-                                    if i == quickOpenIndex {
-                                        Image(systemName: "return")
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(.tertiary)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        i == quickOpenIndex ? theme.linkColor.opacity(0.12) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 8)
+                                    )
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .onHover { hovering in
+                                    if hovering {
+                                        quickOpenIndex = i
+                                        model.prefetchFile(item.url)
                                     }
                                 }
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background(
-                                    i == quickOpenIndex ? theme.linkColor.opacity(0.12) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 8)
-                                )
-                                .contentShape(Rectangle())
+                                .id(i)
+                                .accessibilityIdentifier("pks-quick-open-\(item.id)")
                             }
-                            .buttonStyle(.plain)
-                            .onHover { hovering in
-                                if hovering { model.prefetchFile(item.url) }
-                            }
-                            .accessibilityIdentifier("pks-quick-open-\(item.id)")
+                        }
+                        .padding(8)
+                    }
+                    .onChange(of: quickOpenIndex) { _, index in
+                        guard matches.indices.contains(index) else { return }
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            proxy.scrollTo(index, anchor: .center)
                         }
                     }
-                    .padding(8)
                 }
             }
         }
@@ -1750,19 +1961,35 @@ struct NotesWindow: View {
                                                   height: NotesGeometry.treeRowHeight)
                             }
 
-                            if model.loadingNote && model.requestedNote?.standardizedFileURL == row.item.url.standardizedFileURL {
+                            if model.fileOperationInProgress?.standardizedFileURL == row.item.url.standardizedFileURL {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                    .frame(width: NotesGeometry.treeIconWidth,
+                                           height: NotesGeometry.treeRowHeight)
+                                    .accessibilityLabel(language.text("Updating files…"))
+                            } else if model.loadingNote && model.requestedNote?.standardizedFileURL == row.item.url.standardizedFileURL {
                                 ProgressView()
                                     .controlSize(.mini)
                                     .frame(width: NotesGeometry.treeIconWidth,
                                            height: NotesGeometry.treeRowHeight)
                                     .accessibilityLabel(language.text("Opening note…"))
                             } else {
-                                Image(systemName: row.item.isFolder ? "folder.fill" : row.item.iconName)
-                                    .font(.system(size: NotesGeometry.symbolSize, weight: .regular))
-                                    .symbolRenderingMode(.hierarchical)
-                                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                                    .frame(width: NotesGeometry.treeIconWidth,
-                                           height: NotesGeometry.treeRowHeight)
+                                Group {
+                                    if row.item.isFolder {
+                                        Image(systemName: "folder.fill")
+                                            .font(.system(size: NotesGeometry.symbolSize))
+                                            .symbolRenderingMode(.hierarchical)
+                                            .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                                    } else {
+                                        Image(systemName: row.item.iconName)
+                                            .font(.system(size: NotesGeometry.symbolSize))
+                                            .symbolRenderingMode(.hierarchical)
+                                            .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                                            .draggable(row.item.url)
+                                            }
+                                }
+                                .frame(width: NotesGeometry.treeIconWidth,
+                                       height: NotesGeometry.treeRowHeight)
                             }
 
                             if row.item.isFolder {
@@ -1776,16 +2003,18 @@ struct NotesWindow: View {
                                     .contentShape(Rectangle())
                                     .draggable(row.item.url)
                                     .dropDestination(for: URL.self) { urls, _ in
-                                        guard let source = urls.first?.standardizedFileURL,
+                                        guard model.fileOperationInProgress == nil,
+                                              let source = urls.first?.standardizedFileURL,
                                               model.canManage(source),
                                               source != row.item.url else { return false }
-                                        let moved = model.moveItem(source, to: row.item.url)
-                                        if moved != nil {
-                                            expandedFolderPaths.insert(row.item.url.path)
+                                        Task { @MainActor in
+                                            let moved = await model.moveItem(source, to: row.item.url)
+                                            if moved != nil {
+                                                expandedFolderPaths.insert(row.item.url.path)
+                                            }
                                             fileDropTargetPath = nil
-                                            return true
                                         }
-                                        return false
+                                        return true
                                     } isTargeted: { targeted in
                                         fileDropTargetPath = targeted ? row.id : nil
                                     }
@@ -1800,22 +2029,21 @@ struct NotesWindow: View {
                                     })
                                     .help(language.text("Double-click to expand or collapse"))
                             } else {
-                                Text(row.item.name)
-                                    .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
-                                    .foregroundStyle(.primary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .lineLimit(1)
-                                    .frame(height: NotesGeometry.treeRowHeight)
-                                    .padding(.leading, NotesGeometry.treeTextGap)
-                                    .contentShape(Rectangle())
-                                    .draggable(row.item.url)
-                                    .simultaneousGesture(TapGesture(count: 1).onEnded {
-                                        treeCursorPath = row.id
-                                        treeFocused = true
-                                        model.openFile(row.item.url)
-                                    })
-                                    .accessibilityAddTraits(.isButton)
-                                    .accessibilityIdentifier("pks-note-\(row.item.name)")
+                                Button {
+                                    treeCursorPath = row.id
+                                    model.openFile(row.item.url)
+                                } label: {
+                                    Text(row.item.name)
+                                        .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
+                                        .foregroundStyle(.primary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .lineLimit(1)
+                                        .frame(height: NotesGeometry.treeRowHeight)
+                                        .padding(.leading, NotesGeometry.treeTextGap)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("pks-note-\(row.item.name)")
                             }
                         }
                         .padding(.leading, CGFloat(row.depth) * NotesGeometry.treeIndent)
@@ -2060,6 +2288,12 @@ struct NotesWindow: View {
                 Spacer(minLength: 0)
                 if sidebarTab == .notes {
                     Menu {
+                        if let root = model.root {
+                            Button(language.text("New Folder…"), systemImage: "folder.badge.plus") {
+                                beginNewFolder(in: root)
+                            }
+                            Divider()
+                        }
                         Button(language.text("Choose Notes Folder…"), systemImage: "folder") {
                             model.chooseWorkspace()
                         }
@@ -2147,6 +2381,9 @@ struct NotesWindow: View {
                     treeRevealRequest = nil
                 }
                 .focusable(sidebarTab == .notes)
+                // The row highlight already conveys keyboard focus. Avoid
+                // a second large blue rectangle around the entire file tree.
+                .focusEffectDisabled()
                 .focused($treeFocused)
                 .onMoveCommand { direction in
                     guard sidebarTab == .notes else { return }
@@ -2167,6 +2404,11 @@ struct NotesWindow: View {
                         if let item = rows.first(where: { $0.id == next.path })?.item,
                            item.isMarkdown || item.isPDF {
                             model.prefetchFile(item.url)
+                        }
+                        // Scroll after folder expansion yields its visible rows.
+                        Task { @MainActor in
+                            await Task.yield()
+                            treeRevealRequest = next.path
                         }
                     }
                 }
@@ -2238,15 +2480,23 @@ struct NotesWindow: View {
         }
         if model.canManage(url) {
             Divider()
+            if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                Button(language.text("New Folder…"), systemImage: "folder.badge.plus") {
+                    beginNewFolder(in: url)
+                }
+            }
             Button(language.text("Rename…"), systemImage: "pencil") {
                 beginRename(url)
             }
+            .disabled(model.fileOperationInProgress != nil)
             Button(language.text("Move to Folder…"), systemImage: "folder.badge.gearshape") {
                 chooseDestination(for: url, copying: false)
             }
+            .disabled(model.fileOperationInProgress != nil)
             Button(language.text("Copy to Folder…"), systemImage: "doc.on.doc") {
                 chooseDestination(for: url, copying: true)
             }
+            .disabled(model.fileOperationInProgress != nil)
             Button(role: .destructive) {
                 requestMoveToTrash(url)
             } label: {
@@ -2274,6 +2524,10 @@ struct NotesWindow: View {
     }
 
     private func chooseDestination(for item: URL, copying: Bool) {
+        guard model.fileOperationInProgress == nil else {
+            model.message = language.text("Another file operation is still in progress.")
+            return
+        }
         guard let root = model.root else { return }
         let panel = NSOpenPanel()
         panel.title = language.text(copying ? "Copy to Folder" : "Move to Folder")
@@ -2287,10 +2541,12 @@ struct NotesWindow: View {
             model.message = language.text("Choose a destination inside the current notes workspace.")
             return
         }
-        if copying {
-            _ = model.copyItem(item, to: folder)
-        } else {
-            _ = model.moveItem(item, to: folder)
+        Task { @MainActor in
+            if copying {
+                _ = await model.copyItem(item, to: folder)
+            } else {
+                _ = await model.moveItem(item, to: folder)
+            }
         }
     }
 
@@ -2538,11 +2794,48 @@ struct NotesWindow: View {
     private var reader: some View {
         if let url = model.previewPDF {
             if let note = model.selected, model.externalBody == nil {
-                HSplitView {
-                    pdfReader(url)
-                        .frame(minWidth: 330)
-                    studyNotePane(note)
-                        .frame(minWidth: 280, idealWidth: 400)
+                // Never squeeze a PDF into a thin third column beside the sidebar.
+                // Small windows show one full-width surface; larger windows provide
+                // a balanced, user-resizable PDF + note workspace.
+                GeometryReader { geometry in
+                    if geometry.size.width >= 820 {
+                        HSplitView {
+                            pdfReader(url)
+                                .frame(minWidth: 420, idealWidth: geometry.size.width * 0.55)
+                            studyNotePane(note)
+                                .frame(minWidth: 340, idealWidth: geometry.size.width * 0.45)
+                        }
+                    } else {
+                        VStack(spacing: 0) {
+                            HStack(spacing: 12) {
+                                Picker("", selection: $compactStudyShowsNote) {
+                                    Text("PDF").tag(false)
+                                    Text(language.text("Study Note")).tag(true)
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+                                .frame(width: 224)
+                                .accessibilityIdentifier("pks-study-compact-picker")
+                                Spacer(minLength: 0)
+                                Text(compactStudyShowsNote
+                                     ? note.deletingPathExtension().lastPathComponent
+                                     : url.lastPathComponent)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(height: 42)
+                            .background(theme.canvas)
+                            Divider()
+
+                            if compactStudyShowsNote {
+                                studyNotePane(note)
+                            } else {
+                                pdfReader(url)
+                            }
+                        }
+                    }
                 }
                 .accessibilityIdentifier("pks-study-workspace")
             } else {
@@ -2555,7 +2848,12 @@ struct NotesWindow: View {
                 source: $model.draft,
                 selectedID: $mindMapSelectionLine,
                 revision: model.draftRevision,
-                openLink: { target in _ = model.openKnowledgeLink(target) },
+                openLink: { target in
+                    _ = model.openKnowledgeLink(
+                        target,
+                        onUnresolved: { beginLinkRepair(target) }
+                    )
+                },
                 connectNote: { nodeID in beginMindMapLink(nodeID: nodeID) },
                 connectSection: { nodeID in beginMindMapLink(nodeID: nodeID, section: true) },
                 createLinkedNote: { nodeID in createLinkedNoteFromMindMap(nodeID: nodeID) },
@@ -2587,6 +2885,10 @@ struct NotesWindow: View {
         NativePDFPreview(
             url: url,
             root: model.root,
+            document: loadedPDFURL?.standardizedFileURL == url.standardizedFileURL
+                ? loadedPDFDocument : nil,
+            attemptedURL: loadedPDFURL,
+            controller: pdfReaderController,
             requestedPage: model.previewPDFPage,
             requestedAnchor: model.previewPDFAnchor,
             onAddPageToNote: { page, selectedText, anchor in
@@ -2620,6 +2922,18 @@ struct NotesWindow: View {
                         .accessibilityLabel(language.text("Save"))
                 }
                 Button {
+                    mode = mode == .read ? .edit : .read
+                    if mode == .edit {
+                        Task { @MainActor in editorFocused = true }
+                    }
+                } label: {
+                    Image(systemName: mode == .read ? "square.and.pencil" : "book")
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .help(language.text(mode == .read ? "Edit" : "Read"))
+                .accessibilityIdentifier("pks-study-note-mode-toggle")
+                Button {
                     model.closePDFPreview()
                     mode = .edit
                     Task { @MainActor in editorFocused = true }
@@ -2638,7 +2952,13 @@ struct NotesWindow: View {
             .background(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
 
             Divider()
-            editor
+            // Study notes honor the normal Markdown reading mode. Do not
+            // silently force raw source in an otherwise read-only session.
+            if mode == .read {
+                renderedNote
+            } else {
+                editor
+            }
         }
         .background(theme.canvas)
         .accessibilityIdentifier("pks-study-note-pane")
@@ -2728,6 +3048,7 @@ struct NotesWindow: View {
                             fontAdjustment: fontAdjustment,
                             lineAdjustment: lineAdjustment,
                             widthAdjustment: widthAdjustment,
+                            onRepairLink: { beginLinkRepair($0) },
                             cache: $previewCache)
             // A different note must never briefly display another file's parsed document.
             .id(model.selected?.path ?? model.previewSource?.documentId ?? "empty")

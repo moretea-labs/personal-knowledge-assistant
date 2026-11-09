@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import PKSNotes
 
@@ -95,6 +96,97 @@ extension MindMapOutlineTests {
         XCTAssertEqual(MindMapOutline.links(in: nodes[1].title), [.init(label: "Design notes", target: "Notes/Design")])
         XCTAssertEqual(MindMapOutline.links(in: nodes[2].title), [.init(label: "Spec", target: "../spec.md")])
         XCTAssertEqual(MindMapOutline.rename(in: source, nodeID: 1, to: "[[Notes/Architecture]]"), "# Project\n- [[Notes/Architecture]]\n- [Spec](../spec.md)")
+    }
+
+    func testRetargetLinksPreservesLabelsImagesAndFencedExamples() {
+        let source = """
+        # Root
+        🌿 [Old path](/Notes/Old) and [[/Notes/Old|Reading]] ![Cover](/Notes/Old)
+        ~~~markdown
+        [Example](/Notes/Old)
+        ~~~
+        Unrelated /Notes/Old
+        """
+        let expected = """
+        # Root
+        🌿 [Old path](/Notes/New) and [[/Notes/New|Reading]] ![Cover](/Notes/Old)
+        ~~~markdown
+        [Example](/Notes/Old)
+        ~~~
+        Unrelated /Notes/Old
+        """
+        XCTAssertEqual(MindMapOutline.retargetLinks(
+            in: source, from: "/Notes/Old", to: "/Notes/New"
+        ), expected)
+        XCTAssertNil(MindMapOutline.retargetLinks(
+            in: source, from: "/Notes/Missing", to: "/Notes/New"
+        ))
+        XCTAssertEqual(
+            MindMapOutline.retargetLinks(
+                in: "See [[Old]]", from: "Old", to: "/Archive/New"
+            ),
+            "See [[/Archive/New|Old]]"
+        )
+        XCTAssertEqual(
+            MindMapOutline.retargetLinks(
+                in: "![[cover.png]]", from: "cover.png", to: "/assets/cover.png",
+                includeImages: true
+            ),
+            "![[/assets/cover.png]]"
+        )
+    }
+
+    func testRetargetLinksCanOptImagesIntoPathRepairWithoutChangingKnowledgeLinks() {
+        let source = "![Cover](assets/old.png) and ![[assets/old.png|Preview]] and [Reference](assets/old.png)"
+        let expected = "![Cover](/assets/new.png) and ![[/assets/new.png|Preview]] and [Reference](/assets/new.png)"
+
+        XCTAssertEqual(
+            MindMapOutline.retargetLinks(
+                in: source,
+                from: "assets/old.png",
+                to: "/assets/new.png",
+                includeImages: true
+            ),
+            expected
+        )
+        XCTAssertEqual(
+            MindMapOutline.linkOccurrences(in: source).map(\.link.target),
+            ["assets/old.png"]
+        )
+        XCTAssertEqual(
+            MindMapOutline.linkOccurrences(in: source, includeImages: true).map(\.link.target),
+            ["assets/old.png", "assets/old.png", "assets/old.png"]
+        )
+    }
+
+    func testPreviewWikiLinksIgnoreCodeAndKeepMarkdownSource() {
+        let source = "# Guide\nSee [[/Notes/A.md|A]] and [[/Notes/B.md]].\n`[[Code.md]]`\n~~~md\n[[Fenced.md]]\n~~~"
+        let rendered = "# Guide\nSee [A](/Notes/A.md) and [/Notes/B.md](/Notes/B.md).\n`[[Code.md]]`\n~~~md\n[[Fenced.md]]\n~~~"
+        XCTAssertEqual(MindMapOutline.previewMarkdown(in: source), rendered)
+        XCTAssertEqual(MindMapOutline.linkOccurrences(in: source).map(\.link.target),
+                       ["/Notes/A.md", "/Notes/B.md"])
+    }
+
+    func testPreviewWikiLinksPreserveEscapedLiteralsAndEncodeCommonPathCharacters() {
+        let source = #"See \[[Literal.md]] and [[/Notes/My File (draft).md|Draft v2]]."#
+        let rendered = #"See \[[Literal.md]] and [Draft v2](/Notes/My%20File%20%28draft%29.md)."#
+        XCTAssertEqual(MindMapOutline.previewMarkdown(in: source), rendered)
+        XCTAssertEqual(MindMapOutline.linkOccurrences(in: source).map(\.link.target),
+                       ["/Notes/My File (draft).md"])
+    }
+
+    func testMarkdownImagesDoNotBecomeKnowledgeLinks() {
+        let line = "![Cover](assets/cover.png) and [Reference](/Refs.md)"
+        XCTAssertEqual(MindMapOutline.links(in: line),
+                       [.init(label: "Reference", target: "/Refs.md")])
+        XCTAssertEqual(
+            MindMapOutline.linkOccurrences(in: line, includeImages: true).map(\.link.target),
+            ["assets/cover.png", "/Refs.md"]
+        )
+        XCTAssertEqual(MindMapOutline.linkOccurrences(in: line).map(\.link.target),
+                       ["/Refs.md"])
+        XCTAssertEqual(MindMapOutline.presentation(for: line).title,
+                       "![Cover](assets/cover.png) and Reference")
     }
 
     func testNodePresentationUsesHumanLabelsAndKeepsEveryLinkInSourceOrder() {
@@ -210,6 +302,31 @@ extension MindMapOutlineTests {
         )
         XCTAssertNil(MindMapOutline.moveListSubtree(in: source, nodeID: 1, asChildOf: 2))
         XCTAssertNil(MindMapOutline.moveListSubtree(in: source, nodeID: 0, asChildOf: 3))
+    }
+
+    func testMoveListSubtreeOutcomeReportsNewNodeLineForSelection() {
+        // Moving a later node forward: C (line 4) becomes child of A (line 1).
+        // After removal of C (1 line), target adjusts to 1; C lands at line 2.
+        let forward = "# Root\n- A\n  - A1\n- B\n- C"
+        let forwardOutcome = MindMapOutline.moveListSubtreeWithOutcome(
+            in: forward, nodeID: 4, asChildOf: 1
+        )
+        XCTAssertEqual(forwardOutcome?.source, "# Root\n- A\n  - C\n  - A1\n- B")
+        XCTAssertEqual(forwardOutcome?.movedNodeID, 2)
+
+        // Moving an earlier node backward: A subtree (lines 1-2) becomes child
+        // of B (line 3). After removal of 2 lines, target adjusts to 1; A lands at line 2.
+        let backward = "# Root\n- A\n  - A1\n- B\n- C"
+        let backwardOutcome = MindMapOutline.moveListSubtreeWithOutcome(
+            in: backward, nodeID: 1, asChildOf: 3
+        )
+        XCTAssertEqual(backwardOutcome?.source, "# Root\n- B\n  - A\n    - A1\n- C")
+        XCTAssertEqual(backwardOutcome?.movedNodeID, 2)
+
+        // The moved line must be a real outline node in the updated source.
+        if let outcome = forwardOutcome {
+            XCTAssertTrue(MindMapOutline.nodes(in: outcome.source).contains { $0.id == outcome.movedNodeID })
+        }
     }
 }
 
@@ -328,5 +445,71 @@ extension MindMapOutlineTests {
                 .init(label: "Beta", target: "Nested/Beta.md")
             ]
         )
+    }
+}
+
+extension MindMapOutlineTests {
+    func testKeyboardCommandsCoverNavigationCreationEditingAndZoomWithoutModifierLeakage() {
+        let cases: [(KeyEquivalent, EventModifiers, MindMapKeyboard.Command)] = [
+            (.upArrow, [], .previous),
+            (.downArrow, [], .next),
+            (.leftArrow, [], .parentOrCollapse),
+            (.rightArrow, [], .childOrExpand),
+            (.tab, [], .addChild),
+            (.return, [], .addSibling),
+            ("e", [], .rename),
+            (.space, [], .toggleBranch),
+            (.delete, [], .deleteLeaf),
+            (.delete, .command, .deleteBranch),
+            ("0", .command, .fit),
+            ("-", .command, .zoomOut),
+            ("=", .command, .zoomIn),
+            ("+", [.command, .shift], .zoomIn),
+            (.escape, [], .clearSelection)
+        ]
+        for (key, modifiers, expected) in cases {
+            XCTAssertEqual(
+                MindMapKeyboard.command(for: key, modifiers: modifiers),
+                expected, "Unexpected shortcut command for key \(key)"
+            )
+        }
+        XCTAssertNil(MindMapKeyboard.command(for: .tab, modifiers: .shift))
+        XCTAssertNil(MindMapKeyboard.command(for: .tab, modifiers: .command))
+        XCTAssertNil(MindMapKeyboard.command(for: .return, modifiers: .shift))
+        XCTAssertNil(MindMapKeyboard.command(for: "e", modifiers: .option))
+        XCTAssertNil(MindMapKeyboard.command(for: .rightArrow, modifiers: .command))
+        XCTAssertNil(MindMapKeyboard.command(for: .delete, modifiers: [.command, .option]))
+        XCTAssertNil(MindMapKeyboard.command(for: .delete, modifiers: [.command, .shift]))
+    }
+
+    func testKeyboardParentChildAndLinearNavigationFollowVisibleMarkdownOutline() {
+        let outline = MindMapOutline.nodes(in: "# Root\n- A\n  - A1\n- B\n## Another")
+        XCTAssertEqual(outline.map(\.id), [0, 1, 2, 3, 4])
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 1, in: outline, moving: .childOrExpand), 2
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 2, in: outline, moving: .parentOrCollapse), 1
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 3, in: outline, moving: .parentOrCollapse), 0
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 1, in: outline, moving: .next), 2
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 0, in: outline, moving: .previous), 0
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 4, in: outline, moving: .next), 4
+        )
+        // Collapsed branches are absent from the visible list; navigation cannot
+        // target a hidden descendant or invent a separate tree.
+        let collapsed = outline.filter { $0.id != 2 }
+        XCTAssertNil(MindMapKeyboard.selection(from: 1, in: collapsed, moving: .childOrExpand))
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: 1, in: collapsed, moving: .next), 3
+        )
+        XCTAssertEqual(MindMapKeyboard.selection(from: nil, in: outline, moving: .next), 0)
     }
 }
