@@ -351,6 +351,7 @@ private struct RelationshipWarmupKey: Hashable {
 }
 
 private struct PDFCaptureRequest: Equatable {
+    let id = UUID()
     let pdf: URL
     let page: Int
     let selectedText: String?
@@ -384,6 +385,7 @@ struct NotesWindow: View {
     @State private var quickOpenFallbackRescanRequested = false
     @State private var pdfCaptureRequest: PDFCaptureRequest?
     @State private var pdfCaptureCommentary = ""
+    @State private var pdfCaptureTask: Task<Void, Never>?
     @State private var loadedPDFDocument: PDFDocument?
     @State private var loadedPDFURL: URL?
     @State private var compactStudyShowsNote = false
@@ -925,6 +927,7 @@ struct NotesWindow: View {
         .sheet(isPresented: $showingQuickOpen) {
             quickOpenSheet
         }
+        .interactiveDismissDisabled(pdfCaptureTask != nil)
         .alert(language.text("New Folder"), isPresented: $showingNewFolder) {
             TextField(language.text("Folder Name"), text: $newFolderValue)
                 .accessibilityIdentifier("pks-new-folder-field")
@@ -1165,6 +1168,8 @@ struct NotesWindow: View {
     }
 
     private func openQuickPicker() {
+        pdfCaptureTask?.cancel()
+        pdfCaptureTask = nil
         linkRepairRequest = nil
         pdfCaptureRequest = nil
         pdfCaptureCommentary = ""
@@ -1176,6 +1181,8 @@ struct NotesWindow: View {
 
     private func beginMindMapLink(nodeID: Int, section: Bool = false) {
         guard model.selected != nil else { return }
+        pdfCaptureTask?.cancel()
+        pdfCaptureTask = nil
         linkRepairRequest = nil
         pdfCaptureRequest = nil
         pdfCaptureCommentary = ""
@@ -1195,6 +1202,8 @@ struct NotesWindow: View {
         selectedText: String?,
         anchor: PDFSourceAnchor?
     ) {
+        pdfCaptureTask?.cancel()
+        pdfCaptureTask = nil
         linkRepairRequest = nil
         resetMindMapLinkState()
         pdfCaptureRequest = PDFCaptureRequest(
@@ -1212,6 +1221,8 @@ struct NotesWindow: View {
     private func beginLinkRepair(_ target: String) {
         guard let source = model.selected, model.externalBody == nil,
               model.previewPDF == nil else { return }
+        pdfCaptureTask?.cancel()
+        pdfCaptureTask = nil
         showingBacklinks = false
         resetMindMapLinkState()
         pdfCaptureRequest = nil
@@ -1226,6 +1237,8 @@ struct NotesWindow: View {
     }
 
     private func closeQuickPicker() {
+        pdfCaptureTask?.cancel()
+        pdfCaptureTask = nil
         showingQuickOpen = false
         linkRepairRequest = nil
         quickOpenMatches = []
@@ -1236,25 +1249,33 @@ struct NotesWindow: View {
     }
 
     private func savePDFCapture(to studyNote: URL) {
-        guard let capture = pdfCaptureRequest else { return }
-        guard model.appendPDFReference(
-            pdf: capture.pdf,
-            page: capture.page,
-            commentary: pdfCaptureCommentary,
-            selectedText: capture.selectedText,
-            anchor: capture.anchor,
-            to: studyNote
-        ) else { return }
+        guard pdfCaptureTask == nil, let capture = pdfCaptureRequest else { return }
+        let commentary = pdfCaptureCommentary
+        pdfCaptureTask = Task { @MainActor in
+            let saved = await model.appendPDFReference(
+                pdf: capture.pdf,
+                page: capture.page,
+                commentary: commentary,
+                selectedText: capture.selectedText,
+                anchor: capture.anchor,
+                to: studyNote
+            )
+            // A cancelled picker or a newer capture must not let this task
+            // clear the newer task or navigate after its request was replaced.
+            guard pdfCaptureRequest?.id == capture.id else { return }
+            pdfCaptureTask = nil
+            guard !Task.isCancelled, saved else { return }
 
-        closeQuickPicker()
-        // In narrow windows, show the citation in the note immediately.
-        compactStudyShowsNote = true
-        pendingEditorFocus = studyNote
-        model.openStudyNote(studyNote)
-        if model.selected == studyNote {
-            pendingEditorFocus = nil
-            mode = .edit
-            Task { @MainActor in editorFocused = true }
+            closeQuickPicker()
+            // In narrow windows, show the citation in the note immediately.
+            compactStudyShowsNote = true
+            pendingEditorFocus = studyNote
+            model.openStudyNote(studyNote)
+            if model.selected == studyNote {
+                pendingEditorFocus = nil
+                mode = .edit
+                Task { @MainActor in editorFocused = true }
+            }
         }
     }
 
@@ -1505,7 +1526,8 @@ struct NotesWindow: View {
     }
 
     private func createNoteFromPDFCapture() {
-        guard let capture = pdfCaptureRequest,
+        guard pdfCaptureTask == nil,
+              let capture = pdfCaptureRequest,
               let root = model.root,
               let snippet = PDFPageReference.noteSnippet(
                 for: capture.pdf,
@@ -1574,6 +1596,12 @@ struct NotesWindow: View {
                         systemImage: "note.text.badge.plus"
                     )
                     .font(.subheadline.weight(.semibold))
+                    if pdfCaptureTask != nil {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel(language.text("Saving"))
+                            .accessibilityIdentifier("pks-pdf-capture-saving")
+                    }
                     Spacer()
                     if let studyNote = model.selected, model.externalBody == nil {
                         Button(language.text("Add to Study Note")) {
@@ -1582,12 +1610,14 @@ struct NotesWindow: View {
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .help(studyNote.deletingPathExtension().lastPathComponent)
+                        .disabled(pdfCaptureTask != nil)
                         .accessibilityIdentifier("pks-pdf-capture-current-note")
                     }
                     Button(language.text("New note from this page")) {
                         createNoteFromPDFCapture()
                     }
                     .buttonStyle(.borderless)
+                    .disabled(pdfCaptureTask != nil)
                     .accessibilityIdentifier("pks-pdf-capture-new-note")
                 }
                 .padding(.horizontal, 20)
@@ -1623,6 +1653,7 @@ struct NotesWindow: View {
                 .focused($pdfCaptureCommentaryFocused)
                 .accessibilityLabel(language.text("Your note"))
                 .accessibilityIdentifier("pks-pdf-capture-commentary")
+                .disabled(pdfCaptureTask != nil)
                 .padding(.horizontal, 20)
                 .padding(.bottom, 10)
             }
@@ -1668,6 +1699,7 @@ struct NotesWindow: View {
                 .foregroundStyle(.secondary)
                 .keyboardShortcut(.cancelAction)
                 .help(language.text("Cancel (Esc)"))
+                .disabled(pdfCaptureTask != nil)
                 .accessibilityIdentifier("pks-quick-open-cancel")
             }
             .padding(.horizontal, 20)
@@ -1748,6 +1780,7 @@ struct NotesWindow: View {
                                     .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
+                                .disabled(pdfCaptureTask != nil)
                                 .onHover { hovering in
                                     if hovering {
                                         quickOpenIndex = i

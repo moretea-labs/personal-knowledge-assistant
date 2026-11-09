@@ -2607,7 +2607,10 @@ extension PKSNotesTests {
         XCTAssertEqual(model.previewPDFPage, 5)
         XCTAssertEqual(model.selected, note.standardizedFileURL)
 
-        XCTAssertTrue(model.appendPDFReference(pdf: pdf, page: 5, commentary: "Remember this", to: note))
+        let appendedToCurrentNote = await model.appendPDFReference(
+            pdf: pdf, page: 5, commentary: "Remember this", to: note
+        )
+        XCTAssertTrue(appendedToCurrentNote)
         XCTAssertFalse(model.isDirty)
         XCTAssertTrue(model.draft.contains("Remember this"))
         XCTAssertTrue(model.draft.contains("[Book.pdf · p. 5](/Book.pdf#page=5)"))
@@ -2681,14 +2684,15 @@ extension PKSNotesTests {
             normalizedRects: [CGRect(x: 0.2, y: 0.3, width: 0.4, height: 0.08)],
             fingerprint: fingerprint
         ))
-        XCTAssertTrue(model.appendPDFReference(
+        let appendedToOtherNote = await model.appendPDFReference(
             pdf: pdf,
             page: 4,
             commentary: "My interpretation",
             selectedText: "Important fact\nSecond line",
             anchor: anchor,
             to: note
-        ))
+        )
+        XCTAssertTrue(appendedToOtherNote)
         XCTAssertFalse(model.loadingFiles, "Appending to an existing note must not rescan the workspace tree.")
         XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
         XCTAssertEqual(model.previewPDFPage, 4)

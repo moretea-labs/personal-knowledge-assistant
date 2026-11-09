@@ -2029,7 +2029,8 @@ final class NotesModel: ObservableObject {
         selectedText: String? = nil,
         anchor: PDFSourceAnchor? = nil,
         to note: URL
-    ) -> Bool {
+    ) async -> Bool {
+        guard !Task.isCancelled else { return false }
         guard let root,
               ["md", "markdown"].contains(note.pathExtension.lowercased()),
               WorkspaceFiles.contains(note, in: root),
@@ -2062,6 +2063,32 @@ final class NotesModel: ObservableObject {
             // workspace rescan on the study-capture hot path.
             message = "\(AppLanguage.current.text("Added PDF page to note")): \(note.deletingPathExtension().lastPathComponent)"
             return true
+        }
+
+        do {
+            // A note selected from the library may still be a dataless File Provider
+            // placeholder. Hydrate it through the same bounded path used by note opening
+            // before attempting the additive write.
+            try await WorkspaceFiles.hydrateUbiquitousItemIfNeeded(note)
+            try Task.checkCancellation()
+        } catch is CancellationError {
+            return false
+        } catch {
+            let failure = AppLanguage.current.text("Could not add PDF page to note.")
+            message = "\(failure) \(error.localizedDescription)"
+            return false
+        }
+
+        guard self.root?.standardizedFileURL == root.standardizedFileURL,
+              WorkspaceFiles.contains(note, in: root) else {
+            message = AppLanguage.current.text("The original file is no longer available.")
+            return false
+        }
+        var hydratedInfo = Darwin.stat()
+        guard note.path.withCString({ Darwin.lstat($0, &hydratedInfo) }) == 0,
+              (hydratedInfo.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+            message = AppLanguage.current.text("The original file is no longer available.")
+            return false
         }
 
         let descriptor = note.path.withCString {
