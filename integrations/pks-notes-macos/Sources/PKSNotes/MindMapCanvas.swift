@@ -1140,11 +1140,48 @@ struct MindMapCanvas: View {
             }
         }
         .contextMenu {
+            let availability = MindMapOutline.actionAvailability(in: source, nodeID: node.id)
+            Button(language.text("Add Child"), systemImage: "plus") {
+                selectedID = node.id
+                _ = addChild()
+            }
+            .disabled(editingNodeID != nil)
+            .accessibilityIdentifier("pks-mind-map-context-add-child")
+            Button(language.text("Add Sibling"), systemImage: "plus.square.on.square") {
+                selectedID = node.id
+                _ = addSibling()
+            }
+            .disabled(editingNodeID != nil)
+            .accessibilityIdentifier("pks-mind-map-context-add-sibling")
+            Divider()
             Button(language.text("Rename node"), systemImage: "pencil") {
                 if editingNodeID != nil { finishRename(save: true) }
                 selectedID = node.id
                 beginRename()
             }
+            Button(language.text("Promote node"), systemImage: "arrow.left") {
+                selectedID = node.id
+                _ = performShortcut(.promote)
+                restoreCanvasFocusAfterMenu()
+            }
+            .disabled(editingNodeID != nil || !availability.canPromote)
+            .accessibilityIdentifier("pks-mind-map-context-promote")
+            Button(language.text("Make child of previous sibling"), systemImage: "arrow.right") {
+                selectedID = node.id
+                shiftSelected(deeper: true)
+                restoreCanvasFocusAfterMenu()
+            }
+            .disabled(editingNodeID != nil || !availability.canDemote)
+            .accessibilityIdentifier("pks-mind-map-context-demote")
+            Button(language.text("Toggle branch"),
+                   systemImage: collapsed.contains(node.id) ? "chevron.right" : "chevron.down") {
+                selectedID = node.id
+                _ = performShortcut(.toggleBranch)
+                restoreCanvasFocusAfterMenu()
+            }
+            .disabled(editingNodeID != nil || !hasChildren)
+            .accessibilityIdentifier("pks-mind-map-context-toggle-branch")
+            Divider()
             Button(language.text("Bold node title"), systemImage: "bold") {
                 toggleTitleEmphasis(nodeID: node.id, marker: "**")
             }
@@ -1172,10 +1209,21 @@ struct MindMapCanvas: View {
                 selectedID = node.id
                 revealSource(node.id)
             }
-            Button(language.text("Delete Branch"), systemImage: "trash", role: .destructive) {
+            Divider()
+            Button(language.text("Delete Leaf"), systemImage: "trash") {
+                selectedID = node.id
+                _ = performShortcut(.deleteLeaf)
+                restoreCanvasFocusAfterMenu()
+            }
+            .disabled(editingNodeID != nil || !availability.canDeleteLeaf)
+            .accessibilityIdentifier("pks-mind-map-context-delete-leaf")
+            Button(language.text("Delete Branch"), systemImage: "trash.slash", role: .destructive) {
+                selectedID = node.id
                 branchDeleteCandidateID = node.id
             }
-            .disabled(MindMapOutline.deleteListSubtree(in: source, nodeID: node.id) == nil)
+            .disabled(editingNodeID != nil ||
+                      MindMapOutline.deleteListSubtree(in: source, nodeID: node.id) == nil)
+            .accessibilityIdentifier("pks-mind-map-context-delete-branch")
         }
         .onTapGesture {
             selectNode(node.id)
