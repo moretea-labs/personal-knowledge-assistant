@@ -69,9 +69,7 @@ final class RealICloudFileProviderAcceptanceTests: XCTestCase {
             throw XCTSkip("The test files have not entered the iCloud File Provider domain.")
         }
         let uploadDeadline = ProcessInfo.processInfo.systemUptime + 180
-        try await waitForICloudUpload(source, until: uploadDeadline)
-        try await waitForICloudUpload(pdf, until: uploadDeadline)
-        try await waitForICloudUpload(cloudNote, until: uploadDeadline)
+        try await waitForICloudUpload([source, pdf, cloudNote], until: uploadDeadline)
 
         try fileManager.evictUbiquitousItem(at: source)
         try await waitForDatalessPlaceholder(source)
@@ -258,14 +256,38 @@ final class RealICloudFileProviderAcceptanceTests: XCTestCase {
 
 }
 
-private func waitForICloudUpload(_ url: URL, until deadline: TimeInterval) async throws {
+private func waitForICloudUpload(_ urls: [URL], until deadline: TimeInterval) async throws {
+    func uploadState(for url: URL) -> (uploaded: Bool?, uploading: Bool?, error: String?) {
+        var refreshedURL = url
+        refreshedURL.removeCachedResourceValue(forKey: .ubiquitousItemIsUploadedKey)
+        refreshedURL.removeCachedResourceValue(forKey: .ubiquitousItemIsUploadingKey)
+        refreshedURL.removeCachedResourceValue(forKey: .ubiquitousItemUploadingErrorKey)
+        let values = try? refreshedURL.resourceValues(forKeys: [
+            .ubiquitousItemIsUploadedKey,
+            .ubiquitousItemIsUploadingKey,
+            .ubiquitousItemUploadingErrorKey
+        ])
+        return (
+            values?.ubiquitousItemIsUploaded,
+            values?.ubiquitousItemIsUploading,
+            values?.ubiquitousItemUploadingError?.localizedDescription
+        )
+    }
+
     while ProcessInfo.processInfo.systemUptime < deadline {
         try Task.checkCancellation()
-        let values = try? url.resourceValues(forKeys: [.ubiquitousItemIsUploadedKey])
-        if values?.ubiquitousItemIsUploaded == true { return }
+        let states = urls.map { ($0, uploadState(for: $0)) }
+        if states.allSatisfy({ $0.1.uploaded == true }) { return }
         try await Task.sleep(for: .milliseconds(250))
     }
-    throw XCTSkip("iCloud did not finish uploading the isolated fixtures within the shared 180-second deadline.")
+
+    let summaries = urls.map { url in
+        let state = uploadState(for: url)
+        return "\(url.lastPathComponent): uploaded=\(String(describing: state.uploaded)), uploading=\(String(describing: state.uploading)), error=\(state.error ?? "none")"
+    }
+    throw XCTSkip(
+        "iCloud did not finish uploading the isolated fixtures within the shared 180-second deadline: \(summaries.joined(separator: "; "))."
+    )
 }
 
 private func waitForDatalessPlaceholder(_ url: URL) async throws {
