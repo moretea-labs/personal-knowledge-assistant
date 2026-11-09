@@ -1200,6 +1200,25 @@ final class PKSNotesTests: XCTestCase {
         )
     }
 
+    func testQuickOpenNumericPrefixMatchesOutrankSubstringMatches() {
+        let root = URL(fileURLWithPath: "/tmp/pks-quickopen-natural-prefix")
+        let substring = NoteItem(
+            url: root.appendingPathComponent("Note 2 - Note 1.md"),
+            children: nil
+        )
+        let prefix = NoteItem(
+            url: root.appendingPathComponent("Note 10.md"),
+            children: nil
+        )
+        let entries = NoteTreePresentation.quickOpenEntries([substring, prefix])
+
+        XCTAssertEqual(
+            NoteTreePresentation.quickOpen(entries, query: "note 1", limit: 1).map(\.name),
+            ["Note 10"],
+            "A literal prefix match must outrank a substring match even when natural numeric collation puts the substring first."
+        )
+    }
+
     func testQuickOpenLocalSeedIncludesDeepKnownNotesWithoutDuplicates() {
         let root = URL(fileURLWithPath: "/tmp/pks-quickopen-seed")
         let visible = root.appendingPathComponent("Visible.md")

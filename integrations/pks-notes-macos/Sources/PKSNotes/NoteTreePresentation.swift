@@ -89,8 +89,12 @@ enum NoteTreePresentation {
 
     static func sortQuickOpenEntries(_ entries: inout [QuickOpenEntry]) {
         entries.sort { lhs, rhs in
-            let foldedComparison = lhs.foldedName.localizedStandardCompare(rhs.foldedName)
-            if foldedComparison != .orderedSame { return foldedComparison == .orderedAscending }
+            // Keep the index order consistent with the literal hasPrefix checks
+            // below. Natural numeric collation can interleave prefix matches
+            // (for example "Note 10") with non-prefix names ("Note 2").
+            if lhs.foldedName != rhs.foldedName {
+                return lhs.foldedName < rhs.foldedName
+            }
             let nameComparison = lhs.item.name.localizedStandardCompare(rhs.item.name)
             if nameComparison != .orderedSame { return nameComparison == .orderedAscending }
             return lhs.insertionOrder < rhs.insertionOrder
@@ -175,7 +179,9 @@ enum NoteTreePresentation {
         var upper = entries.count
         while lower < upper {
             let middle = lower + (upper - lower) / 2
-            if entries[middle].foldedName.localizedStandardCompare(search) == .orderedAscending {
+            // Use the same lexicographic order as sortQuickOpenEntries so
+            // every literal prefix match remains in one searchable range.
+            if entries[middle].foldedName < search {
                 lower = middle + 1
             } else {
                 upper = middle
