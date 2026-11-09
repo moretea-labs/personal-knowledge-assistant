@@ -13,6 +13,17 @@ final class PDFSearchFlowTests: XCTestCase {
         return document
     }
 
+
+    private func makeDocument(pages: [String]) throws -> PDFDocument {
+        let document = PDFDocument()
+        for text in pages {
+            let singlePage = try makeDocument(text: text)
+            document.insert(try XCTUnwrap(singlePage.page(at: 0)), at: document.pageCount)
+        }
+        XCTAssertEqual(document.pageCount, pages.count)
+        return document
+    }
+
     private func finishSearch(_ controller: PDFReaderController) async throws {
         for _ in 0..<250 {
             if !controller.isSearching { return }
@@ -69,6 +80,32 @@ final class PDFSearchFlowTests: XCTestCase {
         XCTAssertGreaterThan(controller.searchMatchCount, 0)
         try await Task.sleep(for: .milliseconds(80))
         XCTAssertEqual(controller.completedSearchQuery, "beta")
+        controller.detach(view: view)
+    }
+
+
+    func testCrossPageSearchUpdatesCanonicalPageIndex() async throws {
+        let document = try makeDocument(pages: [
+            "Opening evidence.",
+            "Middle navigation.",
+            "Unique page three search evidence."
+        ])
+        let view = PDFView(frame: NSRect(x: 0, y: 0, width: 700, height: 800))
+        let controller = PDFReaderController()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pks-search-pages-\(UUID().uuidString).pdf")
+        controller.attach(view: view, document: document, url: url,
+                          requestedPage: nil, requestedAnchor: nil)
+        controller.goToPage(2)
+        XCTAssertEqual(controller.currentPageIndex, 1)
+
+        controller.search("unique page three")
+        try await finishSearch(controller)
+
+        XCTAssertEqual(controller.searchMatchCount, 1)
+        XCTAssertEqual(controller.currentPageIndex, 2,
+                       "Search navigation must update the canonical toolbar page.")
+        XCTAssertTrue(view.currentPage === document.page(at: 2))
         controller.detach(view: view)
     }
 

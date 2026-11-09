@@ -580,8 +580,10 @@ final class PDFReaderController: ObservableObject {
         syncFromView()
     }
 
-    private func syncPageFromView() {
-        guard let view = pdfView, let document, let page = view.currentPage else { return }
+    private func syncPageFromView(preferredPage: PDFPage? = nil) {
+        guard let view = pdfView,
+              let document,
+              let page = preferredPage ?? view.currentPage else { return }
         let pageIndex = max(0, document.index(for: page))
         if currentPageIndex != pageIndex {
             currentPageIndex = pageIndex
@@ -623,7 +625,12 @@ final class PDFReaderController: ObservableObject {
         selection.color = NSColor.systemYellow.withAlphaComponent(0.45)
         view.currentSelection = selection
         view.go(to: selection)
-        syncFromView()
+        // In continuous mode PDFView.currentPage may remain the mostly-visible
+        // previous page even after the search match is revealed. The match's
+        // own page is the canonical navigation destination for toolbar state
+        // and persisted reading position.
+        syncPageFromView(preferredPage: selection.pages.first)
+        syncScaleFromView()
     }
 
     private func cancelSearch() {
