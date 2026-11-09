@@ -726,6 +726,16 @@ struct MindMapCanvas: View {
         .frame(width: 410, alignment: .leading)
     }
 
+    private func selectNode(_ nodeID: Int) {
+        guard editingNodeID != nodeID else { return }
+        if editingNodeID != nil {
+            finishRename(save: true)
+            guard editingNodeID == nil else { return }
+        }
+        selectedID = nodeID
+        canvasFocused = true
+    }
+
     private func requestCanvasFocus() {
         Task { @MainActor in
             await Task.yield()
@@ -1004,6 +1014,10 @@ struct MindMapCanvas: View {
                     .accessibilityIdentifier("pks-mind-map-node-\(node.id)")
                     .accessibilityValue(!exporting && selectedID == node.id
                                         ? language.text("Selected") : "")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction {
+                        selectNode(node.id)
+                    }
             }
             Spacer(minLength: 0)
 
@@ -1130,13 +1144,7 @@ struct MindMapCanvas: View {
             .disabled(MindMapOutline.deleteListSubtree(in: source, nodeID: node.id) == nil)
         }
         .onTapGesture {
-            guard editingNodeID != node.id else { return }
-            if editingNodeID != nil {
-                finishRename(save: true)
-                guard editingNodeID == nil else { return }
-            }
-            selectedID = node.id
-            canvasFocused = true
+            selectNode(node.id)
         }
         .onTapGesture(count: 2) {
             guard editingNodeID != node.id else { return }
