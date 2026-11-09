@@ -5,6 +5,7 @@ source_root="$(cd "$(dirname "$0")/.." && pwd)"
 app="$HOME/Applications/PKS Notes QA.app"
 fixture="$HOME/Library/Application Support/PKS Notes QA/Fixture Vault"
 binary="$source_root/.build/debug/PKSNotes"
+qa_executable="PKSNotesQA"
 icon="$source_root/Resources/AppIcon.icns"
 
 cd "$source_root"
@@ -19,9 +20,10 @@ trap 'rm -rf "$staging"' EXIT
 bundle="$staging/PKS Notes QA.app"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 cp "$icon" "$bundle/Contents/Resources/AppIcon.icns"
-cp "$binary" "$bundle/Contents/MacOS/PKSNotes"
-chmod 755 "$bundle/Contents/MacOS/PKSNotes"
+cp "$binary" "$bundle/Contents/MacOS/$qa_executable"
+chmod 755 "$bundle/Contents/MacOS/$qa_executable"
 cp "$source_root/Resources/Info.plist" "$bundle/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $qa_executable" "$bundle/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.moretea.pks.notes.qa' "$bundle/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName PKS Notes QA' "$bundle/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleName PKS Notes QA' "$bundle/Contents/Info.plist"
@@ -39,10 +41,12 @@ if [[ -e "$app" ]]; then
     fi
     /usr/bin/osascript -e 'tell application id "com.moretea.pks.notes.qa" to quit' >/dev/null 2>&1 || true
     for _ in 1 2 3 4 5 6 7 8 9 10; do
-        if ! pgrep -f "$app/Contents/MacOS/PKSNotes" >/dev/null; then break; fi
+        if ! pgrep -f "$app/Contents/MacOS/PKSNotes" >/dev/null            && ! pgrep -f "$app/Contents/MacOS/$qa_executable" >/dev/null; then
+            break
+        fi
         sleep 0.5
     done
-    if pgrep -f "$app/Contents/MacOS/PKSNotes" >/dev/null; then
+    if pgrep -f "$app/Contents/MacOS/PKSNotes" >/dev/null        || pgrep -f "$app/Contents/MacOS/$qa_executable" >/dev/null; then
         echo "QA app is still running; close it before rebuilding. No files replaced." >&2
         exit 3
     fi
@@ -77,6 +81,6 @@ printf '# Research\nThis is an isolated local QA note.\n' > "$fixture/Research.m
 /usr/bin/defaults delete com.moretea.pks.notes.qa PKSNotesWorkspaceBookmark >/dev/null 2>&1 || true
 /usr/bin/defaults write com.moretea.pks.notes.qa PKSNotesWorkspace -string "$fixture"
 /usr/bin/defaults write com.moretea.pks.notes.qa PKSNotesLastOpenedMarkdown -string "$fixture/Map QA.md"
-/usr/bin/open -n -a "$app" --args --pks-qa-pro
+/usr/bin/open -a "$app" --args --pks-qa-pro
 echo "Launched signed QA Debug app: $app"
 echo "QA workspace: $fixture"
