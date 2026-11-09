@@ -597,9 +597,10 @@ struct NotesWindow: View {
                                                 symbol: "arrow.up.right"
                                             ) {
                                                 showingBacklinks = false
-                                                if !model.openKnowledgeLink(link.target) {
-                                                    beginLinkRepair(link.target)
-                                                }
+                                                _ = model.openKnowledgeLink(
+                                                    link.target,
+                                                    onUnresolved: { beginLinkRepair(link.target) }
+                                                )
                                             }
                                             .contextMenu {
                                                 Button(language.text("Change link target…")) {
@@ -687,6 +688,12 @@ struct NotesWindow: View {
                         .help("\(language.text("Opening note…")) \(requested.deletingPathExtension().lastPathComponent)")
                         .accessibilityLabel(language.text("Opening note…"))
                         .accessibilityIdentifier("pks-note-open-progress")
+                } else if let path = model.fileOperationInProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                        .help("\(language.text("Updating files…")) \(path.lastPathComponent)")
+                        .accessibilityLabel(language.text("Updating files…"))
+                        .accessibilityIdentifier("pks-path-change-progress")
                 } else if model.autoSavePending && model.selected != nil {
                     ProgressView()
                         .controlSize(.small)
@@ -953,6 +960,7 @@ struct NotesWindow: View {
                     }
                 }
             }
+            .disabled(model.fileOperationInProgress != nil)
             Button(language.text("Cancel"), role: .cancel) { renameCandidate = nil }
         } message: {
             Text(language.text("Change the name without moving the item. File extensions are preserved."))
@@ -1096,9 +1104,11 @@ struct NotesWindow: View {
         let matches = NoteTreePresentation.quickOpen(quickOpenEntries, query: quickOpenQuery)
         if pdfCaptureRequest != nil || mindMapLinkNodeID != nil || linkRepairRequest != nil {
             quickOpenMatches = matches.filter { item in
-                guard !item.isFolder,
-                      ["md", "markdown"].contains(item.url.pathExtension.lowercased())
-                else { return false }
+                guard !item.isFolder else { return false }
+                if linkRepairRequest != nil {
+                    return item.isMarkdown || item.isPDF
+                }
+                guard item.isMarkdown else { return false }
                 if mindMapLinkNodeID != nil, let selected = model.selected,
                    item.url.standardizedFileURL == selected.standardizedFileURL {
                     return false
@@ -1205,6 +1215,7 @@ struct NotesWindow: View {
         showingBacklinks = false
         resetMindMapLinkState()
         pdfCaptureRequest = nil
+        model.message = nil
         linkRepairRequest = (source, target, model.draftRevision)
         // Prior filename only seeds search. The user selects the new authority.
         let path = String(target.split(separator: "#", maxSplits: 1).first ?? "")
@@ -1305,8 +1316,26 @@ struct NotesWindow: View {
                 return
             }
             guard let root = model.root,
-                  let newTarget = WorkspaceFiles.canonicalWikiTarget(for: item.url, in: root),
-                  let updated = MindMapOutline.retargetLinks(
+                  let canonicalTarget = WorkspaceFiles.canonicalLinkTarget(for: item.url, in: root)
+            else {
+                model.message = language.text("Link target not available in this workspace.")
+                return
+            }
+            let oldPath = String(request.target.split(
+                separator: "#",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            ).first ?? "")
+            let oldFragment = request.target.firstIndex(of: "#").map {
+                String(request.target[$0...])
+            } ?? ""
+            let preservePDFFRagment = item.isPDF
+                && URL(fileURLWithPath: oldPath).pathExtension.lowercased() == "pdf"
+                && PDFPageReference.page(
+                    from: URL(string: request.target) ?? URL(fileURLWithPath: request.target)
+                ) != nil
+            let newTarget = canonicalTarget + (preservePDFFRagment ? oldFragment : "")
+            guard let updated = MindMapOutline.retargetLinks(
                     in: model.draft, from: request.target, to: newTarget
                   ) else {
                 model.message = language.text("Link target not available in this workspace.")
@@ -1410,17 +1439,29 @@ struct NotesWindow: View {
             return
         }
 
+        let linkedNoteContent = "# \(title)\n\n"
         guard let created = model.newNote(
             named: filename,
             in: folder,
-            initialContent: "# \(title)\n\n",
+            initialContent: linkedNoteContent,
             activateAfterCreation: false
         ) else { return }
 
+        let sourceBeforeLink = model.draft
         model.draft = updated
         model.save()
         mindMapSelectionLine = nodeID
-        guard !model.isDirty else { return }
+        guard !model.isDirty else {
+            let rolledBack = model.rollbackNewNoteIfUnchanged(
+                created,
+                expectedContent: linkedNoteContent
+            )
+            model.draft = sourceBeforeLink
+            model.message = rolledBack
+                ? language.text("Could not save the link, so the new note was not kept.")
+                : language.text("Could not save the link. The new note changed before rollback; review both notes.")
+            return
+        }
         model.message = "\(language.text("Created linked note")): \(created.deletingPathExtension().lastPathComponent)"
     }
 
@@ -1505,10 +1546,10 @@ struct NotesWindow: View {
         let matches = quickOpenMatches
         let selectedPreview = pdfCapturePreviewText
         let linkingMindMapNode = mindMapLinkNodeID != nil
-        let markdownOnly = pdfCaptureRequest != nil || linkingMindMapNode || linkRepairRequest != nil
+        let markdownOnly = pdfCaptureRequest != nil || linkingMindMapNode
         return VStack(alignment: .leading, spacing: 0) {
             if linkRepairRequest != nil {
-                Label(language.text("Choose replacement note"), systemImage: "link")
+                Label(language.text("Choose replacement file"), systemImage: "link")
                     .font(.subheadline.weight(.semibold))
                     .padding(.horizontal, 20)
                     .padding(.top, 16)
@@ -1652,9 +1693,13 @@ struct NotesWindow: View {
                                    ? (quickOpenQuery.isEmpty
                                       ? "Choose a Markdown note for this PDF page."
                                       : "No Markdown notes match your search.")
-                                   : (quickOpenQuery.isEmpty
-                                      ? "Type a name to find a note in your library."
-                                      : "No files match your search."))
+                                   : (linkRepairRequest != nil
+                                      ? (quickOpenQuery.isEmpty
+                                         ? "Choose a replacement Markdown or PDF file."
+                                         : "No Markdown or PDF files match your search.")
+                                      : (quickOpenQuery.isEmpty
+                                         ? "Type a name to find a note in your library."
+                                         : "No files match your search.")))
                         ))
                     }
                 }
@@ -1916,7 +1961,13 @@ struct NotesWindow: View {
                                                   height: NotesGeometry.treeRowHeight)
                             }
 
-                            if model.loadingNote && model.requestedNote?.standardizedFileURL == row.item.url.standardizedFileURL {
+                            if model.fileOperationInProgress?.standardizedFileURL == row.item.url.standardizedFileURL {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                    .frame(width: NotesGeometry.treeIconWidth,
+                                           height: NotesGeometry.treeRowHeight)
+                                    .accessibilityLabel(language.text("Updating files…"))
+                            } else if model.loadingNote && model.requestedNote?.standardizedFileURL == row.item.url.standardizedFileURL {
                                 ProgressView()
                                     .controlSize(.mini)
                                     .frame(width: NotesGeometry.treeIconWidth,
@@ -1952,7 +2003,8 @@ struct NotesWindow: View {
                                     .contentShape(Rectangle())
                                     .draggable(row.item.url)
                                     .dropDestination(for: URL.self) { urls, _ in
-                                        guard let source = urls.first?.standardizedFileURL,
+                                        guard model.fileOperationInProgress == nil,
+                                              let source = urls.first?.standardizedFileURL,
                                               model.canManage(source),
                                               source != row.item.url else { return false }
                                         Task { @MainActor in
@@ -2436,12 +2488,15 @@ struct NotesWindow: View {
             Button(language.text("Rename…"), systemImage: "pencil") {
                 beginRename(url)
             }
+            .disabled(model.fileOperationInProgress != nil)
             Button(language.text("Move to Folder…"), systemImage: "folder.badge.gearshape") {
                 chooseDestination(for: url, copying: false)
             }
+            .disabled(model.fileOperationInProgress != nil)
             Button(language.text("Copy to Folder…"), systemImage: "doc.on.doc") {
                 chooseDestination(for: url, copying: true)
             }
+            .disabled(model.fileOperationInProgress != nil)
             Button(role: .destructive) {
                 requestMoveToTrash(url)
             } label: {
@@ -2469,6 +2524,10 @@ struct NotesWindow: View {
     }
 
     private func chooseDestination(for item: URL, copying: Bool) {
+        guard model.fileOperationInProgress == nil else {
+            model.message = language.text("Another file operation is still in progress.")
+            return
+        }
         guard let root = model.root else { return }
         let panel = NSOpenPanel()
         panel.title = language.text(copying ? "Copy to Folder" : "Move to Folder")
@@ -2482,10 +2541,10 @@ struct NotesWindow: View {
             model.message = language.text("Choose a destination inside the current notes workspace.")
             return
         }
-        if copying {
-            _ = model.copyItem(item, to: folder)
-        } else {
-            Task { @MainActor in
+        Task { @MainActor in
+            if copying {
+                _ = await model.copyItem(item, to: folder)
+            } else {
                 _ = await model.moveItem(item, to: folder)
             }
         }
@@ -2789,7 +2848,12 @@ struct NotesWindow: View {
                 source: $model.draft,
                 selectedID: $mindMapSelectionLine,
                 revision: model.draftRevision,
-                openLink: { target in _ = model.openKnowledgeLink(target) },
+                openLink: { target in
+                    _ = model.openKnowledgeLink(
+                        target,
+                        onUnresolved: { beginLinkRepair(target) }
+                    )
+                },
                 connectNote: { nodeID in beginMindMapLink(nodeID: nodeID) },
                 connectSection: { nodeID in beginMindMapLink(nodeID: nodeID, section: true) },
                 createLinkedNote: { nodeID in createLinkedNoteFromMindMap(nodeID: nodeID) },
@@ -2984,6 +3048,7 @@ struct NotesWindow: View {
                             fontAdjustment: fontAdjustment,
                             lineAdjustment: lineAdjustment,
                             widthAdjustment: widthAdjustment,
+                            onRepairLink: { beginLinkRepair($0) },
                             cache: $previewCache)
             // A different note must never briefly display another file's parsed document.
             .id(model.selected?.path ?? model.previewSource?.documentId ?? "empty")

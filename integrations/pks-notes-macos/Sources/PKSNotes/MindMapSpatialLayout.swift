@@ -82,9 +82,9 @@ enum MindMapSpatialLayout {
         }
 
         // Compute visible text height once per layout, not once per subtree
-        // traversal or SwiftUI redraw. Card width remains column-safe.
-        // The canvas shows up to five lines; longer titles expose their full
-        // text on hover instead of silently overlapping adjacent nodes.
+        // traversal or SwiftUI redraw. Card width remains column-safe and the
+        // full Markdown node title remains readable instead of being clipped
+        // to an arbitrary line count.
         var nodeSizes: [Int: CGSize] = [:]
         nodeSizes.reserveCapacity(nodes.count)
         for node in nodes {
@@ -93,7 +93,7 @@ enum MindMapSpatialLayout {
             let baseHeight: CGFloat = (isRoot ? 58 : 50) * density.scale
             var height = baseHeight
             if node.title.count > 8 {
-                let label = String(MindMapOutline.presentation(for: node.title).title.prefix(240))
+                let label = MindMapOutline.presentation(for: node.title).title
                 let font = NSFont.systemFont(
                     ofSize: isRoot ? 16 : 14,
                     weight: isRoot ? .semibold : .medium
@@ -106,8 +106,7 @@ enum MindMapSpatialLayout {
                     options: [.usesLineFragmentOrigin, .usesFontLeading],
                     attributes: [.font: font]
                 )
-                let lineHeight = font.ascender - font.descender + font.leading
-                height = max(baseHeight, ceil(min(bounds.height, lineHeight * 5) + 20))
+                height = max(baseHeight, ceil(bounds.height + 20))
             }
             nodeSizes[node.id] = CGSize(width: width, height: height)
         }

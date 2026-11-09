@@ -290,7 +290,10 @@ extension MindMapOutline {
         return ranges
     }
 
-    private static func parsedLinks(in title: String) -> [ParsedLink] {
+    private static func parsedLinks(
+        in title: String,
+        includeImages: Bool = false
+    ) -> [ParsedLink] {
         var parsed: [ParsedLink] = []
         let fullRange = NSRange(title.startIndex..<title.endIndex, in: title)
         let nsTitle = title as NSString
@@ -298,8 +301,8 @@ extension MindMapOutline {
 
         for match in wikiLinkRegex.matches(in: title, range: fullRange) {
             let start = match.range.location
-            guard (start == 0 || (nsTitle.character(at: start - 1) != 33
-                                   && nsTitle.character(at: start - 1) != 92)),
+            guard (start == 0 || (nsTitle.character(at: start - 1) != 92
+                                   && (includeImages || nsTitle.character(at: start - 1) != 33))),
                   !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }),
                   let labelRange = Range(match.range(at: 1), in: title) else { continue }
             let raw = String(title[labelRange])
@@ -321,8 +324,8 @@ extension MindMapOutline {
 
         for match in markdownLinkRegex.matches(in: title, range: fullRange) {
             let start = match.range.location
-            guard (start == 0 || (nsTitle.character(at: start - 1) != 33
-                                   && nsTitle.character(at: start - 1) != 92)),
+            guard (start == 0 || (nsTitle.character(at: start - 1) != 92
+                                   && (includeImages || nsTitle.character(at: start - 1) != 33))),
                   !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 })
             else { continue }
             guard let labelRange = Range(match.range(at: 1), in: title),
@@ -372,24 +375,42 @@ extension MindMapOutline {
     }
 
     /// Explicit repair using the existing canonical link parser and Markdown writer.
-    /// Link labels, images, fenced code and unrelated text remain unchanged.
-    static func retargetLinks(in source: String, from oldTarget: String, to newTarget: String) -> String? {
+    /// Images stay outside knowledge-link semantics by default; path relocation
+    /// explicitly opts them in so attachment references survive file moves.
+    static func retargetLinks(
+        in source: String,
+        from oldTarget: String,
+        to newTarget: String,
+        includeImages: Bool = false
+    ) -> String? {
         guard !oldTarget.isEmpty, !newTarget.isEmpty,
               !newTarget.contains("]"), !newTarget.contains(")"),
               !newTarget.contains("|"), !newTarget.contains("\n"),
               !newTarget.contains("\r") else { return nil }
-        let touched = Set(linkOccurrences(in: source)
+        let touched = Set(linkOccurrences(in: source, includeImages: includeImages)
             .filter { $0.link.target == oldTarget }
             .map(\.lineIndex))
         guard !touched.isEmpty else { return nil }
         var lines = source.components(separatedBy: "\n")
         for lineIndex in touched {
             let changed = NSMutableString(string: lines[lineIndex])
-            let matches = parsedLinks(in: lines[lineIndex])
+            let matches = parsedLinks(in: lines[lineIndex], includeImages: includeImages)
                 .filter { $0.link.target == oldTarget }
                 .sorted { $0.targetRange.location > $1.targetRange.location }
             for match in matches {
-                changed.replaceCharacters(in: match.targetRange, with: newTarget)
+                let full = changed.substring(with: match.range)
+                let isWiki = full.hasPrefix("[[") && full.hasSuffix("]]")
+                let hasAlias = isWiki && full.dropFirst(2).dropLast(2).contains("|")
+                let isImage = match.range.location > 0
+                    && changed.character(at: match.range.location - 1) == 33
+                if isWiki && !hasAlias && !isImage {
+                    changed.replaceCharacters(
+                        in: match.range,
+                        with: "[[\(newTarget)|\(match.link.label)]]"
+                    )
+                } else {
+                    changed.replaceCharacters(in: match.targetRange, with: newTarget)
+                }
             }
             lines[lineIndex] = changed as String
         }
@@ -400,7 +421,10 @@ extension MindMapOutline {
     /// Backlinks reuse this parse result; there is no second occurrence index.
     /// Fenced code blocks are skipped so example markup never reports as a
     /// real backlink — matching the outgoing-link parser's fence handling.
-    static func linkOccurrences(in markdown: String) -> [MarkdownLinkOccurrence] {
+    static func linkOccurrences(
+        in markdown: String,
+        includeImages: Bool = false
+    ) -> [MarkdownLinkOccurrence] {
         var result: [MarkdownLinkOccurrence] = []
         var fenceMarker: Character?
         for (lineIndex, line) in markdown.components(separatedBy: "\n").enumerated() {
@@ -413,8 +437,8 @@ extension MindMapOutline {
             }
             guard fenceMarker == nil,
                   line.contains("["), line.contains("]") else { continue }
-            for link in links(in: line) {
-                result.append(.init(link: link, lineIndex: lineIndex))
+            for item in parsedLinks(in: line, includeImages: includeImages) {
+                result.append(.init(link: item.link, lineIndex: lineIndex))
             }
         }
         return result

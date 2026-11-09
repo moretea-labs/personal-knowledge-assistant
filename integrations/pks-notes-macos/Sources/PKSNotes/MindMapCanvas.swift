@@ -1008,7 +1008,6 @@ struct MindMapCanvas: View {
                     .font(.system(size: node.depth == 0 ? 16 : 14,
                                   weight: node.depth == 0 ? .semibold : .medium,
                                   design: mapStyle.fontDesign))
-                    .lineLimit(5)
                     .fixedSize(horizontal: false, vertical: true)
                     .help(visibleTitle)
                     .accessibilityIdentifier("pks-mind-map-node-\(node.id)")

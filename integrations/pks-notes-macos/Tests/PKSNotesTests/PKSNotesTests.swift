@@ -1025,6 +1025,15 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(model.message?.contains(AppLanguage.current.text("Cannot open the note")) == true)
     }
 
+    func testCanonicalWikiTargetEscapesParenthesesForMarkdownDestinations() throws {
+        let root = URL(fileURLWithPath: "/tmp/Vault", isDirectory: true)
+        let target = root.appendingPathComponent("Research (draft).md")
+        XCTAssertEqual(
+            WorkspaceFiles.canonicalWikiTarget(for: target, in: root),
+            "/Research%20%28draft%29"
+        )
+    }
+
     func testCanonicalWikiTargetIsRootRelativeEncodedAndRoundTrips() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -2162,10 +2171,11 @@ extension PKSNotesTests {
         model.openNote(note)
         await waitForNote(model, note)
 
-        let copied = model.copyItem(note, to: copies)
+        let copied = await model.copyItem(note, to: copies)
         XCTAssertEqual(copied, copies.appendingPathComponent("Note.md"))
         XCTAssertEqual(try String(contentsOf: copied!, encoding: .utf8), "# Original")
-        XCTAssertNil(model.copyItem(note, to: outside))
+        let outsideCopy = await model.copyItem(note, to: outside)
+        XCTAssertNil(outsideCopy)
 
         let moved = await model.moveItem(note, to: archive, navigationDecision: .discard)
         XCTAssertEqual(moved, archive.appendingPathComponent("Note.md"))
@@ -2175,7 +2185,7 @@ extension PKSNotesTests {
 
         // The workspace root is a valid destination even though path containment
         // intentionally excludes root itself when validating document paths.
-        let copiedToRoot = model.copyItem(copied!, to: root)
+        let copiedToRoot = await model.copyItem(copied!, to: root)
         XCTAssertEqual(copiedToRoot, note)
         XCTAssertEqual(try String(contentsOf: copiedToRoot!, encoding: .utf8), "# Original")
         try fm.removeItem(at: copiedToRoot!)
@@ -2210,7 +2220,8 @@ extension PKSNotesTests {
         let descendantMove = await model.moveItem(parent, to: child, navigationDecision: .discard)
         XCTAssertNil(descendantMove)
         XCTAssertTrue(fm.fileExists(atPath: parent.path))
-        XCTAssertNil(model.copyItem(parent, to: child))
+        let descendantCopy = await model.copyItem(parent, to: child)
+        XCTAssertNil(descendantCopy)
         XCTAssertTrue(fm.fileExists(atPath: parent.path))
     }
 }

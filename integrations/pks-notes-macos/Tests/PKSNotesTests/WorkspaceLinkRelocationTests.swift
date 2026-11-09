@@ -127,4 +127,154 @@ final class WorkspaceLinkRelocationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: moved, encoding: .utf8), "[Reference](/Reference)")
         XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "# Reference")
     }
+    @MainActor
+    func testRenameRepairsIncomingBasenameLinkUsingFreshVaultCandidates() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let target = root.appendingPathComponent("Target.md")
+        let renamed = root.appendingPathComponent("Renamed.md")
+        let ref = root.appendingPathComponent("Reference.md")
+        try "# Target".write(to: target, atomically: true, encoding: .utf8)
+        try "See [[Target]]".write(to: ref, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        let result = await model.renameItem(target, to: "Renamed")
+
+        XCTAssertEqual(result, renamed)
+        XCTAssertEqual(try String(contentsOf: ref, encoding: .utf8), "See [[/Renamed|Target]]")
+    }
+
+    @MainActor
+    func testMoveAttachmentRepairsMarkdownImageReferenceWithoutCreatingKnowledgeLink() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let assets = root.appendingPathComponent("assets", isDirectory: true)
+        let archive = root.appendingPathComponent("archive", isDirectory: true)
+        try fm.createDirectory(at: assets, withIntermediateDirectories: true)
+        try fm.createDirectory(at: archive, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = root.appendingPathComponent("Note.md")
+        let image = assets.appendingPathComponent("cover.png")
+        let movedImage = archive.appendingPathComponent("cover.png")
+        try "![Cover](assets/cover.png)".write(to: note, atomically: true, encoding: .utf8)
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: image)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        let result = await model.moveItem(image, to: archive)
+
+        XCTAssertEqual(result, movedImage)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "![Cover](/archive/cover.png)")
+        XCTAssertTrue(MindMapOutline.knowledgeLinks(in: try String(contentsOf: note, encoding: .utf8)).isEmpty)
+    }
+
+    @MainActor
+    func testCopyMarkdownAcrossFoldersPreservesRelativeTargetSemantics() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sourceFolder = root.appendingPathComponent("Source", isDirectory: true)
+        let copies = root.appendingPathComponent("Copies", isDirectory: true)
+        try fm.createDirectory(at: sourceFolder, withIntermediateDirectories: true)
+        try fm.createDirectory(at: copies, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = sourceFolder.appendingPathComponent("Note.md")
+        let target = sourceFolder.appendingPathComponent("Reference.md")
+        try "# Reference".write(to: target, atomically: true, encoding: .utf8)
+        try "[Reference](Reference.md)".write(to: note, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        let result = await model.copyItem(note, to: copies)
+        let copied = copies.appendingPathComponent("Note.md")
+
+        XCTAssertEqual(result, copied)
+        XCTAssertEqual(try String(contentsOf: copied, encoding: .utf8), "[Reference](/Source/Reference)")
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "[Reference](Reference.md)")
+    }
+
+    @MainActor
+    func testCopyFolderPreservesInternalTopologyAndRebasesExternalRelativeLinks() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let bundle = root.appendingPathComponent("Bundle", isDirectory: true)
+        let assets = bundle.appendingPathComponent("assets", isDirectory: true)
+        let copies = root.appendingPathComponent("Copies", isDirectory: true)
+        try fm.createDirectory(at: assets, withIntermediateDirectories: true)
+        try fm.createDirectory(at: copies, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = bundle.appendingPathComponent("Note.md")
+        let inside = bundle.appendingPathComponent("Inside.md")
+        let external = root.appendingPathComponent("External.md")
+        let externalImage = root.appendingPathComponent("cover.png")
+        let internalImage = assets.appendingPathComponent("inside.png")
+        try "# Inside".write(to: inside, atomically: true, encoding: .utf8)
+        try "# External".write(to: external, atomically: true, encoding: .utf8)
+        try Data([1]).write(to: externalImage)
+        try Data([2]).write(to: internalImage)
+        try """
+        [Inside](Inside.md)
+        [Root inside](/Bundle/Inside.md)
+        [External](../External.md)
+        ![Internal image](assets/inside.png)
+        ![External image](../cover.png)
+        """.write(to: note, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        let result = await model.copyItem(bundle, to: copies)
+        let copiedBundle = copies.appendingPathComponent("Bundle", isDirectory: true)
+        let copiedNote = copiedBundle.appendingPathComponent("Note.md")
+        let copiedBody = try String(contentsOf: copiedNote, encoding: .utf8)
+
+        XCTAssertEqual(result?.standardizedFileURL.path, copiedBundle.standardizedFileURL.path)
+        XCTAssertTrue(copiedBody.contains("[Inside](Inside.md)"))
+        XCTAssertTrue(copiedBody.contains("[Root inside](/Copies/Bundle/Inside)"))
+        XCTAssertTrue(copiedBody.contains("[External](/External)"))
+        XCTAssertTrue(copiedBody.contains("![Internal image](assets/inside.png)"))
+        XCTAssertTrue(copiedBody.contains("![External image](/cover.png)"))
+        XCTAssertEqual(
+            try String(contentsOf: note, encoding: .utf8),
+            """
+            [Inside](Inside.md)
+            [Root inside](/Bundle/Inside.md)
+            [External](../External.md)
+            ![Internal image](assets/inside.png)
+            ![External image](../cover.png)
+            """
+        )
+    }
+
+    @MainActor
+    func testCopyCurrentDirtyMarkdownSavesCanonicalDraftBeforeCopy() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let copies = root.appendingPathComponent("Copies", isDirectory: true)
+        try fm.createDirectory(at: copies, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = root.appendingPathComponent("Note.md")
+        try "# Old".write(to: note, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(note)
+        for _ in 0..<80 where model.selected?.standardizedFileURL != note.standardizedFileURL {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.selected?.standardizedFileURL, note.standardizedFileURL)
+        model.draft = "# New unsaved draft"
+
+        let copied = await model.copyItem(note, to: copies)
+        XCTAssertEqual(copied, copies.appendingPathComponent("Note.md"))
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "# New unsaved draft")
+        XCTAssertEqual(try String(contentsOf: copied!, encoding: .utf8), "# New unsaved draft")
+    }
+
 }

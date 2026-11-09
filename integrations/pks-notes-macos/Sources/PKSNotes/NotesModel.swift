@@ -344,7 +344,32 @@ enum WorkspaceFiles {
         guard !relative.isEmpty else { return nil }
 
         var allowed = CharacterSet.urlPathAllowed
-        allowed.remove(charactersIn: "#?[]|%")
+        // This canonical target is also reused when repairing ordinary
+        // Markdown destinations, where raw parentheses terminate the URL.
+        allowed.remove(charactersIn: "#?[]|%()")
+        guard let encoded = relative.addingPercentEncoding(withAllowedCharacters: allowed),
+              !encoded.isEmpty else { return nil }
+        return "/" + encoded
+    }
+
+    /// Canonical workspace-local target for a linkable file. Markdown keeps
+    /// the existing extensionless Wiki target; PDFs and other regular files
+    /// retain their extension. This is path canonicalization only—the caller
+    /// decides whether the destination must already exist.
+    static func canonicalLinkTarget(for target: URL, in root: URL) -> String? {
+        let canonicalRoot = root.standardizedFileURL
+        let canonicalTarget = target.standardizedFileURL
+        guard contains(canonicalTarget, in: canonicalRoot) else { return nil }
+        if ["md", "markdown"].contains(canonicalTarget.pathExtension.lowercased()) {
+            return canonicalWikiTarget(for: canonicalTarget, in: canonicalRoot)
+        }
+
+        let prefix = canonicalRoot.path + "/"
+        guard canonicalTarget.path.hasPrefix(prefix) else { return nil }
+        let relative = String(canonicalTarget.path.dropFirst(prefix.count))
+        guard !relative.isEmpty else { return nil }
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "#?[]|%()")
         guard let encoded = relative.addingPercentEncoding(withAllowedCharacters: allowed),
               !encoded.isEmpty else { return nil }
         return "/" + encoded
@@ -885,6 +910,10 @@ final class NotesModel: ObservableObject {
         }
     }
     @Published private(set) var autoSavePending = false
+    /// UI-only ownership marker for the one async file-operation path.
+    /// Filesystem state remains authoritative; this prevents overlapping
+    /// rename/move/copy mutations while hydration/link preparation is awaiting.
+    @Published private(set) var fileOperationInProgress: URL?
     @Published private(set) var baseline: String = ""
     @Published private(set) var externalTitle: String?
     @Published private(set) var externalBody: String? {
@@ -2123,6 +2152,28 @@ final class NotesModel: ObservableObject {
         }
     }
 
+    /// Roll back a file created by this process only when it is still exactly
+    /// the content we created. This is not a general delete path and never
+    /// removes an existing/user-modified note.
+    @discardableResult
+    func rollbackNewNoteIfUnchanged(_ note: URL, expectedContent: String) -> Bool {
+        guard let root,
+              WorkspaceFiles.contains(note, in: root),
+              ["md", "markdown"].contains(note.pathExtension.lowercased()),
+              let current = try? String(contentsOf: note, encoding: .utf8),
+              current == expectedContent else { return false }
+        var info = Darwin.stat()
+        guard note.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else { return false }
+        do {
+            try FileManager.default.removeItem(at: note)
+            scheduleFilesystemMutationRefresh(parentFolders: [note.deletingLastPathComponent()])
+            return true
+        } catch {
+            return false
+        }
+    }
+
     @discardableResult
     func newFolder(named enteredName: String, in parentFolder: URL? = nil) -> URL? {
         guard let root else {
@@ -2237,7 +2288,10 @@ final class NotesModel: ObservableObject {
     }
 
     @discardableResult
-    func openKnowledgeLink(_ target: String) -> Bool {
+    func openKnowledgeLink(
+        _ target: String,
+        onUnresolved: (() -> Void)? = nil
+    ) -> Bool {
         let value = target.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return false }
 
@@ -2248,7 +2302,8 @@ final class NotesModel: ObservableObject {
             return true
         }
         guard let root, let selected else {
-            message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
+            if let onUnresolved { onUnresolved() }
+            else { message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.") }
             return false
         }
 
@@ -2277,7 +2332,8 @@ final class NotesModel: ObservableObject {
         }
 
         guard !globalFileIndexReady else {
-            message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
+            if let onUnresolved { onUnresolved() }
+            else { message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.") }
             return false
         }
 
@@ -2290,7 +2346,8 @@ final class NotesModel: ObservableObject {
                   self.root == root,
                   self.selected == sourceNote else { return }
             guard indexReady else {
-                self.message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
+                if let onUnresolved { onUnresolved() }
+                else { self.message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.") }
                 return
             }
 
@@ -2302,7 +2359,8 @@ final class NotesModel: ObservableObject {
                 candidates: candidateIndex.markdownFiles,
                 candidateBasenames: candidateIndex.byBasename
             ) else {
-                self.message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.")
+                if let onUnresolved { onUnresolved() }
+                else { self.message = AppLanguage.current.text("Link target not available or is ambiguous in this workspace.") }
                 return
             }
 
@@ -2324,9 +2382,12 @@ final class NotesModel: ObservableObject {
 
     /// Markdown preview and relationship panels use the same resolver, fallback
     /// index, Markdown heading navigation and PDF anchor handling.
-    func openInternalLink(_ url: URL) -> Bool {
+    func openInternalLink(
+        _ url: URL,
+        onUnresolved: (() -> Void)? = nil
+    ) -> Bool {
         guard url.scheme == nil || url.isFileURL else { return false }
-        return openKnowledgeLink(url.relativeString)
+        return openKnowledgeLink(url.relativeString, onUnresolved: onUnresolved)
     }
 
     /// Only owned regular files and real directories inside the active vault
@@ -2433,20 +2494,66 @@ final class NotesModel: ObservableObject {
         let oldSelected = selected
         let oldPDF = previewPDF
         let oldRequested = requestedNote
+        let oldDraftRevision = draftRevision
         let affected = isInside(oldSelected, item: target)
             || isInside(oldPDF, item: target) || isInside(oldRequested, item: target)
         if affected && !confirmLeavingNote(decision: navigationDecision) { return nil }
+        if !affected && isDirty {
+            save()
+            guard !isDirty else { return nil }
+        }
+        guard fileOperationInProgress == nil else {
+            message = AppLanguage.current.text("Another file operation is still in progress.")
+            return nil
+        }
+        fileOperationInProgress = target
+        defer {
+            if fileOperationInProgress?.standardizedFileURL == target {
+                fileOperationInProgress = nil
+            }
+        }
+        invalidateGlobalFileIndex()
+        guard await ensureGlobalFileIndex(), self.root == root else {
+            message = AppLanguage.current.text("The file changed while preparing the path change. Try again.")
+            return nil
+        }
+        let candidateFiles = globalLinkCandidates.markdownFiles
+        let candidateBasenames = globalLinkCandidates.byBasename
         let ownLinkRepair: WorkspaceLinkRelocation.Prepared?
         do {
             ownLinkRepair = isFolder ? nil
-                : try await WorkspaceLinkRelocation.prepare(from: target, to: destination, root: root)
+                : try await WorkspaceLinkRelocation.prepare(
+                    from: target,
+                    to: destination,
+                    root: root,
+                    markdownFiles: candidateFiles,
+                    candidateBasenames: candidateBasenames
+                )
         } catch {
             message = "\(AppLanguage.current.text("Could not prepare path change")): \(error.localizedDescription)"
             return nil
         }
+        let relatedLinkRepair = await WorkspaceLinkRelocation.prepareRelatedSources(
+            from: target,
+            to: destination,
+            movingIsDirectory: isFolder,
+            root: root,
+            markdownFiles: candidateFiles,
+            candidateBasenames: candidateBasenames
+        )
+        let selectedRelatedEdit = oldSelected.flatMap { selected in
+            relatedLinkRepair.edits.first {
+                $0.source.standardizedFileURL == selected.standardizedFileURL
+            }
+        }
         guard selected == oldSelected, previewPDF == oldPDF, requestedNote == oldRequested,
-              ownLinkRepair.map({ WorkspaceLinkRelocation.sourceIsCurrent($0, at: target) }) ?? true else {
-            message = AppLanguage.current.text("The file changed while preparing the path change. Try again.")
+              (!affected || draftRevision == oldDraftRevision),
+              (selectedRelatedEdit == nil || (!isDirty && draftRevision == oldDraftRevision)),
+              ownLinkRepair.map({ WorkspaceLinkRelocation.sourceIsCurrent($0, at: target) }) ?? true,
+              WorkspaceLinkRelocation.relatedSourcesAreCurrent(relatedLinkRepair) else {
+            message = selectedRelatedEdit != nil && isDirty
+                ? AppLanguage.current.text("Save or resolve the current note before changing this path because one of its links must be updated.")
+                : AppLanguage.current.text("The file changed while preparing the path change. Try again.")
             return nil
         }
 
@@ -2459,6 +2566,17 @@ final class NotesModel: ObservableObject {
         do {
             try FileManager.default.moveItem(at: target, to: destination)
             let repaired = ownLinkRepair.map { WorkspaceLinkRelocation.apply($0, to: destination) }
+            let relatedRepaired = WorkspaceLinkRelocation.apply(relatedLinkRepair)
+            if relatedRepaired, !affected, let edit = selectedRelatedEdit,
+               selected?.standardizedFileURL == edit.source.standardizedFileURL,
+               draft == edit.original, baseline == edit.original {
+                autoSaveTask?.cancel()
+                baseline = edit.updated
+                draft = edit.updated
+                autoSaveTask?.cancel()
+                autoSavePending = false
+                savedFileStamp = WorkspaceFiles.fileStamp(edit.destination)
+            }
             if let newSelected = rebased(oldSelected) ?? rebased(oldRequested) {
                 loadNote(newSelected)
             } else if let newPDF = rebased(oldPDF) {
@@ -2479,10 +2597,14 @@ final class NotesModel: ObservableObject {
                     parentFolders: [target.deletingLastPathComponent()]
                 )
             }
-            if repaired == false {
-                message = AppLanguage.current.text("Moved, but some outgoing links could not be preserved. Review the note.")
-            } else if isFolder || ["md", "markdown"].contains(destination.pathExtension.lowercased()) {
-                message = AppLanguage.current.text("Path changed. Incoming links from other notes may need repair.")
+            let skippedLinkSources = relatedLinkRepair.skippedCloudFiles
+                + relatedLinkRepair.skippedUnavailableFiles
+            if repaired == false || !relatedRepaired {
+                message = AppLanguage.current.text("Path changed, but some related links could not be preserved. Review affected notes.")
+            } else if skippedLinkSources > 0 {
+                message = "\(AppLanguage.current.text("Path changed. Some cloud-only or unavailable notes were not checked for links.")) (\(skippedLinkSources))"
+            } else if ownLinkRepair != nil || !relatedLinkRepair.edits.isEmpty {
+                message = AppLanguage.current.text("Path changed and related links were updated.")
             } else {
                 message = nil
             }
@@ -2494,7 +2616,7 @@ final class NotesModel: ObservableObject {
     }
 
     @discardableResult
-    func copyItem(_ item: URL, to directory: URL) -> URL? {
+    func copyItem(_ item: URL, to directory: URL) async -> URL? {
         let target = item.standardizedFileURL
         let folder = directory.standardizedFileURL
         guard canManage(target), let root,
@@ -2520,15 +2642,97 @@ final class NotesModel: ObservableObject {
             message = AppLanguage.current.text("The destination already contains an item with this name."); return nil
         }
 
-        do {
-            try FileManager.default.copyItem(at: target, to: destination)
-            scheduleFilesystemMutationRefresh(parentFolders: [folder])
-            message = nil
-            return destination
-        } catch {
-            message = "\(AppLanguage.current.text("Could not copy item")): \(error.localizedDescription)"
+        let selectedInsideCopy = isInside(selected, item: target)
+        if selectedInsideCopy && isDirty {
+            save()
+            guard !isDirty else { return nil }
+        }
+        guard fileOperationInProgress == nil else {
+            message = AppLanguage.current.text("Another file operation is still in progress.")
             return nil
         }
+        fileOperationInProgress = target
+        defer {
+            if fileOperationInProgress?.standardizedFileURL == target {
+                fileOperationInProgress = nil
+            }
+        }
+
+        let selectedBeforeCopy = selected
+        let draftRevisionBeforeCopy = draftRevision
+        let isMarkdown = ["md", "markdown"].contains(target.pathExtension.lowercased())
+        var directRepair: WorkspaceLinkRelocation.Prepared?
+        var folderRepair: WorkspaceLinkRelocation.RelatedPlan?
+
+        if targetIsDirectory || isMarkdown {
+            invalidateGlobalFileIndex()
+            guard await ensureGlobalFileIndex(), self.root == root else {
+                message = AppLanguage.current.text("The file changed while preparing the file operation. Try again.")
+                return nil
+            }
+            let candidateFiles = globalLinkCandidates.markdownFiles
+            let candidateBasenames = globalLinkCandidates.byBasename
+            if targetIsDirectory {
+                folderRepair = await WorkspaceLinkRelocation.prepareCopiedSources(
+                    from: target,
+                    to: destination,
+                    root: root,
+                    markdownFiles: candidateFiles,
+                    candidateBasenames: candidateBasenames
+                )
+            } else {
+                do {
+                    directRepair = try await WorkspaceLinkRelocation.prepare(
+                        from: target,
+                        to: destination,
+                        root: root,
+                        markdownFiles: candidateFiles,
+                        candidateBasenames: candidateBasenames
+                    )
+                } catch {
+                    message = "\(AppLanguage.current.text("Could not prepare file operation")): \(error.localizedDescription)"
+                    return nil
+                }
+            }
+        }
+
+        guard selected == selectedBeforeCopy,
+              (!selectedInsideCopy || draftRevision == draftRevisionBeforeCopy),
+              directRepair.map({ WorkspaceLinkRelocation.sourceIsCurrent($0, at: target) }) ?? true,
+              folderRepair.map(WorkspaceLinkRelocation.relatedSourcesAreCurrent) ?? true else {
+            message = AppLanguage.current.text("The file changed while preparing the file operation. Try again.")
+            return nil
+        }
+
+        let copyError = await Task.detached(priority: .userInitiated) { () -> String? in
+            do {
+                try FileManager.default.copyItem(at: target, to: destination)
+                return nil
+            } catch {
+                return error.localizedDescription
+            }
+        }.value
+        if let copyError {
+            message = "\(AppLanguage.current.text("Could not copy item")): \(copyError)"
+            return nil
+        }
+
+        let directRepaired = directRepair.map { WorkspaceLinkRelocation.apply($0, to: destination) }
+        let folderRepaired = folderRepair.map(WorkspaceLinkRelocation.apply)
+        scheduleFilesystemMutationRefresh(parentFolders: [folder])
+
+        let skippedLinkSources = (folderRepair?.skippedCloudFiles ?? 0)
+            + (folderRepair?.skippedUnavailableFiles ?? 0)
+        if directRepaired == false || folderRepaired == false {
+            message = AppLanguage.current.text("Copied, but some links could not be preserved. Review the copy.")
+        } else if skippedLinkSources > 0 {
+            message = "\(AppLanguage.current.text("Copied. Some cloud-only or unavailable notes were not checked for relative links.")) (\(skippedLinkSources))"
+        } else if directRepair != nil || !(folderRepair?.edits.isEmpty ?? true) {
+            message = AppLanguage.current.text("Copied and related links were updated.")
+        } else {
+            message = nil
+        }
+        return destination
     }
 
     @discardableResult
@@ -2563,20 +2767,66 @@ final class NotesModel: ObservableObject {
         let oldSelected = selected
         let oldPDF = previewPDF
         let oldRequested = requestedNote
+        let oldDraftRevision = draftRevision
         let affected = isInside(oldSelected, item: target)
             || isInside(oldPDF, item: target) || isInside(oldRequested, item: target)
         if affected && !confirmLeavingNote(decision: navigationDecision) { return nil }
+        if !affected && isDirty {
+            save()
+            guard !isDirty else { return nil }
+        }
+        guard fileOperationInProgress == nil else {
+            message = AppLanguage.current.text("Another file operation is still in progress.")
+            return nil
+        }
+        fileOperationInProgress = target
+        defer {
+            if fileOperationInProgress?.standardizedFileURL == target {
+                fileOperationInProgress = nil
+            }
+        }
+        invalidateGlobalFileIndex()
+        guard await ensureGlobalFileIndex(), self.root == root else {
+            message = AppLanguage.current.text("The file changed while preparing the path change. Try again.")
+            return nil
+        }
+        let candidateFiles = globalLinkCandidates.markdownFiles
+        let candidateBasenames = globalLinkCandidates.byBasename
         let ownLinkRepair: WorkspaceLinkRelocation.Prepared?
         do {
             ownLinkRepair = targetIsDirectory ? nil
-                : try await WorkspaceLinkRelocation.prepare(from: target, to: destination, root: root)
+                : try await WorkspaceLinkRelocation.prepare(
+                    from: target,
+                    to: destination,
+                    root: root,
+                    markdownFiles: candidateFiles,
+                    candidateBasenames: candidateBasenames
+                )
         } catch {
             message = "\(AppLanguage.current.text("Could not prepare path change")): \(error.localizedDescription)"
             return nil
         }
+        let relatedLinkRepair = await WorkspaceLinkRelocation.prepareRelatedSources(
+            from: target,
+            to: destination,
+            movingIsDirectory: targetIsDirectory,
+            root: root,
+            markdownFiles: candidateFiles,
+            candidateBasenames: candidateBasenames
+        )
+        let selectedRelatedEdit = oldSelected.flatMap { selected in
+            relatedLinkRepair.edits.first {
+                $0.source.standardizedFileURL == selected.standardizedFileURL
+            }
+        }
         guard selected == oldSelected, previewPDF == oldPDF, requestedNote == oldRequested,
-              ownLinkRepair.map({ WorkspaceLinkRelocation.sourceIsCurrent($0, at: target) }) ?? true else {
-            message = AppLanguage.current.text("The file changed while preparing the path change. Try again.")
+              (!affected || draftRevision == oldDraftRevision),
+              (selectedRelatedEdit == nil || (!isDirty && draftRevision == oldDraftRevision)),
+              ownLinkRepair.map({ WorkspaceLinkRelocation.sourceIsCurrent($0, at: target) }) ?? true,
+              WorkspaceLinkRelocation.relatedSourcesAreCurrent(relatedLinkRepair) else {
+            message = selectedRelatedEdit != nil && isDirty
+                ? AppLanguage.current.text("Save or resolve the current note before changing this path because one of its links must be updated.")
+                : AppLanguage.current.text("The file changed while preparing the path change. Try again.")
             return nil
         }
 
@@ -2589,6 +2839,17 @@ final class NotesModel: ObservableObject {
         do {
             try FileManager.default.moveItem(at: target, to: destination)
             let repaired = ownLinkRepair.map { WorkspaceLinkRelocation.apply($0, to: destination) }
+            let relatedRepaired = WorkspaceLinkRelocation.apply(relatedLinkRepair)
+            if relatedRepaired, !affected, let edit = selectedRelatedEdit,
+               selected?.standardizedFileURL == edit.source.standardizedFileURL,
+               draft == edit.original, baseline == edit.original {
+                autoSaveTask?.cancel()
+                baseline = edit.updated
+                draft = edit.updated
+                autoSaveTask?.cancel()
+                autoSavePending = false
+                savedFileStamp = WorkspaceFiles.fileStamp(edit.destination)
+            }
             if let newSelected = rebased(oldSelected) ?? rebased(oldRequested) {
                 loadNote(newSelected)
             } else if let newPDF = rebased(oldPDF) {
@@ -2609,10 +2870,14 @@ final class NotesModel: ObservableObject {
                     parentFolders: [target.deletingLastPathComponent(), folder]
                 )
             }
-            if repaired == false {
-                message = AppLanguage.current.text("Moved, but some outgoing links could not be preserved. Review the note.")
-            } else if targetIsDirectory || ["md", "markdown"].contains(destination.pathExtension.lowercased()) {
-                message = AppLanguage.current.text("Path changed. Incoming links from other notes may need repair.")
+            let skippedLinkSources = relatedLinkRepair.skippedCloudFiles
+                + relatedLinkRepair.skippedUnavailableFiles
+            if repaired == false || !relatedRepaired {
+                message = AppLanguage.current.text("Path changed, but some related links could not be preserved. Review affected notes.")
+            } else if skippedLinkSources > 0 {
+                message = "\(AppLanguage.current.text("Path changed. Some cloud-only or unavailable notes were not checked for links.")) (\(skippedLinkSources))"
+            } else if ownLinkRepair != nil || !relatedLinkRepair.edits.isEmpty {
+                message = AppLanguage.current.text("Path changed and related links were updated.")
             } else {
                 message = nil
             }

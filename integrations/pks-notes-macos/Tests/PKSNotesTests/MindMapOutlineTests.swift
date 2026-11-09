@@ -121,6 +121,42 @@ extension MindMapOutlineTests {
         XCTAssertNil(MindMapOutline.retargetLinks(
             in: source, from: "/Notes/Missing", to: "/Notes/New"
         ))
+        XCTAssertEqual(
+            MindMapOutline.retargetLinks(
+                in: "See [[Old]]", from: "Old", to: "/Archive/New"
+            ),
+            "See [[/Archive/New|Old]]"
+        )
+        XCTAssertEqual(
+            MindMapOutline.retargetLinks(
+                in: "![[cover.png]]", from: "cover.png", to: "/assets/cover.png",
+                includeImages: true
+            ),
+            "![[/assets/cover.png]]"
+        )
+    }
+
+    func testRetargetLinksCanOptImagesIntoPathRepairWithoutChangingKnowledgeLinks() {
+        let source = "![Cover](assets/old.png) and ![[assets/old.png|Preview]] and [Reference](assets/old.png)"
+        let expected = "![Cover](/assets/new.png) and ![[/assets/new.png|Preview]] and [Reference](/assets/new.png)"
+
+        XCTAssertEqual(
+            MindMapOutline.retargetLinks(
+                in: source,
+                from: "assets/old.png",
+                to: "/assets/new.png",
+                includeImages: true
+            ),
+            expected
+        )
+        XCTAssertEqual(
+            MindMapOutline.linkOccurrences(in: source).map(\.link.target),
+            ["assets/old.png"]
+        )
+        XCTAssertEqual(
+            MindMapOutline.linkOccurrences(in: source, includeImages: true).map(\.link.target),
+            ["assets/old.png", "assets/old.png", "assets/old.png"]
+        )
     }
 
     func testPreviewWikiLinksIgnoreCodeAndKeepMarkdownSource() {
@@ -143,6 +179,10 @@ extension MindMapOutlineTests {
         let line = "![Cover](assets/cover.png) and [Reference](/Refs.md)"
         XCTAssertEqual(MindMapOutline.links(in: line),
                        [.init(label: "Reference", target: "/Refs.md")])
+        XCTAssertEqual(
+            MindMapOutline.linkOccurrences(in: line, includeImages: true).map(\.link.target),
+            ["assets/cover.png", "/Refs.md"]
+        )
         XCTAssertEqual(MindMapOutline.linkOccurrences(in: line).map(\.link.target),
                        ["/Refs.md"])
         XCTAssertEqual(MindMapOutline.presentation(for: line).title,
