@@ -1182,6 +1182,17 @@ struct MindMapCanvas: View {
             .disabled(editingNodeID != nil || !hasChildren)
             .accessibilityIdentifier("pks-mind-map-context-toggle-branch")
             Divider()
+            if let task = MindMapTaskNode.parse(node.title) {
+                Button(language.text("Toggle task completion"),
+                       systemImage: task.checked ? "checkmark.circle.fill" : "circle") {
+                    selectedID = node.id
+                    _ = performShortcut(.toggleTask)
+                    restoreCanvasFocusAfterMenu()
+                }
+                .disabled(editingNodeID != nil)
+                .accessibilityIdentifier("pks-mind-map-context-toggle-task")
+            }
+            Divider()
             Button(language.text("Bold node title"), systemImage: "bold") {
                 toggleTitleEmphasis(nodeID: node.id, marker: "**")
             }
