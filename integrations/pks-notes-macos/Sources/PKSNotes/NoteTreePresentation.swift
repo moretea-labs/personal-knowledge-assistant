@@ -89,12 +89,8 @@ enum NoteTreePresentation {
 
     static func sortQuickOpenEntries(_ entries: inout [QuickOpenEntry]) {
         entries.sort { lhs, rhs in
-            // Keep the index order consistent with the literal hasPrefix checks
-            // below. Natural numeric collation can interleave prefix matches
-            // (for example "Note 10") with non-prefix names ("Note 2").
-            if lhs.foldedName != rhs.foldedName {
-                return lhs.foldedName < rhs.foldedName
-            }
+            let foldedComparison = lhs.foldedName.localizedStandardCompare(rhs.foldedName)
+            if foldedComparison != .orderedSame { return foldedComparison == .orderedAscending }
             let nameComparison = lhs.item.name.localizedStandardCompare(rhs.item.name)
             if nameComparison != .orderedSame { return nameComparison == .orderedAscending }
             return lhs.insertionOrder < rhs.insertionOrder
@@ -115,79 +111,41 @@ enum NoteTreePresentation {
         return relative.isEmpty ? "Workspace Root" : relative
     }
 
-    /// Case/diacritic-insensitive native file matching, without another search index.
-    /// Name prefix matches precede name substring, then parent-folder path matches.
+    /// Case/diacritic-insensitive matching without another search index.
+    /// One bounded in-memory pass preserves natural ordering within each rank.
     static func quickOpen(_ entries: [QuickOpenEntry], query: String, limit: Int = 24) -> [NoteItem] {
         let search = fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !search.isEmpty, limit > 0 else { return [] }
 
-        var result: [NoteItem] = []
-        result.reserveCapacity(limit)
-
-        // Entries are sorted by foldedName, so the common exact/prefix path can
-        // jump straight to the first possible match instead of scanning the vault.
-        var index = quickOpenLowerBound(entries, search: search)
-
-        // Exact names always outrank longer prefix matches.
-        while index < entries.count, entries[index].foldedName == search {
-            result.append(entries[index].item)
-            if result.count == limit { return result }
-            index += 1
-        }
-
-        while index < entries.count, entries[index].foldedName.hasPrefix(search) {
-            result.append(entries[index].item)
-            if result.count == limit { return result }
-            index += 1
-        }
-
-        // Only uncommon substring/path queries pay the complete-index scan.
-        // Gather both lower-priority ranks in one pass so a path fallback does
-        // not traverse a large vault a second time.
-        let remaining = limit - result.count
+        var exactMatches: [NoteItem] = []
+        var prefixMatches: [NoteItem] = []
         var nameSubstringMatches: [NoteItem] = []
         var folderMatches: [NoteItem] = []
-        nameSubstringMatches.reserveCapacity(remaining)
-        folderMatches.reserveCapacity(remaining)
+        exactMatches.reserveCapacity(limit)
+        prefixMatches.reserveCapacity(limit)
+        nameSubstringMatches.reserveCapacity(limit)
+        folderMatches.reserveCapacity(limit)
 
         for entry in entries {
-            if entry.foldedName.hasPrefix(search) { continue }
-
-            if entry.foldedName.contains(search) {
-                nameSubstringMatches.append(entry.item)
-                if nameSubstringMatches.count == remaining {
-                    result.append(contentsOf: nameSubstringMatches)
-                    return result
-                }
-            } else if entry.foldedFolder.contains(search), folderMatches.count < remaining {
+            if entry.foldedName == search {
+                exactMatches.append(entry.item)
+                if exactMatches.count == limit { return exactMatches }
+            } else if entry.foldedName.hasPrefix(search) {
+                if prefixMatches.count < limit { prefixMatches.append(entry.item) }
+            } else if entry.foldedName.contains(search) {
+                if nameSubstringMatches.count < limit { nameSubstringMatches.append(entry.item) }
+            } else if entry.foldedFolder.contains(search), folderMatches.count < limit {
                 folderMatches.append(entry.item)
             }
         }
 
-        result.append(contentsOf: nameSubstringMatches)
-        if result.count == limit { return result }
-
-        for item in folderMatches {
-            result.append(item)
-            if result.count == limit { break }
+        var result = exactMatches
+        for matches in [prefixMatches, nameSubstringMatches, folderMatches] {
+            let remaining = limit - result.count
+            if remaining <= 0 { break }
+            result.append(contentsOf: matches.prefix(remaining))
         }
         return result
-    }
-
-    private static func quickOpenLowerBound(_ entries: [QuickOpenEntry], search: String) -> Int {
-        var lower = 0
-        var upper = entries.count
-        while lower < upper {
-            let middle = lower + (upper - lower) / 2
-            // Use the same lexicographic order as sortQuickOpenEntries so
-            // every literal prefix match remains in one searchable range.
-            if entries[middle].foldedName < search {
-                lower = middle + 1
-            } else {
-                upper = middle
-            }
-        }
-        return lower
     }
 
     static func quickOpen(_ files: [NoteItem], query: String, limit: Int = 24) -> [NoteItem] {

@@ -1219,6 +1219,21 @@ final class PKSNotesTests: XCTestCase {
         )
     }
 
+    func testQuickOpenPreservesNaturalNumericOrderingWithinPrefixMatches() {
+        let root = URL(fileURLWithPath: "/tmp/pks-quickopen-natural-order")
+        let files = [
+            NoteItem(url: root.appendingPathComponent("Note 10.md"), children: nil),
+            NoteItem(url: root.appendingPathComponent("Note 2.md"), children: nil)
+        ]
+        let entries = NoteTreePresentation.quickOpenEntries(files)
+
+        XCTAssertEqual(
+            NoteTreePresentation.quickOpen(entries, query: "note").map(\.name),
+            ["Note 2", "Note 10"],
+            "Quick Open should keep Finder-style natural numeric ordering within the same match rank."
+        )
+    }
+
     func testQuickOpenLocalSeedIncludesDeepKnownNotesWithoutDuplicates() {
         let root = URL(fileURLWithPath: "/tmp/pks-quickopen-seed")
         let visible = root.appendingPathComponent("Visible.md")
