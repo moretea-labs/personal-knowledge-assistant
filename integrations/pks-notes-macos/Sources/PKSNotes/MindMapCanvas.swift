@@ -321,7 +321,7 @@ struct MindMapCanvas: View {
                             .frame(
                                 width: max(viewport.size.width, mapLayout.size.width * zoom),
                                 height: max(viewport.size.height, mapLayout.size.height * zoom),
-                                alignment: .topLeading
+                                alignment: .center
                             )
                     }
                 }
@@ -346,7 +346,13 @@ struct MindMapCanvas: View {
                         .onEnded { _ in gestureBaseZoom = nil }
                 )
                     .onReceive(NotificationCenter.default.publisher(for: .pksMindMapFit)) { _ in
-                        fitToContent(viewport: viewport.size)
+                        guard fitToContent(viewport: viewport.size) else { return }
+                        Task { @MainActor in
+                            await Task.yield()
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                scroller.scrollTo("pks-mind-map-center", anchor: .center)
+                            }
+                        }
                     }
                     .onChange(of: selectedID) { _, selected in
                         guard let selected,
@@ -529,13 +535,17 @@ struct MindMapCanvas: View {
                 Button(language.text("Link Note"), systemImage: "doc.text") {
                     if let selectedID { connectNote(selectedID) }
                 }
+                .accessibilityIdentifier("pks-mind-map-toolbar-link-note")
                 Button(language.text("Link Section"), systemImage: "text.badge.plus") {
                     if let selectedID { connectSection(selectedID) }
                 }
+                .accessibilityIdentifier("pks-mind-map-toolbar-link-section")
                 Divider()
                 Button(language.text("Create Linked Note"), systemImage: "doc.badge.plus") {
                     if let selectedID { createLinkedNote(selectedID) }
+                    restoreCanvasFocusAfterMenu()
                 }
+                .accessibilityIdentifier("pks-mind-map-toolbar-create-linked-note")
             } label: {
                 Image(systemName: "link.badge.plus")
                 .frame(width: 30, height: 30)
@@ -590,51 +600,47 @@ struct MindMapCanvas: View {
                     _ = performShortcut(.deleteBranch)
                 }
                 .disabled(selectedID == nil)
+                Divider()
+                Menu {
+                    ForEach(MindMapVisualStyle.allCases) { style in
+                        Button {
+                            mapStyleID = style.rawValue
+                            restoreCanvasFocusAfterMenu()
+                        } label: {
+                            Label(language.text(style.label), systemImage: style.symbol)
+                            if mapStyle == style {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                        .accessibilityIdentifier("pks-mind-map-style-\(style.rawValue)")
+                    }
+                    Divider()
+                    Text(language.text("Layout Density"))
+                    ForEach(MindMapLayoutDensity.allCases) { density in
+                        Button {
+                            layoutDensityID = density.rawValue
+                            restoreCanvasFocusAfterMenu()
+                        } label: {
+                            Label(language.text(density.label), systemImage: density.symbol)
+                            if layoutDensity == density {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                        .accessibilityIdentifier("pks-mind-map-density-\(density.rawValue)")
+                    }
+                    Divider()
+                    Text(language.text("Appearance applies to all mind maps."))
+                } label: {
+                    Label(language.text("Appearance"), systemImage: "paintpalette")
+                }
+                .accessibilityIdentifier("pks-mind-map-style")
             } label: {
                 Image(systemName: "ellipsis.circle")
                 .frame(width: 30, height: 30)
             }
-            .disabled(selectedID == nil)
             .help(language.text("Node Actions"))
             .accessibilityLabel(language.text("Node Actions"))
             .accessibilityIdentifier("pks-mind-map-node-actions")
-
-            Menu {
-                ForEach(MindMapVisualStyle.allCases) { style in
-                    Button {
-                        mapStyleID = style.rawValue
-                        restoreCanvasFocusAfterMenu()
-                    } label: {
-                        Label(language.text(style.label), systemImage: style.symbol)
-                        if mapStyle == style {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                    .accessibilityIdentifier("pks-mind-map-style-\(style.rawValue)")
-                }
-                Divider()
-                Text(language.text("Layout Density"))
-                ForEach(MindMapLayoutDensity.allCases) { density in
-                    Button {
-                        layoutDensityID = density.rawValue
-                        restoreCanvasFocusAfterMenu()
-                    } label: {
-                        Label(language.text(density.label), systemImage: density.symbol)
-                        if layoutDensity == density {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                    .accessibilityIdentifier("pks-mind-map-density-\(density.rawValue)")
-                }
-                Divider()
-                Text(language.text("Appearance applies to all mind maps."))
-            } label: {
-                Image(systemName: "paintpalette")
-                    .frame(width: 30, height: 30)
-            }
-            .help(language.text("Mind Map Style"))
-            .accessibilityLabel(language.text("Mind Map Style"))
-            .accessibilityIdentifier("pks-mind-map-style")
 
             Divider().frame(height: 18)
 
@@ -878,6 +884,13 @@ struct MindMapCanvas: View {
                     .position(placement.center)
                     .id(placement.id)
             }
+
+            Color.clear
+                .frame(width: 1, height: 1)
+                .position(x: layout.size.width / 2, y: layout.size.height / 2)
+                .id("pks-mind-map-center")
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
         .frame(width: layout.size.width, height: layout.size.height, alignment: .topLeading)
     }
@@ -1143,14 +1156,18 @@ struct MindMapCanvas: View {
                 selectedID = node.id
                 connectNote(node.id)
             }
+            .accessibilityIdentifier("pks-mind-map-context-link-note")
             Button(language.text("Link Section"), systemImage: "text.badge.plus") {
                 selectedID = node.id
                 connectSection(node.id)
             }
+            .accessibilityIdentifier("pks-mind-map-context-link-section")
             Button(language.text("Create Linked Note"), systemImage: "doc.badge.plus") {
                 selectedID = node.id
                 createLinkedNote(node.id)
+                restoreCanvasFocusAfterMenu()
             }
+            .accessibilityIdentifier("pks-mind-map-context-create-linked-note")
             Button(language.text("Show in Markdown"), systemImage: "text.cursor") {
                 selectedID = node.id
                 revealSource(node.id)
@@ -1265,6 +1282,14 @@ struct MindMapCanvas: View {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
+            // NSOpenPanel grants a temporary security-scoped URL in the App Sandbox.
+            // Keep that access only for the read; the source package is never written.
+            let hasScopedAccess = url.startAccessingSecurityScopedResource()
+            defer {
+                if hasScopedAccess {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
             let markdown = try MindNodePackage.importOutline(from: url)
             if importOutline(markdown, url.deletingPathExtension().lastPathComponent) {
                 interchangeError = language.text("MindNode hierarchy imported into a new Markdown note. Themes, images, notes, tasks and cross-connections are not imported.")
@@ -1375,11 +1400,12 @@ struct MindMapCanvas: View {
         mapLayout = MindMapSpatialLayout.layout(filtered, density: layoutDensity, style: mapStyle)
     }
 
-    private func fitToContent(viewport: CGSize) {
-        guard !mapLayout.placements.isEmpty else { return }
+    private func fitToContent(viewport: CGSize) -> Bool {
+        guard !mapLayout.placements.isEmpty else { return false }
         let horizontal = max(0.1, (viewport.width - 36) / mapLayout.size.width)
         let vertical = max(0.1, (viewport.height - 36) / mapLayout.size.height)
         zoom = clampedZoom(min(horizontal, vertical, 1.25))
+        return true
     }
 
     private func beginRename() {

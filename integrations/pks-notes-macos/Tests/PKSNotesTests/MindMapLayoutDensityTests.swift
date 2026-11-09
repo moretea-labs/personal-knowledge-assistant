@@ -72,32 +72,49 @@ final class MindMapLayoutDensityTests: XCTestCase {
     }
 
     func testSpacingChangesGeometryWithoutOverlappingOrChangingMarkdownNodes() {
-        let branches = (0..<12).map { index in
-            "- Branch \(index)\n  - Topic \(index)\n    - Detail \(index)\n    - Reference \(index)"
+        let branches = (0..<32).map { index in
+            "- Branch \(index) — \(String(repeating: "跨文档关联与研究资料", count: 2))\n  - Topic \(index)\n    - Detail \(index)\n    - Reference \(index)"
         }
         let markdown = "# Study Map\n" + branches.joined(separator: "\n")
         let nodes = MindMapOutline.nodes(in: markdown)
-        let compact = MindMapSpatialLayout.layout(nodes, density: .compact)
-        let standard = MindMapSpatialLayout.layout(nodes)
-        let spacious = MindMapSpatialLayout.layout(nodes, density: .spacious)
+        XCTAssertEqual(nodes.count, 129)
 
-        XCTAssertEqual(MindMapSpatialLayout.layout(nodes, density: .standard), standard)
-        XCTAssertLessThan(compact.size.width, standard.size.width)
-        XCTAssertLessThan(standard.size.width, spacious.size.width)
-        XCTAssertLessThan(compact.size.height, standard.size.height)
-        XCTAssertLessThan(standard.size.height, spacious.size.height)
+        for style in MindMapVisualStyle.allCases {
+            let compact = MindMapSpatialLayout.layout(nodes, density: .compact, style: style)
+            let standard = MindMapSpatialLayout.layout(nodes, density: .standard, style: style)
+            let spacious = MindMapSpatialLayout.layout(nodes, density: .spacious, style: style)
 
-        for layout in [compact, standard, spacious] {
-            XCTAssertEqual(layout.placements.map(\.node), nodes)
-            let rects = layout.placements.map { placement in
-                CGRect(x: placement.center.x - placement.size.width / 2,
-                       y: placement.center.y - placement.size.height / 2,
-                       width: placement.size.width, height: placement.size.height)
-            }
-            for i in rects.indices {
-                for j in rects.indices where j > i {
-                    XCTAssertFalse(rects[i].intersects(rects[j]),
-                                   "Density must not overlap node \(i) with \(j)")
+            XCTAssertEqual(
+                MindMapSpatialLayout.layout(nodes, density: .standard, style: style),
+                standard
+            )
+            XCTAssertLessThan(compact.size.width, standard.size.width)
+            XCTAssertLessThan(standard.size.width, spacious.size.width)
+            XCTAssertLessThan(compact.size.height, standard.size.height)
+            XCTAssertLessThan(standard.size.height, spacious.size.height)
+
+            for (density, layout) in [
+                (MindMapLayoutDensity.compact, compact),
+                (.standard, standard),
+                (.spacious, spacious)
+            ] {
+                XCTAssertEqual(layout.placements.map(\.node), nodes)
+                XCTAssertTrue(layout.size.width.isFinite && layout.size.height.isFinite)
+                let rects = layout.placements.map { placement in
+                    CGRect(
+                        x: placement.center.x - placement.size.width / 2,
+                        y: placement.center.y - placement.size.height / 2,
+                        width: placement.size.width,
+                        height: placement.size.height
+                    )
+                }
+                for i in rects.indices {
+                    for j in rects.indices where j > i {
+                        XCTAssertFalse(
+                            rects[i].intersects(rects[j]),
+                            "Style \(style.rawValue), density \(density.rawValue) overlaps nodes \(i) and \(j)"
+                        )
+                    }
                 }
             }
         }

@@ -187,4 +187,36 @@ final class MindNodePackageTests: XCTestCase {
         try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)
         XCTAssertThrowsError(try MindNodePackage.importOutline(from: plain))
     }
+
+    func testImportsMultipleMindNodeMapsIntoOneMarkdownOutline() throws {
+        let (base, package) = try fixture()
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let contentsURL = package.appendingPathComponent("contents.xml")
+        let data = try Data(contentsOf: contentsURL)
+        var document = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
+        var canvas = try XCTUnwrap(document["canvas"] as? [String: Any])
+        let first: [String: Any] = [
+            "title": ["text": "<p>TCP/IP</p>"],
+            "subnodes": [["title": ["text": "<p>Network layer</p>"], "subnodes": []]]
+        ]
+        let second: [String: Any] = [
+            "title": ["text": "<p>Transport</p>"],
+            "subnodes": [["title": ["text": "<p>TCP</p>"], "subnodes": []]]
+        ]
+        canvas["mindMaps"] = [["mainNode": first], ["mainNode": second]]
+        document["canvas"] = canvas
+        let updated = try PropertyListSerialization.data(
+            fromPropertyList: document, format: .binary, options: 0
+        )
+        try updated.write(to: contentsURL, options: .atomic)
+
+        XCTAssertEqual(
+            try MindNodePackage.importOutline(from: package),
+            "# Mind Maps\n- TCP/IP\n  - Network layer\n- Transport\n  - TCP\n"
+        )
+    }
+
 }
