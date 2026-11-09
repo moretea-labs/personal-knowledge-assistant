@@ -163,6 +163,21 @@ enum MindMapVisualStyle: String, CaseIterable, Identifiable {
         case .minimal: .serif
         }
     }
+
+    /// Use the same system font design for AppKit text measurement as SwiftUI
+    /// uses when drawing the node title. Otherwise rounded/serif presets can
+    /// wrap differently from the geometry that positioned neighboring cards.
+    func measurementFont(ofSize size: CGFloat, weight: NSFont.Weight) -> NSFont {
+        let base = NSFont.systemFont(ofSize: size, weight: weight)
+        let design: NSFontDescriptor.SystemDesign
+        switch self {
+        case .classic: return base
+        case .colorful: design = .rounded
+        case .minimal: design = .serif
+        }
+        guard let descriptor = base.fontDescriptor.withDesign(design) else { return base }
+        return NSFont(descriptor: descriptor, size: size) ?? base
+    }
 }
 
 /// Node emphasis uses standard Markdown markup, not additional style metadata.
@@ -406,6 +421,9 @@ struct MindMapCanvas: View {
             }
         }
         .onChange(of: collapsed) { _, _ in
+            rebuildVisibleLayout()
+        }
+        .onChange(of: mapStyleID) { _, _ in
             rebuildVisibleLayout()
         }
         .onChange(of: layoutDensityID) { _, _ in
@@ -1289,7 +1307,7 @@ struct MindMapCanvas: View {
     private func exportPNG() {
         guard !nodes.isEmpty else { return }
         // Export the complete Markdown outline, independent of the user's collapsed viewport.
-        let layout = MindMapSpatialLayout.layout(nodes, density: layoutDensity)
+        let layout = MindMapSpatialLayout.layout(nodes, density: layoutDensity, style: mapStyle)
         let size = layout.size
         guard MindMapExportBudget.allowsPNG(size: size) else {
             interchangeError = language.text("This map is too large for a single PNG. Try PDF.")
@@ -1312,7 +1330,7 @@ struct MindMapCanvas: View {
 
     private func exportPDF() {
         guard !nodes.isEmpty else { return }
-        let layout = MindMapSpatialLayout.layout(nodes, density: layoutDensity)
+        let layout = MindMapSpatialLayout.layout(nodes, density: layoutDensity, style: mapStyle)
         let size = layout.size
         let content = spatialCanvas(layout, exporting: true)
             .background(Color.white)
@@ -1354,7 +1372,7 @@ struct MindMapCanvas: View {
             return true
         }
         visible = filtered
-        mapLayout = MindMapSpatialLayout.layout(filtered, density: layoutDensity)
+        mapLayout = MindMapSpatialLayout.layout(filtered, density: layoutDensity, style: mapStyle)
     }
 
     private func fitToContent(viewport: CGSize) {

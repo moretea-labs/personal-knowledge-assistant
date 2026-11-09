@@ -32,23 +32,27 @@ final class MindMapLayoutDensityTests: XCTestCase {
         """
         let nodes = MindMapOutline.nodes(in: markdown)
         XCTAssertEqual(nodes.count, 6)
-        for density in MindMapLayoutDensity.allCases {
-            let layout = MindMapSpatialLayout.layout(nodes, density: density)
-            let longChineseID = try XCTUnwrap(nodes.first(where: { $0.title == longChinese })?.id)
-            let longEnglishID = try XCTUnwrap(nodes.first(where: { $0.title == longEnglish })?.id)
-            let chinese = try XCTUnwrap(layout.placements.first(where: { $0.id == longChineseID }))
-            let english = try XCTUnwrap(layout.placements.first(where: { $0.id == longEnglishID }))
-            XCTAssertGreaterThan(chinese.size.height, 50 * density.scale)
-            XCTAssertGreaterThan(english.size.height, 50 * density.scale)
-            let rects = layout.placements.map {
-                CGRect(x: $0.center.x - $0.size.width / 2,
-                       y: $0.center.y - $0.size.height / 2,
-                       width: $0.size.width, height: $0.size.height)
-            }
-            for i in rects.indices {
-                for j in rects.indices where j > i {
-                    XCTAssertFalse(rects[i].intersects(rects[j]),
-                                   "Long titles must not overlap for density \(density)")
+        let longChineseID = try XCTUnwrap(nodes.first(where: { $0.title == longChinese })?.id)
+        let longEnglishID = try XCTUnwrap(nodes.first(where: { $0.title == longEnglish })?.id)
+        for style in MindMapVisualStyle.allCases {
+            for density in MindMapLayoutDensity.allCases {
+                let layout = MindMapSpatialLayout.layout(nodes, density: density, style: style)
+                let chinese = try XCTUnwrap(layout.placements.first(where: { $0.id == longChineseID }))
+                let english = try XCTUnwrap(layout.placements.first(where: { $0.id == longEnglishID }))
+                XCTAssertGreaterThan(chinese.size.height, 50 * density.scale)
+                XCTAssertGreaterThan(english.size.height, 50 * density.scale)
+                let rects = layout.placements.map {
+                    CGRect(x: $0.center.x - $0.size.width / 2,
+                           y: $0.center.y - $0.size.height / 2,
+                           width: $0.size.width, height: $0.size.height)
+                }
+                for i in rects.indices {
+                    for j in rects.indices where j > i {
+                        XCTAssertFalse(
+                            rects[i].intersects(rects[j]),
+                            "Long titles must not overlap for style \(style.rawValue), density \(density.rawValue)"
+                        )
+                    }
                 }
             }
         }

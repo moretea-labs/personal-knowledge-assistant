@@ -50,7 +50,8 @@ struct MindMapLayoutSnapshot: Equatable {
 enum MindMapSpatialLayout {
     static func layout(
         _ nodes: [MindMapNode],
-        density: MindMapLayoutDensity = .standard
+        density: MindMapLayoutDensity = .standard,
+        style: MindMapVisualStyle = .classic
     ) -> MindMapLayoutSnapshot {
         // Keep node dimensions and connector spacing from a single layout
         // scale so compact maps never overlap and exports match the canvas.
@@ -94,7 +95,7 @@ enum MindMapSpatialLayout {
             var height = baseHeight
             if node.title.count > 8 {
                 let label = MindMapOutline.presentation(for: node.title).title
-                let font = NSFont.systemFont(
+                let font = style.measurementFont(
                     ofSize: isRoot ? 16 : 14,
                     weight: isRoot ? .semibold : .medium
                 )
