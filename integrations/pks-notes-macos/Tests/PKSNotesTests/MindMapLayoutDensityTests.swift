@@ -55,6 +55,18 @@ final class MindMapLayoutDensityTests: XCTestCase {
         XCTAssertEqual(MindMapOutline.nodes(in: markdown), nodes)
     }
 
+    func testPNGExportBudgetCountsPhysicalPixelsAtRendererScale() {
+        XCTAssertTrue(MindMapExportBudget.allowsPNG(size: CGSize(width: 2_000, height: 2_500)))
+        XCTAssertFalse(MindMapExportBudget.allowsPNG(size: CGSize(width: 2_001, height: 2_500)))
+        XCTAssertTrue(MindMapExportBudget.allowsPNG(
+            size: CGSize(width: 4_000, height: 5_000), scale: 1
+        ))
+        XCTAssertFalse(MindMapExportBudget.allowsPNG(
+            size: CGSize(width: 4_000, height: 5_000), scale: 2
+        ))
+        XCTAssertFalse(MindMapExportBudget.allowsPNG(size: .zero))
+    }
+
     func testSpacingChangesGeometryWithoutOverlappingOrChangingMarkdownNodes() {
         let branches = (0..<12).map { index in
             "- Branch \(index)\n  - Topic \(index)\n    - Detail \(index)\n    - Reference \(index)"

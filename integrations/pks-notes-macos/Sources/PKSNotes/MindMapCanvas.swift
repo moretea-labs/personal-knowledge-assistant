@@ -200,6 +200,19 @@ enum MindMapTitleEmphasis {
     }
 }
 
+enum MindMapExportBudget {
+    static let pngScale: CGFloat = 2
+    static let maxRasterPixels: CGFloat = 20_000_000
+
+    static func allowsPNG(size: CGSize, scale: CGFloat = pngScale) -> Bool {
+        guard size.width > 0, size.height > 0, scale > 0,
+              size.width.isFinite, size.height.isFinite, scale.isFinite else {
+            return false
+        }
+        return size.width * size.height * scale * scale <= maxRasterPixels
+    }
+}
+
 /// An editable Markdown-backed mind-map canvas. Markdown remains the only document authority.
 struct MindMapCanvas: View {
     @Environment(\.notesLanguage) private var language
@@ -1237,7 +1250,7 @@ struct MindMapCanvas: View {
         // Export the complete Markdown outline, independent of the user's collapsed viewport.
         let layout = MindMapSpatialLayout.layout(nodes, density: layoutDensity)
         let size = layout.size
-        guard size.width * size.height <= 20_000_000 else {
+        guard MindMapExportBudget.allowsPNG(size: size) else {
             interchangeError = language.text("This map is too large for a single PNG. Try PDF.")
             return
         }
@@ -1245,7 +1258,7 @@ struct MindMapCanvas: View {
             .background(Color.white)
             .environment(\.colorScheme, .light)
         let renderer = ImageRenderer(content: content)
-        renderer.scale = 2
+        renderer.scale = MindMapExportBudget.pngScale
         guard let image = renderer.nsImage,
               let tiff = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiff),
