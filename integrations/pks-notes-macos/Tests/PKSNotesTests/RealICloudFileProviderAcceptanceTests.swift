@@ -80,11 +80,24 @@ final class RealICloudFileProviderAcceptanceTests: XCTestCase {
         XCTAssertTrue(renamedContent.contains("(\(expectedSelfTarget))"))
         XCTAssertFalse(renamedContent.contains("(Source.md)"))
 
+        let copies = root.appendingPathComponent("Copies", isDirectory: true)
+        try fileManager.createDirectory(at: copies, withIntermediateDirectories: false)
+        try fileManager.evictUbiquitousItem(at: pdf)
+        try await waitForDatalessPlaceholder(pdf)
+        XCTAssertTrue(WorkspaceFiles.isDataless(pdf), "The PDF fixture must be a real dataless placeholder before copy.")
+
+        let copiedPDFResult = await model.copyItem(pdf, to: copies)
+        let copiedPDF = try XCTUnwrap(copiedPDFResult)
+        XCTAssertEqual(copiedPDF.standardizedFileURL, copies.appendingPathComponent("Book.pdf").standardizedFileURL)
+        XCTAssertFalse(WorkspaceFiles.isDataless(pdf), "Copy must hydrate the original PDF before reading its contents.")
+        XCTAssertFalse(WorkspaceFiles.isDataless(copiedPDF), "The copied PDF must contain materialized bytes.")
+        XCTAssertEqual(try Data(contentsOf: copiedPDF), Data("%PDF-1.4\n%%EOF".utf8))
+
         let archive = root.appendingPathComponent("Archive", isDirectory: true)
         try fileManager.createDirectory(at: archive, withIntermediateDirectories: false)
         try fileManager.evictUbiquitousItem(at: pdf)
         try await waitForDatalessPlaceholder(pdf)
-        XCTAssertTrue(WorkspaceFiles.isDataless(pdf), "The PDF fixture must be a real dataless placeholder.")
+        XCTAssertTrue(WorkspaceFiles.isDataless(pdf), "The PDF fixture must be a real dataless placeholder before move.")
 
         let movedPDFResult = await model.moveItem(pdf, to: archive)
         let movedPDF = try XCTUnwrap(movedPDFResult)

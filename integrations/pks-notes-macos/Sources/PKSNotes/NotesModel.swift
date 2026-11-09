@@ -2684,6 +2684,34 @@ final class NotesModel: ObservableObject {
             }
         }
 
+        if !targetIsDirectory {
+            guard !Task.isCancelled else { return nil }
+            do {
+                // A single iCloud file may be a dataless placeholder. Materialize
+                // the selected source before FileManager copies its contents.
+                try await WorkspaceFiles.hydrateUbiquitousItemIfNeeded(target)
+                try Task.checkCancellation()
+            } catch is CancellationError {
+                return nil
+            } catch {
+                let failure = AppLanguage.current.text("Could not copy item")
+                message = "\(failure): \(error.localizedDescription)"
+                return nil
+            }
+
+            guard self.root?.standardizedFileURL == root.standardizedFileURL,
+                  WorkspaceFiles.contains(target, in: root) else {
+                message = AppLanguage.current.text("The original item is no longer available.")
+                return nil
+            }
+            var hydratedTargetInfo = Darwin.stat()
+            guard target.path.withCString({ Darwin.lstat($0, &hydratedTargetInfo) }) == 0,
+                  (hydratedTargetInfo.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+                message = AppLanguage.current.text("The original item is no longer available.")
+                return nil
+            }
+        }
+
         let selectedBeforeCopy = selected
         let draftRevisionBeforeCopy = draftRevision
         let isMarkdown = ["md", "markdown"].contains(target.pathExtension.lowercased())
