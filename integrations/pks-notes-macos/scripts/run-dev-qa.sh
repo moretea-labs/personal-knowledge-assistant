@@ -13,23 +13,6 @@ swift build -c debug --jobs 2 -q
 # Separate bundle identity and preferences; never replace the release app,
 # change production entitlements, or modify an existing user workspace.
 mkdir -p "$fixture" "$HOME/Applications"
-if [[ ! -e "$fixture/Map QA.md" ]]; then
-    cat > "$fixture/Map QA.md" <<'NOTE'
-# Mind Map QA
-- [ ] Review the introduction
-  - **Bold priority**
-  - *Italic context*
-  - [ ] Read [Research](Research.md)
-- [x] Finished the setup
-- A long Chinese node used to verify that spatial layout cards can show complete multi-line titles without overlapping their neighboring branches, even in compact mode and dark mode
-- Another branch
-  - Child one
-  - Child two
-NOTE
-fi
-if [[ ! -e "$fixture/Research.md" ]]; then
-    printf '# Research\nThis is an isolated local QA note.\n' > "$fixture/Research.md"
-fi
 
 staging="$(mktemp -d /tmp/pks-notes-qa.XXXXXX)"
 trap 'rm -rf "$staging"' EXIT
@@ -71,6 +54,23 @@ else
     if [[ -e "$previous" ]]; then mv "$previous" "$app"; fi
     exit 4
 fi
+
+# This script owns its disposable fixture baseline. Rewrite it only after the
+# previous QA process is confirmed stopped, so an old in-memory document cannot
+# save over the fresh baseline during termination.
+cat > "$fixture/Map QA.md" <<'NOTE'
+# Mind Map QA
+- [ ] Review the introduction
+  - **Bold priority**
+  - *Italic context*
+  - [ ] Read [Research](Research.md)
+- [x] Finished the setup
+- A long Chinese node used to verify that spatial layout cards can show complete multi-line titles without overlapping their neighboring branches, even in compact mode and dark mode
+- Another branch
+  - Child one
+  - Child two
+NOTE
+printf '# Research\nThis is an isolated local QA note.\n' > "$fixture/Research.md"
 # The QA bundle can retain an old security-scoped bookmark from manual testing.
 # NotesModel resolves bookmarks before PKSNotesWorkspace, so clear only the QA
 # bookmark before pinning this run to the isolated fixture vault.
