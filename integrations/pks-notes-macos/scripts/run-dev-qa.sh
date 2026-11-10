@@ -85,6 +85,9 @@ fi
 # save over the fresh baseline during termination.
 cat > "$fixture/Map QA.md" <<'NOTE'
 # Mind Map QA
+
+[Open the two-page PDF fixture](PDF-QA.pdf)
+
 - [ ] Review the introduction
   - **Bold priority**
   - *Italic context*
@@ -96,6 +99,42 @@ cat > "$fixture/Map QA.md" <<'NOTE'
   - Child two
 NOTE
 printf '# Research\nThis is an isolated local QA note.\n' > "$fixture/Research.md"
+PKS_QA_PDF_OUTPUT="$fixture/PDF-QA.pdf" /usr/bin/swift - <<'SWIFT'
+import AppKit
+import PDFKit
+import Foundation
+import Darwin
+
+func makePage(_ text: String) -> PDFPage? {
+    let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
+    view.string = text
+    guard let source = PDFDocument(data: view.dataWithPDF(inside: view.bounds)),
+          source.pageCount == 1 else {
+        return nil
+    }
+    return source.page(at: 0)
+}
+
+guard let outputPath = ProcessInfo.processInfo.environment["PKS_QA_PDF_OUTPUT"],
+      let firstPage = makePage("PKS PDF Fixture - Page 1\n\nImportant fact for source anchor."),
+      let secondPage = makePage("PKS PDF Fixture - Page 2\n\nSecond page navigation fixture.") else {
+    fputs("Unable to generate PKS Notes PDF fixture pages.\n", stderr)
+    exit(1)
+}
+let document = PDFDocument()
+document.insert(firstPage, at: 0)
+document.insert(secondPage, at: 1)
+let output = URL(fileURLWithPath: outputPath)
+guard document.write(to: output),
+      let readBack = PDFDocument(url: output),
+      readBack.pageCount == 2,
+      (readBack.string ?? "").contains("Important fact for source anchor"),
+      (readBack.string ?? "").contains("Second page navigation fixture") else {
+    fputs("Generated PKS Notes PDF fixture failed read-back verification.\n", stderr)
+    exit(1)
+}
+print("Prepared searchable two-page PDF fixture: \(output.lastPathComponent)")
+SWIFT
 # The QA bundle can retain an old security-scoped bookmark from manual testing.
 # NotesModel resolves bookmarks before PKSNotesWorkspace, so clear only the QA
 # bookmark before pinning this run to the isolated fixture vault.

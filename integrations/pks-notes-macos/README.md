@@ -60,6 +60,8 @@ Requires macOS 14 or later with Swift/Xcode.
 
 For isolated native GUI acceptance, `./scripts/run-dev-qa.sh --prepare-only` builds and stages a separate `PKS Notes QA Fixture.app` (`com.moretea.pks.notes.qa.fixture`) with its own preferences and local fixture vault, without launching it. Run the script without `--prepare-only` only after the existing Computer target has a verified owner/handoff; this fixture identity never quits or rewrites the existing `PKS Notes QA.app` bound to a real workspace.
 
+The fixture vault includes a searchable two-page `PDF-QA.pdf` linked from `Map QA.md` for native page navigation, text search, PDF-selection anchor capture and Markdown round-trip acceptance.
+
 **First launch:** select the existing iCloud Drive folder `学习笔记管理` using **Choose Folder** in the toolbar ellipsis menu and click **Open** in the macOS folder picker. This is a one-time macOS file-access grant for this application, not a login and not a new sync service. The app retains the system security-scoped folder bookmark and reopens the same folder on subsequent launches. Until permission is granted, the app intentionally leaves the notes tree empty but PKS search remains available.
 
 The canonical folder is `~/Library/Mobile Documents/com~apple~CloudDocs/学习笔记管理`. No source files are imported, relocated or copied. iCloud Drive handles synchronization. Do not bypass the native folder picker by writing the folder path to app preferences: that does not grant macOS permissions.
