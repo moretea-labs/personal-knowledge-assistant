@@ -88,6 +88,10 @@ cat > "$fixture/Map QA.md" <<'NOTE'
 
 [Open the two-page PDF fixture](PDF-QA.pdf)
 
+[PDF-QA.pdf · p. 2 (exact selection)](PDF-QA.pdf#page=2&rects=0.00817,0.94727,0.27472,0.01515&fp=c4ba16bb07821a13)
+
+> Second page navigation fixture.
+
 - [ ] Review the introduction
   - **Bold priority**
   - *Italic context*
@@ -133,7 +137,51 @@ guard document.write(to: output),
     fputs("Generated PKS Notes PDF fixture failed read-back verification.\n", stderr)
     exit(1)
 }
-print("Prepared searchable two-page PDF fixture: \(output.lastPathComponent)")
+
+// Keep the exact-selection Markdown link tied to the actual generated PDF.
+// If PDFKit's fixture layout changes, fail here instead of launching a QA app
+// whose visible source anchor points at the wrong text or page region.
+func fingerprint(for text: String) -> String? {
+    let normalized = text
+        .split(whereSeparator: { $0.isWhitespace })
+        .joined(separator: " ")
+        .precomposedStringWithCanonicalMapping
+    guard !normalized.isEmpty else { return nil }
+
+    var hash: UInt64 = 14_695_981_039_346_656_037
+    for byte in normalized.utf8 {
+        hash ^= UInt64(byte)
+        hash &*= 1_099_511_628_211
+    }
+    return String(format: "%016llx", hash)
+}
+
+guard let secondPage = readBack.page(at: 1) else {
+    fputs("Generated PKS Notes PDF fixture is missing page 2.\n", stderr)
+    exit(1)
+}
+let pageBounds = secondPage.bounds(for: .cropBox)
+let exactSelectionRect = CGRect(
+    x: 0.00817 * pageBounds.width,
+    y: 0.94727 * pageBounds.height,
+    width: 0.27472 * pageBounds.width,
+    height: 0.01515 * pageBounds.height
+)
+guard let exactSelection = secondPage.selection(for: exactSelectionRect),
+      let selectedText = exactSelection.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+      selectedText == "Second page navigation fixture.",
+      fingerprint(for: selectedText) == "c4ba16bb07821a13" else {
+    fputs("Generated PKS Notes PDF fixture no longer matches the exact-selection Markdown anchor.\n", stderr)
+    exit(1)
+}
+
+let markdownPath = output.deletingLastPathComponent().appendingPathComponent("Map QA.md")
+guard let markdown = try? String(contentsOf: markdownPath, encoding: .utf8),
+      markdown.contains("PDF-QA.pdf#page=2&rects=0.00817,0.94727,0.27472,0.01515&fp=c4ba16bb07821a13") else {
+    fputs("PKS Notes Markdown fixture is missing its exact PDF source anchor.\n", stderr)
+    exit(1)
+}
+print("Prepared searchable two-page PDF fixture with verified exact-selection anchor: \(output.lastPathComponent)")
 SWIFT
 # The QA bundle can retain an old security-scoped bookmark from manual testing.
 # NotesModel resolves bookmarks before PKSNotesWorkspace, so clear only the QA
