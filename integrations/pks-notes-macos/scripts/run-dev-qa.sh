@@ -1,11 +1,21 @@
 #!/bin/bash
 set -euo pipefail
 
+prepare_only=false
+if [[ "${1:-}" == "--prepare-only" && $# -eq 1 ]]; then
+    prepare_only=true
+elif [[ $# -ne 0 ]]; then
+    echo "Usage: $0 [--prepare-only]" >&2
+    exit 64
+fi
+
 source_root="$(cd "$(dirname "$0")/.." && pwd)"
-app="$HOME/Applications/PKS Notes QA.app"
-fixture="$HOME/Library/Application Support/PKS Notes QA/Fixture Vault"
+app="$HOME/Applications/PKS Notes QA Fixture.app"
+fixture="$HOME/Library/Application Support/PKS Notes QA Fixture/Fixture Vault"
 binary="$source_root/.build/debug/PKSNotes"
-qa_executable="PKSNotesQA"
+qa_executable="PKSNotesQAFixture"
+qa_bundle_id="com.moretea.pks.notes.qa.fixture"
+qa_display_name="PKS Notes QA Fixture"
 icon="$source_root/Resources/AppIcon.icns"
 
 cd "$source_root"
@@ -24,31 +34,42 @@ cp "$binary" "$bundle/Contents/MacOS/$qa_executable"
 chmod 755 "$bundle/Contents/MacOS/$qa_executable"
 cp "$source_root/Resources/Info.plist" "$bundle/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $qa_executable" "$bundle/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.moretea.pks.notes.qa' "$bundle/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName PKS Notes QA' "$bundle/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c 'Set :CFBundleName PKS Notes QA' "$bundle/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $qa_bundle_id" "$bundle/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $qa_display_name" "$bundle/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleName $qa_display_name" "$bundle/Contents/Info.plist"
 codesign --force --sign - --timestamp=none "$bundle" >/dev/null
 codesign --verify --deep --strict "$bundle"
 
 # Update only the bundle with our exact QA identity; never touch the release
 # app or another developer app that happens to use the same display name.
-previous="$HOME/Applications/.PKS-Notes-QA-previous.app"
+previous="$HOME/Applications/.PKS-Notes-QA-Fixture-previous.app"
 if [[ -e "$app" ]]; then
     identity="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist" 2>/dev/null || true)"
-    if [[ "$identity" != "com.moretea.pks.notes.qa" || -e "$previous" ]]; then
+    if [[ "$identity" != "$qa_bundle_id" || -e "$previous" ]]; then
         echo "Refusing to overwrite an unidentified or non-atomic QA bundle." >&2
         exit 2
     fi
-    /usr/bin/osascript -e 'tell application id "com.moretea.pks.notes.qa" to quit' >/dev/null 2>&1 || true
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-        if ! pgrep -f "$app/Contents/MacOS/PKSNotes" >/dev/null            && ! pgrep -f "$app/Contents/MacOS/$qa_executable" >/dev/null; then
-            break
+    if [[ "$prepare_only" == true ]]; then
+        # Staging must never send GUI input or terminate an existing target.
+        if pgrep -f "$app/Contents/MacOS/PKSNotes" >/dev/null \
+            || pgrep -f "$app/Contents/MacOS/$qa_executable" >/dev/null; then
+            echo "QA fixture app is running; prepare-only will not quit or replace it. No files changed." >&2
+            exit 3
         fi
-        sleep 0.5
-    done
-    if pgrep -f "$app/Contents/MacOS/PKSNotes" >/dev/null        || pgrep -f "$app/Contents/MacOS/$qa_executable" >/dev/null; then
-        echo "QA app is still running; close it before rebuilding. No files replaced." >&2
-        exit 3
+    else
+        /usr/bin/osascript -e "tell application id \"$qa_bundle_id\" to quit" >/dev/null 2>&1 || true
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if ! pgrep -f "$app/Contents/MacOS/PKSNotes" >/dev/null \
+                && ! pgrep -f "$app/Contents/MacOS/$qa_executable" >/dev/null; then
+                break
+            fi
+            sleep 0.5
+        done
+        if pgrep -f "$app/Contents/MacOS/PKSNotes" >/dev/null \
+            || pgrep -f "$app/Contents/MacOS/$qa_executable" >/dev/null; then
+            echo "QA fixture app is still running; close it before rebuilding. No files replaced." >&2
+            exit 3
+        fi
     fi
     mv "$app" "$previous"
 fi
@@ -78,9 +99,13 @@ printf '# Research\nThis is an isolated local QA note.\n' > "$fixture/Research.m
 # The QA bundle can retain an old security-scoped bookmark from manual testing.
 # NotesModel resolves bookmarks before PKSNotesWorkspace, so clear only the QA
 # bookmark before pinning this run to the isolated fixture vault.
-/usr/bin/defaults delete com.moretea.pks.notes.qa PKSNotesWorkspaceBookmark >/dev/null 2>&1 || true
-/usr/bin/defaults write com.moretea.pks.notes.qa PKSNotesWorkspace -string "$fixture"
-/usr/bin/defaults write com.moretea.pks.notes.qa PKSNotesLastOpenedMarkdown -string "$fixture/Map QA.md"
-/usr/bin/open -a "$app" --args --pks-qa-pro
-echo "Launched signed QA Debug app: $app"
+/usr/bin/defaults delete "$qa_bundle_id" PKSNotesWorkspaceBookmark >/dev/null 2>&1 || true
+/usr/bin/defaults write "$qa_bundle_id" PKSNotesWorkspace -string "$fixture"
+/usr/bin/defaults write "$qa_bundle_id" PKSNotesLastOpenedMarkdown -string "$fixture/Map QA.md"
+if [[ "$prepare_only" == true ]]; then
+    echo "Prepared signed fixture-only QA app without launching: $app"
+else
+    /usr/bin/open -a "$app" --args --pks-qa-pro
+    echo "Launched signed fixture-only QA Debug app: $app"
+fi
 echo "QA workspace: $fixture"

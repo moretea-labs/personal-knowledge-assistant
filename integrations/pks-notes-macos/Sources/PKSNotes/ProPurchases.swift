@@ -8,7 +8,7 @@ enum ProAccess {
         #if DEBUG
         // Separate QA identity AND explicit argument. The entire path is
         // absent from Release. Never simulate a verified StoreKit purchase.
-        Bundle.main.bundleIdentifier == "com.moretea.pks.notes.qa"
+        Bundle.main.bundleIdentifier == "com.moretea.pks.notes.qa.fixture"
             && ProcessInfo.processInfo.arguments.contains("--pks-qa-pro")
         #else
         false
