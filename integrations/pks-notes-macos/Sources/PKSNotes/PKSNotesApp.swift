@@ -2974,6 +2974,7 @@ struct NotesWindow: View {
             controller: pdfReaderController,
             requestedPage: model.previewPDFPage,
             requestedAnchor: model.previewPDFAnchor,
+            navigationSequence: model.previewPDFNavigationSequence,
             onAddPageToNote: { page, selectedText, anchor in
                 beginPDFCapture(
                     pdf: url,

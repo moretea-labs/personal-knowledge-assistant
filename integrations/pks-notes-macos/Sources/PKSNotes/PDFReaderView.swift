@@ -268,6 +268,7 @@ final class PDFReaderController: ObservableObject {
     private var documentURL: URL?
     private var requestedPage: Int?
     private var requestedAnchor: PDFSourceAnchor?
+    private var navigationSequence: UInt64 = 0
     private var viewObservers: [NSObjectProtocol] = []
     private var searchTask: Task<Void, Never>?
     private var searchGeneration: UInt64 = 0
@@ -278,7 +279,8 @@ final class PDFReaderController: ObservableObject {
         document: PDFDocument,
         url: URL,
         requestedPage: Int?,
-        requestedAnchor: PDFSourceAnchor?
+        requestedAnchor: PDFSourceAnchor?,
+        navigationSequence: UInt64 = 0
     ) {
         let viewChanged = pdfView !== view
         if viewChanged {
@@ -290,11 +292,13 @@ final class PDFReaderController: ObservableObject {
         let documentChanged = self.document !== document || documentURL != url
         let pageRequestChanged = self.requestedPage != requestedPage
         let anchorRequestChanged = self.requestedAnchor != requestedAnchor
+        let navigationRequested = self.navigationSequence != navigationSequence
         let presentationChanged = viewChanged || documentChanged
         self.document = document
         documentURL = url
         self.requestedPage = requestedPage
         self.requestedAnchor = requestedAnchor
+        self.navigationSequence = navigationSequence
 
         // PDFView presentation properties can trigger PDFKit layout/redraw work even when
         // assigned the same value. SwiftUI calls updateNSView for unrelated toolbar and
@@ -310,7 +314,7 @@ final class PDFReaderController: ObservableObject {
         }
 
         if !presentationChanged {
-            if pageRequestChanged || anchorRequestChanged {
+            if pageRequestChanged || anchorRequestChanged || navigationRequested {
                 applyRequestedSource(page: requestedPage, anchor: requestedAnchor)
             } else {
                 syncFromView()
@@ -696,6 +700,7 @@ struct NativePDFPreview: View {
     @ObservedObject var controller: PDFReaderController
     let requestedPage: Int?
     let requestedAnchor: PDFSourceAnchor?
+    let navigationSequence: UInt64
     let onAddPageToNote: (Int, String?, PDFSourceAnchor?) -> Void
 
     @State private var pageText = "1"
@@ -737,6 +742,7 @@ struct NativePDFPreview: View {
                         url: url,
                         requestedPage: requestedPage,
                         requestedAnchor: requestedAnchor,
+                        navigationSequence: navigationSequence,
                         controller: controller
                     )
                     .accessibilityIdentifier("pks-pdf-canvas")
@@ -1027,6 +1033,7 @@ private struct PDFCanvas: NSViewRepresentable {
     let url: URL
     let requestedPage: Int?
     let requestedAnchor: PDFSourceAnchor?
+    let navigationSequence: UInt64
     let controller: PDFReaderController
 
     final class Coordinator {
@@ -1047,7 +1054,8 @@ private struct PDFCanvas: NSViewRepresentable {
             document: document,
             url: url,
             requestedPage: requestedPage,
-            requestedAnchor: requestedAnchor
+            requestedAnchor: requestedAnchor,
+            navigationSequence: navigationSequence
         )
         return view
     }
@@ -1058,7 +1066,8 @@ private struct PDFCanvas: NSViewRepresentable {
             document: document,
             url: url,
             requestedPage: requestedPage,
-            requestedAnchor: requestedAnchor
+            requestedAnchor: requestedAnchor,
+            navigationSequence: navigationSequence
         )
     }
 

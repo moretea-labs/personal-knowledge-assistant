@@ -902,6 +902,7 @@ final class NotesModel: ObservableObject {
     @Published private(set) var previewPDF: URL?
     @Published private(set) var previewPDFPage: Int?
     @Published private(set) var previewPDFAnchor: PDFSourceAnchor?
+    @Published private(set) var previewPDFNavigationSequence: UInt64 = 0
     @Published var draft: String = "" {
         didSet {
             draftRevision &+= 1
@@ -1594,6 +1595,9 @@ final class NotesModel: ObservableObject {
                     previewPDFAnchor = nil
                     previewPDFPage = pdfPage
                 }
+                if pdfAnchor != nil || pdfPage != nil {
+                    previewPDFNavigationSequence &+= 1
+                }
                 return
             }
             let preservesActiveNote = navigationDecision == nil && selected != nil && externalBody == nil
@@ -1610,6 +1614,9 @@ final class NotesModel: ObservableObject {
             previewPDF = url
             previewPDFAnchor = pdfAnchor
             previewPDFPage = pdfAnchor?.page ?? pdfPage
+            if pdfAnchor != nil || pdfPage != nil {
+                previewPDFNavigationSequence &+= 1
+            }
             externalTitle = nil
             externalBody = nil
             previewSource = nil

@@ -85,5 +85,21 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         let restoredText = try XCTUnwrap(restoredView.currentSelection?.string)
         XCTAssertEqual(PDFSourceAnchor.fingerprint(for: restoredText), anchor.fingerprint)
         XCTAssertEqual(restoredView.currentSelection?.pages.count, 1)
+
+        // Normal SwiftUI updates must not steal PDF scrolling or selection.
+        // A second click on the same Markdown source link is a new navigation
+        // intent, even though both the page and anchor values are identical.
+        restoredView.currentSelection = nil
+        restoredController.attach(
+            view: restoredView, document: restoredDocument, url: url,
+            requestedPage: nil, requestedAnchor: anchor, navigationSequence: 0
+        )
+        XCTAssertNil(restoredView.currentSelection)
+        restoredController.attach(
+            view: restoredView, document: restoredDocument, url: url,
+            requestedPage: nil, requestedAnchor: anchor, navigationSequence: 1
+        )
+        let repeatedSelection = try XCTUnwrap(restoredView.currentSelection?.string)
+        XCTAssertEqual(PDFSourceAnchor.fingerprint(for: repeatedSelection), anchor.fingerprint)
     }
 }

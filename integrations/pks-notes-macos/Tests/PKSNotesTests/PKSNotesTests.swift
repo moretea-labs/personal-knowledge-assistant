@@ -2571,6 +2571,11 @@ extension PKSNotesTests {
         XCTAssertEqual(model.previewPDFAnchor, anchor)
         XCTAssertEqual(model.selected, note.standardizedFileURL)
 
+        let firstNavigation = model.previewPDFNavigationSequence
+        XCTAssertTrue(model.openInternalLink(link))
+        XCTAssertEqual(model.previewPDFNavigationSequence, firstNavigation + 1)
+        XCTAssertEqual(model.previewPDFAnchor, anchor)
+
         model.closePDFPreview()
         XCTAssertNil(model.previewPDFAnchor)
     }
