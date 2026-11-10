@@ -21,6 +21,7 @@ enum WorkspaceLinkRelocation {
         let edits: [RelatedEdit]
         let skippedCloudFiles: Int
         let skippedUnavailableFiles: Int
+        let skippedAmbiguousLinks: Int
     }
 
     /// Capture the canonical Markdown before a path change. The shared opening
@@ -105,6 +106,7 @@ enum WorkspaceLinkRelocation {
             var edits: [RelatedEdit] = []
             var skippedCloud = 0
             var skippedUnavailable = 0
+            var skippedAmbiguousLinks = 0
 
             for rawSource in markdownFiles {
                 try Task.checkCancellation()
@@ -158,14 +160,27 @@ enum WorkspaceLinkRelocation {
                     ).first ?? "")
                     let decodedPath = pathPart.removingPercentEncoding ?? pathPart
                     guard !decodedPath.isEmpty,
-                          URL(string: decodedPath)?.scheme == nil,
-                          let linked = WorkspaceFiles.resolveLinkedTarget(
-                            raw,
-                            from: source,
-                            in: root,
-                            candidates: markdownFiles,
-                            candidateBasenames: candidateBasenames
-                          ) else { continue }
+                          URL(string: decodedPath)?.scheme == nil else { continue }
+                    guard let linked = WorkspaceFiles.resolveLinkedTarget(
+                        raw,
+                        from: source,
+                        in: root,
+                        candidates: markdownFiles,
+                        candidateBasenames: candidateBasenames
+                    ) else {
+                        // A basename-only link can refer to more than one note.
+                        // Never guess which target the user intended; report it
+                        // when one candidate is part of the path being changed.
+                        if !decodedPath.contains("/") {
+                            let basename = URL(fileURLWithPath: decodedPath)
+                                .deletingPathExtension().lastPathComponent
+                            let matches = candidateBasenames[basename] ?? []
+                            if matches.count > 1 && matches.contains(where: isInsideMove) {
+                                skippedAmbiguousLinks += 1
+                            }
+                        }
+                        continue
+                    }
 
                     let targetMoves = isInsideMove(linked)
                     guard sourceMoves || targetMoves else { continue }
@@ -210,7 +225,8 @@ enum WorkspaceLinkRelocation {
             return RelatedPlan(
                 edits: edits,
                 skippedCloudFiles: skippedCloud,
-                skippedUnavailableFiles: skippedUnavailable
+                skippedUnavailableFiles: skippedUnavailable,
+                skippedAmbiguousLinks: skippedAmbiguousLinks
             )
         }.value
     }
@@ -245,6 +261,7 @@ enum WorkspaceLinkRelocation {
             var edits: [RelatedEdit] = []
             let skippedCloud = 0
             let skippedUnavailable = 0
+            let skippedAmbiguousLinks = 0
 
             for rawSource in markdownFiles {
                 try Task.checkCancellation()
@@ -330,7 +347,8 @@ enum WorkspaceLinkRelocation {
             return RelatedPlan(
                 edits: edits,
                 skippedCloudFiles: skippedCloud,
-                skippedUnavailableFiles: skippedUnavailable
+                skippedUnavailableFiles: skippedUnavailable,
+                skippedAmbiguousLinks: skippedAmbiguousLinks
             )
         }.value
     }

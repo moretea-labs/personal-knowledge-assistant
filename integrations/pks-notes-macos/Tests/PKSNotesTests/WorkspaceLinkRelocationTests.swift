@@ -149,6 +149,38 @@ final class WorkspaceLinkRelocationTests: XCTestCase {
     }
 
     @MainActor
+    func testRenameReportsAmbiguousIncomingBasenameWithoutGuessingTarget() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let firstFolder = root.appendingPathComponent("First", isDirectory: true)
+        let secondFolder = root.appendingPathComponent("Second", isDirectory: true)
+        try fm.createDirectory(at: firstFolder, withIntermediateDirectories: true)
+        try fm.createDirectory(at: secondFolder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let moving = firstFolder.appendingPathComponent("Target.md")
+        let other = secondFolder.appendingPathComponent("Target.md")
+        let reference = root.appendingPathComponent("Reference.md")
+        try "# First target".write(to: moving, atomically: true, encoding: .utf8)
+        try "# Second target".write(to: other, atomically: true, encoding: .utf8)
+        try "See [[Target]]".write(to: reference, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        let renamed = firstFolder.appendingPathComponent("Renamed.md")
+        let result = await model.renameItem(moving, to: "Renamed")
+
+        XCTAssertEqual(result, renamed)
+        XCTAssertFalse(fm.fileExists(atPath: moving.path))
+        XCTAssertEqual(try String(contentsOf: other, encoding: .utf8), "# Second target")
+        XCTAssertEqual(try String(contentsOf: reference, encoding: .utf8), "See [[Target]]")
+        XCTAssertEqual(
+            model.message,
+            AppLanguage.current.text("Path changed, but some related links could not be preserved. Review affected notes.")
+        )
+    }
+
+    @MainActor
     func testMoveAttachmentRepairsMarkdownImageReferenceWithoutCreatingKnowledgeLink() async throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

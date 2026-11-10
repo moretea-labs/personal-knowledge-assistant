@@ -2664,7 +2664,7 @@ final class NotesModel: ObservableObject {
             }
             let skippedLinkSources = relatedLinkRepair.skippedCloudFiles
                 + relatedLinkRepair.skippedUnavailableFiles
-            if repaired == false || !relatedRepaired {
+            if repaired == false || !relatedRepaired || relatedLinkRepair.skippedAmbiguousLinks > 0 {
                 message = AppLanguage.current.text("Path changed, but some related links could not be preserved. Review affected notes.")
             } else if skippedLinkSources > 0 {
                 message = "\(AppLanguage.current.text("Path changed. Some cloud-only or unavailable notes were not checked for links.")) (\(skippedLinkSources))"
@@ -2976,7 +2976,7 @@ final class NotesModel: ObservableObject {
             }
             let skippedLinkSources = relatedLinkRepair.skippedCloudFiles
                 + relatedLinkRepair.skippedUnavailableFiles
-            if repaired == false || !relatedRepaired {
+            if repaired == false || !relatedRepaired || relatedLinkRepair.skippedAmbiguousLinks > 0 {
                 message = AppLanguage.current.text("Path changed, but some related links could not be preserved. Review affected notes.")
             } else if skippedLinkSources > 0 {
                 message = "\(AppLanguage.current.text("Path changed. Some cloud-only or unavailable notes were not checked for links.")) (\(skippedLinkSources))"
