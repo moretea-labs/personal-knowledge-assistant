@@ -2256,7 +2256,7 @@ struct NotesWindow: View {
             HStack(spacing: 10) {
                 Image(systemName: "square.stack.3d.up")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(colorScheme == .dark ? theme.linkColor : Color.primary)
+                    .foregroundStyle(.primary)
                     .frame(width: 22)
                 Text("Leafspan")
                     .font(.system(size: 15, weight: .semibold))
