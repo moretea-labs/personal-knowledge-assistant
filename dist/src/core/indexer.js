@@ -18,6 +18,20 @@ export class Indexer {
         this.cfg = cfg;
         this.embeddings = embeddings;
     }
+    // Never suspend while a SQLite write transaction owns the database lock.
+    async prepareChunks(parsed, documentId) {
+        const prepared = [];
+        for (const chunk of chunkDocument(parsed)) {
+            const hash = sha256Text(chunk.text);
+            let embedding = null;
+            try {
+                embedding = await this.embeddings.embed(chunk.text);
+            }
+            catch { }
+            prepared.push({ chunk, chunkId: stableId('chk', `${documentId}:${chunk.ordinal}:${hash}`), hash, embedding, provider: embedding ? this.embeddings.id : null });
+        }
+        return prepared;
+    }
     async syncAll() { const stats = { sources: 0, scanned: 0, indexed: 0, skipped: 0, errors: [] }; const roots = this.cfg.sourceRoots.filter(x => x.enabled !== false); for (const s of roots) {
         stats.sources++;
         const nestedExcludes = roots.filter(x => x.id !== s.id && resolve(x.root).startsWith(resolve(s.root) + '/')).map(x => x.root);
@@ -52,7 +66,8 @@ export class Indexer {
         this.db.db.prepare(`INSERT INTO sources(id,type,name,root_uri,enabled,created_at,updated_at) VALUES(?,?,?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET type=excluded.type,name=excluded.name,root_uri=excluded.root_uri,updated_at=excluded.updated_at`).run(sourceId, sourceType, name, root, now, now);
         const stats = { scanned: 0, indexed: 0, skipped: 0, errors: [] };
         const seen = new Set();
-        for await (const e of walk(root, excludeRoots)) {
+        let scanFailed = false;
+        for await (const e of walk(root, excludeRoots, (failedPath, error) => { scanFailed = true; stats.errors.push({ path: failedPath, error: String(error) }); })) {
             stats.scanned++;
             seen.add(e.path);
             try {
@@ -87,12 +102,14 @@ export class Indexer {
                 }
             }
         }
-        const rows = this.db.db.prepare('SELECT id,uri FROM documents WHERE source_id=? AND deleted_at IS NULL').all(sourceId);
-        for (const r of rows) {
-            if (!seen.has(r.uri))
-                this.db.db.prepare('UPDATE documents SET deleted_at=?,index_status=? WHERE id=?').run(now, 'deleted', r.id);
+        if (!scanFailed) {
+            const rows = this.db.db.prepare('SELECT id,uri FROM documents WHERE source_id=? AND deleted_at IS NULL').all(sourceId);
+            for (const r of rows) {
+                if (!seen.has(r.uri))
+                    this.db.db.prepare('UPDATE documents SET deleted_at=?,index_status=? WHERE id=?').run(now, 'deleted', r.id);
+            }
         }
-        this.db.db.prepare(`INSERT INTO sync_state(source_id,last_scan_at,stats_json) VALUES(?,?,?) ON CONFLICT(source_id) DO UPDATE SET last_scan_at=excluded.last_scan_at,stats_json=excluded.stats_json,last_error=NULL`).run(sourceId, now, JSON.stringify(stats));
+        this.db.db.prepare(`INSERT INTO sync_state(source_id,last_scan_at,stats_json,last_error) VALUES(?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET last_scan_at=excluded.last_scan_at,stats_json=excluded.stats_json,last_error=excluded.last_error`).run(sourceId, now, JSON.stringify(stats), scanFailed ? JSON.stringify(stats.errors[0]) : null);
         return stats;
     }
     async indexDeferredFile(sourceId, sourceType, path, modifiedAt, createdAt, size, error) { const documentId = stableId('doc', path); const now = new Date().toISOString(); const title = basename(path); const metadata = { availability: 'cloud_placeholder', readError: String(error?.message || error), errno: error?.errno ?? null, code: error?.code ?? null }; this.db.db.exec('BEGIN'); try {
@@ -108,21 +125,15 @@ export class Indexer {
         this.db.db.exec('ROLLBACK');
         throw e;
     } this.refreshPathTags(documentId, path); return documentId; }
-    async indexFile(sourceId, sourceType, path, modifiedAt, createdAt, size, hash) { const parsed = await parseDocument(path); const existing = this.db.db.prepare('SELECT id FROM documents WHERE uri=?').get(path); const documentId = existing?.id || stableId('doc', path); const observedDate = inferObservedDate(path, parsed.text, modifiedAt); const domain = extractDomains(parsed.text, observedDate); const title = String(parsed.metadata.title || basename(path)); const indexStatus = path.toLowerCase().endsWith('.pdf') && !parsed.text.trim() ? 'metadata_only' : 'indexed'; const catalogTags = catalogTagsForPath(path, domain.tags || []); const h = hash || await sha256File(path); const now = new Date().toISOString(); this.db.db.exec('BEGIN'); try {
+    async indexFile(sourceId, sourceType, path, modifiedAt, createdAt, size, hash) { const parsed = await parseDocument(path); const existing = this.db.db.prepare('SELECT id FROM documents WHERE uri=?').get(path); const documentId = existing?.id || stableId('doc', path); const observedDate = inferObservedDate(path, parsed.text, modifiedAt); const domain = extractDomains(parsed.text, observedDate); const title = String(parsed.metadata.title || basename(path)); const indexStatus = path.toLowerCase().endsWith('.pdf') && !parsed.text.trim() ? 'metadata_only' : 'indexed'; const catalogTags = catalogTagsForPath(path, domain.tags || []); const h = hash || await sha256File(path); const preparedChunks = await this.prepareChunks(parsed, documentId); const now = new Date().toISOString(); this.db.db.exec('BEGIN'); try {
         this.db.db.prepare(`INSERT INTO documents(id,source_id,source_type,uri,canonical_uri,title,mime_type,created_at,modified_at,content_hash,size,document_type,tags_json,index_status,last_indexed_at,metadata_json,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL) ON CONFLICT(id) DO UPDATE SET source_id=excluded.source_id,source_type=excluded.source_type,title=excluded.title,modified_at=excluded.modified_at,content_hash=excluded.content_hash,size=excluded.size,document_type=excluded.document_type,tags_json=excluded.tags_json,index_status=excluded.index_status,last_indexed_at=excluded.last_indexed_at,metadata_json=excluded.metadata_json,deleted_at=NULL`).run(documentId, sourceId, sourceType, path, path, title, 'application/octet-stream', createdAt, modifiedAt, h, size, domain.documentType || 'generic', JSON.stringify([...catalogTags]), indexStatus, now, JSON.stringify(parsed.metadata));
         this.db.db.prepare('DELETE FROM chunks_fts WHERE document_id=?').run(documentId);
         this.db.db.prepare('DELETE FROM chunks WHERE document_id=?').run(documentId);
         this.db.db.prepare('DELETE FROM medical_observations WHERE source_document_id=? AND verified=0').run(documentId);
         this.db.db.prepare('DELETE FROM structured_records WHERE source_document_id=? AND authority != ?').run(documentId, 'user_correction');
         this.db.db.prepare('DELETE FROM document_entities WHERE document_id=?').run(documentId);
-        for (const c of chunkDocument(parsed)) {
-            const chunkId = stableId('chk', `${documentId}:${c.ordinal}:${sha256Text(c.text)}`);
-            let emb = null;
-            try {
-                emb = await this.embeddings.embed(c.text);
-            }
-            catch { }
-            this.db.db.prepare('INSERT INTO chunks(id,document_id,ordinal,text,start_offset,end_offset,page,heading_path,embedding_json,embedding_provider,embedding_dim,content_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(chunkId, documentId, c.ordinal, c.text, c.startOffset ?? null, c.endOffset ?? null, c.page ?? null, c.headingPath ?? null, emb ? JSON.stringify(emb) : null, emb ? this.embeddings.id : null, emb?.length ?? null, sha256Text(c.text));
+        for (const { chunk: c, chunkId, hash: contentHash, embedding: emb, provider } of preparedChunks) {
+            this.db.db.prepare('INSERT INTO chunks(id,document_id,ordinal,text,start_offset,end_offset,page,heading_path,embedding_json,embedding_provider,embedding_dim,content_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(chunkId, documentId, c.ordinal, c.text, c.startOffset ?? null, c.endOffset ?? null, c.page ?? null, c.headingPath ?? null, emb ? JSON.stringify(emb) : null, provider, emb?.length ?? null, contentHash);
             this.db.db.prepare('INSERT INTO chunks_fts(chunk_id,document_id,title,text) VALUES(?,?,?,?)').run(chunkId, documentId, title, c.text);
         }
         for (const o of domain.observations || []) {
@@ -211,18 +222,12 @@ export class Indexer {
     catch (e) {
         stats.errors.push({ source: 'notion', error: String(e?.message || e) });
     } this.db.db.prepare(`INSERT INTO sync_state(source_id,last_scan_at,stats_json,last_error) VALUES(?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET last_scan_at=excluded.last_scan_at,stats_json=excluded.stats_json,last_error=excluded.last_error`).run(sourceId, now, JSON.stringify(stats), stats.errors.length ? JSON.stringify(stats.errors[0]) : null); return stats; }
-    async indexVirtualDocument(sourceId, sourceType, uri, title, text, modifiedAt, hash, metadata = {}) { const documentId = stableId('doc', uri); const parsed = { text, sections: [{ text, startOffset: 0, endOffset: text.length }], metadata }; const domain = extractDomains(text, inferObservedDate(title, text, modifiedAt)); const now = new Date().toISOString(); this.db.db.exec('BEGIN'); try {
+    async indexVirtualDocument(sourceId, sourceType, uri, title, text, modifiedAt, hash, metadata = {}) { const documentId = stableId('doc', uri); const parsed = { text, sections: [{ text, startOffset: 0, endOffset: text.length }], metadata }; const domain = extractDomains(text, inferObservedDate(title, text, modifiedAt)); const preparedChunks = await this.prepareChunks(parsed, documentId); const now = new Date().toISOString(); this.db.db.exec('BEGIN'); try {
         this.db.db.prepare(`INSERT INTO documents(id,source_id,source_type,uri,canonical_uri,title,mime_type,created_at,modified_at,content_hash,size,document_type,tags_json,index_status,last_indexed_at,metadata_json,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'indexed',?,?,NULL) ON CONFLICT(id) DO UPDATE SET title=excluded.title,modified_at=excluded.modified_at,content_hash=excluded.content_hash,size=excluded.size,document_type=excluded.document_type,tags_json=excluded.tags_json,index_status='indexed',last_indexed_at=excluded.last_indexed_at,metadata_json=excluded.metadata_json,deleted_at=NULL`).run(documentId, sourceId, sourceType, uri, uri, title, 'text/plain', modifiedAt, modifiedAt, hash, Buffer.byteLength(text), domain.documentType || 'generic', JSON.stringify(domain.tags || []), now, JSON.stringify(metadata));
         this.db.db.prepare('DELETE FROM chunks_fts WHERE document_id=?').run(documentId);
         this.db.db.prepare('DELETE FROM chunks WHERE document_id=?').run(documentId);
-        for (const c of chunkDocument(parsed)) {
-            const chunkId = stableId('chk', `${documentId}:${c.ordinal}:${sha256Text(c.text)}`);
-            let emb = null;
-            try {
-                emb = await this.embeddings.embed(c.text);
-            }
-            catch { }
-            this.db.db.prepare('INSERT INTO chunks(id,document_id,ordinal,text,start_offset,end_offset,page,heading_path,embedding_json,embedding_provider,embedding_dim,content_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(chunkId, documentId, c.ordinal, c.text, c.startOffset ?? null, c.endOffset ?? null, c.page ?? null, c.headingPath ?? null, emb ? JSON.stringify(emb) : null, emb ? this.embeddings.id : null, emb?.length ?? null, sha256Text(c.text));
+        for (const { chunk: c, chunkId, hash: contentHash, embedding: emb, provider } of preparedChunks) {
+            this.db.db.prepare('INSERT INTO chunks(id,document_id,ordinal,text,start_offset,end_offset,page,heading_path,embedding_json,embedding_provider,embedding_dim,content_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(chunkId, documentId, c.ordinal, c.text, c.startOffset ?? null, c.endOffset ?? null, c.page ?? null, c.headingPath ?? null, emb ? JSON.stringify(emb) : null, provider, emb?.length ?? null, contentHash);
             this.db.db.prepare('INSERT INTO chunks_fts(chunk_id,document_id,title,text) VALUES(?,?,?,?)').run(chunkId, documentId, title, c.text);
         }
         this.db.db.exec('COMMIT');

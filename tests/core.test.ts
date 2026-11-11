@@ -1,6 +1,6 @@
 // @ts-nocheck
 import test from 'node:test';import assert from 'node:assert/strict';import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';import { tmpdir } from 'node:os';import { join } from 'node:path';import { PKSService } from '../src/core/service.js';import type { PKSConfig } from '../src/types.js';
-async function setup(){const root=await mkdtemp(join(tmpdir(),'pks-'));const docs=join(root,'docs');const managed=join(root,'managed');const data=join(root,'data');await mkdir(docs,{recursive:true});const cfg:PKSConfig={dataDir:data,managedStore:managed,port:0,host:'127.0.0.1',sourceRoots:[{id:'docs',type:'local',name:'Docs',root:docs},{id:'managed',type:'managed',name:'Managed',root:managed}],semantic:{provider:'hash',dimensions:128}};return{root,docs,managed,svc:await new PKSService(cfg).open()};}
+async function setup(){const root=await mkdtemp(join(tmpdir(),'pks-'));const docs=join(root,'docs');const managed=join(root,'managed');const data=join(root,'data');await mkdir(docs,{recursive:true});await mkdir(managed,{recursive:true});const cfg:PKSConfig={dataDir:data,managedStore:managed,port:0,host:'127.0.0.1',sourceRoots:[{id:'docs',type:'local',name:'Docs',root:docs},{id:'managed',type:'managed',name:'Managed',root:managed}],semantic:{provider:'hash',dimensions:128}};return{root,docs,managed,svc:await new PKSService(cfg).open()};}
 test('indexes, searches, structures health and preserves provenance',async()=>{const x=await setup();await writeFile(join(x.docs,'lab-2026-07-10.md'),'# Lab\n肌酐 112 μmol/L\n胱抑素C 1.57 mg/L\n');await x.svc.sync();const r=await x.svc.search('肌酐');assert.ok(r.length);assert.match(r[0].uri,/lab-2026-07-10/);const rows=x.svc.db.db.prepare('select * from medical_observations order by observation_type').all() as any[];assert.equal(rows.length,2);assert.ok(rows.every(r=>r.source_document_id));assert.ok(rows.every(r=>r.observed_at==='2026-07-10')); x.svc.db.close();});
 test('writes canonical markdown and can undo',async()=>{const x=await setup();await x.svc.sync();const m=await x.svc.writer.create({domain:'movies',title:'Dune',content:'Great world building.',structuredData:{type:'movie_watch',rating:4,watched_at:'2026-08-10',genres:['science fiction','drama']}});assert.match(await readFile(m.uri,'utf8'),/rating: 4/);const rs=await x.svc.search('Dune');assert.ok(rs.length);const mem=x.svc.memory.build('movies');assert.equal(mem.profile.count,1);await x.svc.writer.undo(m.mutationId);assert.equal((await x.svc.search('Dune')).length,0);assert.equal(x.svc.memory.get('movies').profile.count,0);x.svc.db.close();});
 test('semantic hash search catches related Chinese character patterns',async()=>{const x=await setup();await writeFile(join(x.docs,'guitar.md'),'# 稳定性练习\n切换和弦时手提前离开，导致尾音 sustain 不足。');await x.svc.sync();const rs=await x.svc.search('和弦切换尾音太短');assert.ok(rs.length);assert.match(rs[0].title,/guitar/);x.svc.db.close();});
@@ -184,5 +184,125 @@ test('related Chinese evidence distinguishes a specific topic from generic learn
   const results=await x.svc.search('慢性肾病饮食控制蛋白质摄入',{mode:'related',limit:8});
   assert.ok(results.some((r:any)=>r.uri===relevant),'CJK content overlap must be usable');
   assert.ok(!results.some((r:any)=>r.uri===noise),'generic shared Chinese text is not evidence');
+  x.svc.db.close();
+});
+
+
+test('indexing does not hold SQLite write transactions while awaiting embeddings',async()=>{
+  const { DatabaseSync }=await import('node:sqlite');
+  const { Indexer }=await import('../src/core/indexer.js');
+  const { stat }=await import('node:fs/promises');
+  const x=await setup();
+  const source=join(x.docs,'delayed-embedding.md');
+  await writeFile(source,'# Test\nStudy concepts with enough text to create an indexed chunk.');
+  const st=await stat(source);
+  for(const mode of ['local','virtual']){
+    let started!:()=>void;
+    let release!:()=>void;
+    const begun=new Promise<void>(resolve=>{started=resolve;});
+    const gate=new Promise<void>(resolve=>{release=resolve;});
+    const embedder={id:'test-slow-embedding',dimensions:3,async embed(){started();await gate;return [1,0,0];}};
+    const indexer=new Indexer(x.svc.db,x.svc.cfg,embedder);
+    const pending=mode==='local'
+      ?indexer.indexFile('docs','local',source,st.mtime.toISOString(),st.birthtime.toISOString(),st.size)
+      :indexer.indexVirtualDocument('notion','notion','notion://slow-test','Slow indexing','Study concepts for indexing.',new Date().toISOString(),'slow-hash');
+    await begun;
+    const another=new DatabaseSync(join(x.svc.cfg.dataDir,'knowledge.db'));
+    another.exec('PRAGMA busy_timeout=0');
+    let concurrentError:unknown=null;
+    try{
+      another.prepare('INSERT INTO corrections(id,target_id,field,new_value,created_at) VALUES(?,?,?,?,?)')
+        .run('concurrent-'+mode,'fixture','scan_probe','ok',new Date().toISOString());
+    }catch(error){concurrentError=error;}
+    finally{release();await pending;another.close();}
+    assert.equal(concurrentError,null,mode+' indexing must not hold write lock during remote embedding');
+  }
+  x.svc.db.close();
+});
+
+test('unavailable source root does not delete previously indexed documents',async()=>{
+  const { rename }=await import('node:fs/promises');
+  const x=await setup();
+  const path=join(x.docs,'existing-note.md');
+  await writeFile(path,'# Canonical study note\nSource file content remains the authority.');
+  await x.svc.sync();
+  const before=x.svc.db.db.prepare('SELECT index_status FROM documents WHERE uri=? AND deleted_at IS NULL').get(path) as any;
+  assert.equal(before?.index_status,'indexed');
+  const offline=x.docs+'-temporarily-offline';
+  await rename(x.docs,offline);
+  try{
+    const scan=await x.svc.sync();
+    const after=x.svc.db.db.prepare('SELECT index_status,deleted_at FROM documents WHERE uri=?').get(path) as any;
+    assert.equal(after?.deleted_at,null,'temporary source unavailability must not erase the catalog');
+    assert.equal(after?.index_status,'indexed');
+    assert.ok(scan.errors.some((error:any)=>error.path===x.docs),'incomplete scan must be visible');
+    const failure=x.svc.db.db.prepare('SELECT last_error FROM sync_state WHERE source_id=?').get('docs') as any;
+    assert.match(failure?.last_error||'',/temporarily-offline|docs|ENOENT/,'incomplete scan must retain a diagnosable source error');
+  }finally{await rename(offline,x.docs);}
+  await x.svc.sync();
+  assert.ok(x.svc.db.db.prepare('SELECT id FROM documents WHERE uri=? AND deleted_at IS NULL').get(path));
+  assert.equal((x.svc.db.db.prepare('SELECT last_error FROM sync_state WHERE source_id=?').get('docs') as any)?.last_error,null,'successful scan clears the source error');
+  x.svc.db.close();
+});
+
+
+test('memory excludes health and media evidence from documents removed in complete scans',async()=>{
+  const { unlink }=await import('node:fs/promises');
+  const x=await setup();
+  const source=join(x.docs,'lab-2026-07-10.md');
+  await writeFile(source,'# Labs\n肌酐 112 μmol/L\n胱抑素C 1.57 mg/L\n');
+  const movie=join(x.docs,'movie.md');
+  await writeFile(movie,'---\ntype: movie\ntitle: Cinema Evidence\nrating: 4\n---\n# Cinema Evidence');
+  await x.svc.sync();
+  assert.equal(x.svc.memory.get('movies').profile.count,1);
+  const before=x.svc.memory.get('health');
+  assert.ok(before.profile.observations.length>0,'original evidence should contribute to memory');
+  await unlink(source);
+  await x.svc.sync();
+  const document=x.svc.db.db.prepare('SELECT deleted_at FROM documents WHERE uri=?').get(source) as any;
+  assert.ok(document?.deleted_at,'complete scan should tombstone removed source');
+  const after=x.svc.memory.get('health');
+  assert.deepEqual(after.profile.observations,[],'deleted source must not remain in derived memory');
+  assert.deepEqual(after.evidence,[],'deleted source must not persist as memory evidence');
+  await unlink(movie);
+  await x.svc.sync();
+  assert.equal(x.svc.memory.get('movies').profile.count,0,'removed media source must not remain in memory');
+  x.svc.db.close();
+});
+
+
+test('explicit search modes do not silently blend catalog, FTS and semantic evidence',async()=>{
+  const x=await setup();
+  const pdf=join(x.docs,'Exclusive-Catalog-PDF.pdf');
+  const note=join(x.docs,'lexical-lesson.md');
+  await writeFile(pdf,'synthetic PDF with no native text');
+  await writeFile(note,'# Lexical relevance\nLexical relevance distinguishes related concepts from unrelated vocabulary.');
+  await x.svc.sync();
+  assert.ok((await x.svc.search('Exclusive-Catalog-PDF.pdf',{mode:'auto'}))
+    .some((hit:any)=>hit.uri===pdf),'auto file locator should still use metadata');
+  assert.ok(!(await x.svc.search('Exclusive-Catalog-PDF.pdf',{mode:'fts'}))
+    .some((hit:any)=>hit.uri===pdf),'FTS must not promote metadata-only PDFs');
+  assert.ok(!(await x.svc.search('Exclusive-Catalog-PDF.pdf',{mode:'semantic'}))
+    .some((hit:any)=>hit.uri===pdf),'semantic must not promote metadata-only PDFs');
+  const exact=await x.svc.search('lexical',{mode:'fts'});
+  assert.ok(exact.length>0);
+  assert.ok(exact.every((hit:any)=>hit.reasons.every((reason:string)=>reason==='full_text')));
+  const conceptual=await x.svc.search('lexical relevance',{mode:'semantic'});
+  assert.ok(conceptual.length>0);
+  assert.ok(conceptual.every((hit:any)=>hit.reasons.every((reason:string)=>reason==='semantic_hash')));
+  x.svc.db.close();
+});
+
+
+test('concurrent managed note creation preserves all original content without overwrites',async()=>{
+  const x=await setup();
+  const results=await Promise.allSettled(Array.from({length:8},(_,i)=>
+    x.svc.writer.create({title:'Concurrent Study Note',domain:'Inbox',content:'Unique payload '+i})));
+  const errors=results.filter((item:any)=>item.status==='rejected');
+  assert.deepEqual(errors,[],'each concurrent new note must have its own canonical destination');
+  const uris=results.map((item:any)=>item.value.uri);
+  assert.equal(new Set(uris).size,8,'all created files must use distinct paths');
+  const stored=await Promise.all(uris.map(uri=>readFile(uri,'utf8')));
+  for(let i=0;i<8;i++)assert.ok(stored[i].includes('Unique payload '+i),'a newer create must never overwrite an earlier note');
   x.svc.db.close();
 });

@@ -12,11 +12,15 @@ export class SearchEngine {
         const limit = Math.min(Math.max(opts.limit || 12, 1), 50);
         if (opts.mode === 'related')
             return this.related(query, limit, opts);
+        if (opts.mode === 'metadata')
+            return this.metadata(query, limit, opts);
+        if (opts.mode === 'fts')
+            return this.fts(query, limit, opts);
+        if (opts.mode === 'semantic')
+            return this.semantic(query, limit, opts);
         if (opts.mode === 'structured' || looksStructured(query))
             return this.structured(query, limit);
         const metadata = this.metadata(query, Math.max(limit * 2, 20), opts);
-        if (opts.mode === 'metadata')
-            return metadata.slice(0, limit);
         // Locating a file is a catalog lookup, never an approximate content search.
         if ((opts.mode === undefined || opts.mode === 'auto') && isLocatorQuery(query))
             return metadata.slice(0, limit);

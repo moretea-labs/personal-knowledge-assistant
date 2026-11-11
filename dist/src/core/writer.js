@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { join, resolve } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
-import { atomicWrite, fileExists, safeInside, ensureDir, removeIfExists } from '../util/fs.js';
+import { atomicWrite, createExclusive, safeInside, ensureDir, removeIfExists } from '../util/fs.js';
 import { id } from './ids.js';
 function slug(s) { return s.trim().replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, '-').slice(0, 100) || 'note'; }
 export class KnowledgeWriter {
@@ -40,11 +40,22 @@ export class KnowledgeWriter {
         if (!safeInside(this.cfg.managedStore, folder))
             throw new Error('destination must stay inside managedStore');
         await ensureDir(folder);
-        let path = join(folder, `${slug(title)}.md`);
-        if (await fileExists(path))
-            path = join(folder, `${slug(title)}-${Date.now()}.md`);
         const body = this.render(title, domain, input.content, input.structuredData);
-        await atomicWrite(path, body);
+        let path;
+        for (let attempt = 0; attempt < 10000; attempt++) {
+            const candidate = join(folder, `${slug(title)}${attempt ? '-' + (attempt + 1) : ''}.md`);
+            try {
+                await createExclusive(candidate, body);
+                path = candidate;
+                break;
+            }
+            catch (error) {
+                if (error?.code !== 'EEXIST')
+                    throw error;
+            }
+        }
+        if (!path)
+            throw new Error('No available filename for managed note');
         const s = await stat(path);
         await this.indexer.indexFile('managed', 'managed', path, s.mtime.toISOString(), s.birthtime.toISOString(), s.size);
         this.invalidateMemory();

@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
 import type { PKSConfig, MutationResult } from '../types.js';
 import { KnowledgeDB } from '../db/database.js';
-import { atomicWrite, fileExists, safeInside, ensureDir, removeIfExists } from '../util/fs.js';
+import { atomicWrite, createExclusive, safeInside, ensureDir, removeIfExists } from '../util/fs.js';
 import { id } from './ids.js';
 import { Indexer } from './indexer.js';
 
@@ -31,8 +31,15 @@ export class KnowledgeWriter{
   const domain=(input.domain||'Inbox').replace(/[^\p{L}\p{N}_ -]/gu,'').trim()||'Inbox';const title=input.title||new Date().toISOString().slice(0,10);
   const folder=input.destination?resolve(input.destination):join(this.cfg.managedStore,domain[0].toUpperCase()+domain.slice(1));
   if(!safeInside(this.cfg.managedStore,folder))throw new Error('destination must stay inside managedStore');await ensureDir(folder);
-  let path=join(folder,`${slug(title)}.md`);if(await fileExists(path))path=join(folder,`${slug(title)}-${Date.now()}.md`);
-  const body=this.render(title,domain,input.content,input.structuredData);await atomicWrite(path,body);const s=await stat(path);
+  const body=this.render(title,domain,input.content,input.structuredData);
+  let path:string|undefined;
+  for(let attempt=0;attempt<10000;attempt++){
+   const candidate=join(folder,`${slug(title)}${attempt?'-'+(attempt+1):''}.md`);
+   try{await createExclusive(candidate,body);path=candidate;break;}
+   catch(error:any){if(error?.code!=='EEXIST')throw error;}
+  }
+  if(!path)throw new Error('No available filename for managed note');
+  const s=await stat(path);
   await this.indexer.indexFile('managed','managed',path,s.mtime.toISOString(),s.birthtime.toISOString(),s.size);this.invalidateMemory();
   const mutationId=id();this.db.db.prepare('INSERT INTO mutations(id,actor,action,source,uri,before_json,after_json,timestamp,reason,reversible) VALUES(?,?,?,?,?,NULL,?,?,?,1)').run(mutationId,input.actor||'user','create','managed',path,JSON.stringify({content:body}),new Date().toISOString(),input.reason||'knowledge_write');
   return{mutationId,action:'create',uri:path,reversible:true};

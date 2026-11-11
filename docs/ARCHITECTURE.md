@@ -48,6 +48,8 @@ SQLite holds the catalog, FTS5 index, chunks, structured records, health observa
 
 A source scan compares metadata and content hashes. Changed content flows through parser -> chunker -> FTS -> embedding -> domain extraction -> entity extraction. Unchanged files skip parsing/embedding. Nested configured roots are excluded from parent scans to avoid duplicate indexing.
 
+**Index correctness:** parsing and Embedding preparation complete before opening the SQLite write transaction; the transaction only commits the new document, chunks, FTS and derived records atomically. An unreadable source root or subtree makes the scan incomplete: keep previously indexed documents, report the error in `sync_state.last_error`, and resume ordinary pruning only after a complete scan. A genuinely removed file in a complete scan is tombstoned. Managed note creation uses exclusive file creation rather than a check-then-overwrite race; update/undo temporary paths have unique names.
+
 ### Parsers
 
 Implemented:
@@ -69,7 +71,7 @@ OCR is deliberately not a default. A future image/OCR parser should only run aft
 
 The bundled hash-ngram embedding is an offline fuzzy fallback, not a claim of true semantic understanding. A remote OpenAI-compatible embedding provider is implemented and can be configured without changing index/search contracts.
 
-The dedicated `mode=related` search uses the same FTS/chunk and semantic candidates but requires multiple concrete overlaps in candidate content, ranks by term coverage, excludes the requesting document by `excludeUri` and returns at most one evidence-bearing hit per document. It intentionally returns fewer or no related items when evidence is weak; ordinary `auto` search behavior is unchanged. This does not introduce a second graph or index.
+Explicit `metadata`, `fts`, and `semantic` modes return only the corresponding evidence source; `auto` retains the existing hybrid fusion. The dedicated `mode=related` search uses the same FTS/chunk and semantic candidates but requires multiple concrete overlaps in candidate content, ranks by term coverage, excludes the requesting document by `excludeUri` and returns at most one evidence-bearing hit per document. It intentionally returns fewer or no related items when evidence is weak; ordinary `auto` search behavior is unchanged. This does not introduce a second graph or index.
 
 ### Writes
 
@@ -87,7 +89,7 @@ Canonical Markdown frontmatter can materialize `BookRecord` / `MovieWatch` struc
 
 ## Memory
 
-Memory is a materialized evidence-backed view, never an independent truth source. Writes/reindex invalidate stale profiles so ChatGPT cannot receive a profile that predates a canonical mutation.
+Memory is a materialized evidence-backed view, never an independent truth source. Writes/reindex invalidate stale profiles so ChatGPT cannot receive a profile that predates a canonical mutation. Memory aggregation excludes documents tombstoned by a complete scan; only active canonical source evidence and independent user-owned corrections contribute.
 
 ## Notion
 
