@@ -75,7 +75,7 @@ Explicit `metadata`, `fts`, and `semantic` modes return only the corresponding e
 
 ### Writes
 
-Standalone PKS mutations are restricted to the managed canonical store. Create/update performs atomic file write -> reindex -> memory invalidation. Undo restores/removes the canonical file and removes or rebuilds derived data. Physical moves outside the managed store are not duplicated inside PKS; PKS generates organization proposals and Forge performs approved filesystem mutations.
+Standalone PKS mutations are restricted to the managed canonical store. The existing SQLite database coordinates managed file writes and mutation-ledger changes across independent PKSService/Forge helper connections using bounded immediate transactions. Reindexing and Embedding remain outside those short write transactions; a delayed indexing result cannot publish unless its mutation remains the newest non-undone owner of the file. Undo rejects changed content instead of deleting or restoring an obsolete revision. This is filesystem/database coordination, not an assertion of atomic multi-resource commits, and introduces no second lock service or file. Physical moves outside the managed store are not duplicated inside PKS; PKS generates organization proposals and Forge performs approved filesystem mutations.
 
 ## Domain extensions
 

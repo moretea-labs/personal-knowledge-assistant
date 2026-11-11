@@ -11,6 +11,22 @@ function slug(s:string){return s.trim().replace(/[\\/:*?"<>|]/g,'-').replace(/\s
 
 export class KnowledgeWriter{
  constructor(private db:KnowledgeDB,private cfg:PKSConfig,private indexer:Indexer){}
+ private mutationTail:Promise<void>=Promise.resolve();
+ private async serializeMutation<T>(operation:()=>Promise<T>):Promise<T>{
+  const previous=this.mutationTail;
+  let release!:()=>void;
+  this.mutationTail=new Promise<void>(resolve=>{release=resolve;});
+  await previous;
+  try{return await operation();}finally{release();}
+ }
+ private async withCanonicalWrite<T>(apply:()=>Promise<T>):Promise<T>{
+  await this.db.beginWrite();
+  try{
+   const result=await apply();
+   this.db.db.exec('COMMIT');
+   return result;
+  }catch(error){this.db.db.exec('ROLLBACK');throw error;}
+ }
  // Managed Store ownership is a filesystem boundary, not merely a path prefix.
  private async checkedManagedPath(candidate:string){
   const root=resolve(this.cfg.managedStore);
@@ -30,52 +46,99 @@ export class KnowledgeWriter{
 
  private invalidateMemory(){this.db.db.prepare('DELETE FROM memory_profiles').run();}
  private removeDerivedByUri(uri:string){
-  const d=this.db.db.prepare('SELECT id FROM documents WHERE uri=?').get(uri) as any;if(!d)return;
-  this.db.db.exec('BEGIN');
-  try{
-   this.db.db.prepare('DELETE FROM chunks_fts WHERE document_id=?').run(d.id);
-   this.db.db.prepare('DELETE FROM chunks WHERE document_id=?').run(d.id);
-   this.db.db.prepare('DELETE FROM structured_records WHERE source_document_id=?').run(d.id);
-   this.db.db.prepare('DELETE FROM medical_observations WHERE source_document_id=?').run(d.id);
-   this.db.db.prepare('DELETE FROM document_entities WHERE document_id=?').run(d.id);
-   this.db.db.prepare("UPDATE documents SET deleted_at=?,index_status='deleted' WHERE id=?").run(new Date().toISOString(),d.id);
-   this.db.db.exec('COMMIT');
-  }catch(e){this.db.db.exec('ROLLBACK');throw e;}
+  const d=this.db.db.prepare('SELECT id FROM documents WHERE uri=?').get(uri) as any;
+  if(!d)return;
+  // Called only within withCanonicalWrite: the same SQLite transaction owns
+  // both source tombstones and derived evidence removal.
+  this.db.db.prepare('DELETE FROM chunks_fts WHERE document_id=?').run(d.id);
+  this.db.db.prepare('DELETE FROM chunks WHERE document_id=?').run(d.id);
+  this.db.db.prepare('DELETE FROM structured_records WHERE source_document_id=?').run(d.id);
+  this.db.db.prepare('DELETE FROM medical_observations WHERE source_document_id=?').run(d.id);
+  this.db.db.prepare('DELETE FROM document_entities WHERE document_id=?').run(d.id);
+  this.db.db.prepare("UPDATE documents SET deleted_at=?,index_status='deleted' WHERE id=?").run(new Date().toISOString(),d.id);
  }
 
+
  async create(input:{content:string;domain?:string;title?:string;structuredData?:Record<string,unknown>;destination?:string;actor?:string;reason?:string}):Promise<MutationResult>{
-  const domain=(input.domain||'Inbox').replace(/[^\p{L}\p{N}_ -]/gu,'').trim()||'Inbox';const title=input.title||new Date().toISOString().slice(0,10);
-  const folder=input.destination?resolve(input.destination):join(this.cfg.managedStore,domain[0].toUpperCase()+domain.slice(1));
-  await this.checkedManagedPath(folder);await ensureDir(folder);await this.checkedManagedPath(folder);
-  const body=this.render(title,domain,input.content,input.structuredData);
-  let path:string|undefined;
-  for(let attempt=0;attempt<10000;attempt++){
-   const candidate=join(folder,`${slug(title)}${attempt?'-'+(attempt+1):''}.md`);
-   try{await createExclusive(candidate,body);path=candidate;break;}
-   catch(error:any){if(error?.code!=='EEXIST')throw error;}
-  }
-  if(!path)throw new Error('No available filename for managed note');
-  const s=await stat(path);
-  await this.indexer.indexFile('managed','managed',path,s.mtime.toISOString(),s.birthtime.toISOString(),s.size);this.invalidateMemory();
-  const mutationId=id();this.db.db.prepare('INSERT INTO mutations(id,actor,action,source,uri,before_json,after_json,timestamp,reason,reversible) VALUES(?,?,?,?,?,NULL,?,?,?,1)').run(mutationId,input.actor||'user','create','managed',path,JSON.stringify({content:body}),new Date().toISOString(),input.reason||'knowledge_write');
-  return{mutationId,action:'create',uri:path,reversible:true};
+  return this.serializeMutation(async()=>{
+   const domain=(input.domain||'Inbox').replace(/[^\p{L}\p{N}_ -]/gu,'').trim()||'Inbox';
+   const title=input.title||new Date().toISOString().slice(0,10);
+   const folder=input.destination?resolve(input.destination):join(this.cfg.managedStore,domain[0].toUpperCase()+domain.slice(1));
+   const body=this.render(title,domain,input.content,input.structuredData);
+   const result=await this.withCanonicalWrite(async()=>{
+    await this.checkedManagedPath(folder);
+    await ensureDir(folder);
+    await this.checkedManagedPath(folder);
+    let path:string|undefined;
+    for(let attempt=0;attempt<10000;attempt++){
+     const candidate=join(folder,`${slug(title)}${attempt?'-'+(attempt+1):''}.md`);
+     try{await createExclusive(candidate,body);path=candidate;break;}
+     catch(error:any){if(error?.code!=='EEXIST')throw error;}
+    }
+    if(!path)throw new Error('No available filename for managed note');
+    const stats=await stat(path);
+    const mutationId=id();
+    this.db.db.prepare('INSERT INTO mutations(id,actor,action,source,uri,before_json,after_json,timestamp,reason,reversible) VALUES(?,?,?,?,?,NULL,?,?,?,1)').run(mutationId,input.actor||'user','create','managed',path,JSON.stringify({content:body}),new Date().toISOString(),input.reason||'knowledge_write');
+    return{path,mutationId,stats};
+   });
+   await this.indexer.indexFile('managed','managed',result.path,result.stats.mtime.toISOString(),result.stats.birthtime.toISOString(),result.stats.size,undefined,result.mutationId);
+   this.invalidateMemory();
+   return{mutationId:result.mutationId,action:'create',uri:result.path,reversible:true};
+  });
  }
 
  async update(input:{uri:string;append?:string;replace?:string;actor?:string;reason?:string}):Promise<MutationResult>{
-  const path=await this.checkedManagedPath(input.uri);
-  const before=await readFile(path,'utf8');const after=input.replace!==undefined?input.replace:before+(input.append??'');await atomicWrite(path,after);const s=await stat(path);
-  await this.indexer.indexFile('managed','managed',path,s.mtime.toISOString(),s.birthtime.toISOString(),s.size);this.invalidateMemory();
-  const mutationId=id();this.db.db.prepare('INSERT INTO mutations(id,actor,action,source,uri,before_json,after_json,timestamp,reason,reversible) VALUES(?,?,?,?,?,?,?,?,?,1)').run(mutationId,input.actor||'user','update','managed',path,JSON.stringify({content:before}),JSON.stringify({content:after}),new Date().toISOString(),input.reason||'knowledge_update');
-  return{mutationId,action:'update',uri:path,reversible:true};
+  return this.serializeMutation(async()=>{
+   const path=await this.checkedManagedPath(input.uri);
+   const result=await this.withCanonicalWrite(async()=>{
+    await this.checkedManagedPath(path);
+    const before=await readFile(path,'utf8');
+    const after=input.replace!==undefined?input.replace:before+(input.append??'');
+    await this.checkedManagedPath(path);
+    await atomicWrite(path,after);
+    const stats=await stat(path);
+    const mutationId=id();
+    this.db.db.prepare('INSERT INTO mutations(id,actor,action,source,uri,before_json,after_json,timestamp,reason,reversible) VALUES(?,?,?,?,?,?,?,?,?,1)').run(mutationId,input.actor||'user','update','managed',path,JSON.stringify({content:before}),JSON.stringify({content:after}),new Date().toISOString(),input.reason||'knowledge_update');
+    return{mutationId,stats};
+   });
+   await this.indexer.indexFile('managed','managed',path,result.stats.mtime.toISOString(),result.stats.birthtime.toISOString(),result.stats.size,undefined,result.mutationId);
+   this.invalidateMemory();
+   return{mutationId:result.mutationId,action:'update',uri:path,reversible:true};
+  });
  }
 
  async undo(mutationId:string){
-  const m=this.db.db.prepare('SELECT * FROM mutations WHERE id=?').get(mutationId) as any;if(!m||m.undone_at)throw new Error('Mutation not found or already undone');await this.checkedManagedPath(m.uri);
-  if(m.action==='create'){await removeIfExists(m.uri);this.removeDerivedByUri(m.uri);}
-  else if(m.action==='update'){const b=JSON.parse(m.before_json||'{}');await atomicWrite(m.uri,b.content||'');const s=await stat(m.uri);await this.indexer.indexFile('managed','managed',m.uri,s.mtime.toISOString(),s.birthtime.toISOString(),s.size);}
-  else throw new Error('Mutation is not undoable by standalone writer');
-  this.db.db.prepare('UPDATE mutations SET undone_at=? WHERE id=?').run(new Date().toISOString(),mutationId);this.invalidateMemory();
-  return{ok:true,mutationId};
+  return this.serializeMutation(async()=>{
+   const result=await this.withCanonicalWrite(async()=>{
+    const m=this.db.db.prepare('SELECT * FROM mutations WHERE id=?').get(mutationId) as any;
+    if(!m||m.undone_at)throw new Error('Mutation not found or already undone');
+    const path=await this.checkedManagedPath(m.uri);
+    let stats:any;
+    if(m.action==='create'){
+     const created=JSON.parse(m.after_json||'{}');
+     const current=await readFile(path,'utf8');
+     if(current!==created.content)throw new Error('Cannot undo create: managed note changed after this mutation');
+     await this.checkedManagedPath(path);
+     await removeIfExists(path);this.removeDerivedByUri(path);
+    }else if(m.action==='update'){
+     const before=JSON.parse(m.before_json||'{}');
+     const after=JSON.parse(m.after_json||'{}');
+     const current=await readFile(path,'utf8');
+     if(current!==after.content)throw new Error('Cannot undo update: managed note changed after this mutation');
+     await this.checkedManagedPath(path);
+     await atomicWrite(path,before.content||'');
+     stats=await stat(path);
+    }else throw new Error('Mutation is not undoable by standalone writer');
+    this.db.db.prepare('UPDATE mutations SET undone_at=? WHERE id=?').run(new Date().toISOString(),mutationId);
+    const active=this.db.db.prepare('SELECT id FROM mutations WHERE uri=? AND undone_at IS NULL ORDER BY rowid DESC LIMIT 1').get(path) as any;
+    return {action:m.action,path,stats,activeMutationId:active?.id??''};
+   });
+   if(result.action==='update'){
+    await this.indexer.indexFile('managed','managed',result.path,result.stats.mtime.toISOString(),result.stats.birthtime.toISOString(),result.stats.size,undefined,result.activeMutationId);
+   }
+   this.invalidateMemory();
+   return{ok:true,mutationId};
+  });
  }
 
  private render(title:string,domain:string,content:string,data?:Record<string,unknown>){const fm:any={type:data?.type||domain.toLowerCase(),title,...data};const lines=['---',...Object.entries(fm).filter(([,v])=>v!==undefined).map(([k,v])=>`${k}: ${Array.isArray(v)?`[${v.join(', ')}]`:String(v)}`),'---','',`# ${title}`,'',content.trim(),''];return lines.join('\n');}

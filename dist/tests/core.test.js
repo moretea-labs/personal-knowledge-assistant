@@ -306,7 +306,7 @@ test('concurrent managed note creation preserves all original content without ov
     x.svc.db.close();
 });
 test('managed writer rejects symlink paths that escape the canonical store', async () => {
-    const { symlink, stat: fileStat } = await import('node:fs/promises');
+    const { symlink, unlink, stat: fileStat } = await import('node:fs/promises');
     const x = await setup();
     const outside = join(x.root, 'outside');
     await mkdir(outside, { recursive: true });
@@ -323,5 +323,115 @@ test('managed writer rejects symlink paths that escape the canonical store', asy
     const legitimate = await x.svc.writer.create({ title: 'safe-note', content: 'original inside' });
     await x.svc.writer.update({ uri: legitimate.uri, replace: 'updated inside' });
     assert.match(await readFile(legitimate.uri, 'utf8'), /updated inside/);
+    const outsideUndo = join(outside, 'undo-target.md');
+    await writeFile(outsideUndo, 'outside remains untouched');
+    const undoCreate = await x.svc.writer.create({ title: 'undo-symlink-create', content: 'created inside' });
+    await unlink(undoCreate.uri);
+    await symlink(outsideUndo, undoCreate.uri, 'file');
+    await assert.rejects(x.svc.writer.undo(undoCreate.mutationId), /symbolic|symlink|managedStore/i);
+    assert.equal(await readFile(outsideUndo, 'utf8'), 'outside remains untouched');
+    const undoUpdate = await x.svc.writer.create({ title: 'undo-symlink-update', content: 'before update' });
+    const updateMutation = await x.svc.writer.update({ uri: undoUpdate.uri, append: '\\nupdated' });
+    await unlink(undoUpdate.uri);
+    await symlink(outsideUndo, undoUpdate.uri, 'file');
+    await assert.rejects(x.svc.writer.undo(updateMutation.mutationId), /symbolic|symlink|managedStore/i);
+    assert.equal(await readFile(outsideUndo, 'utf8'), 'outside remains untouched');
     x.svc.db.close();
+});
+test('managed writer serializes concurrent appends and rejects stale update undo', async () => {
+    const x = await setup();
+    const created = await x.svc.writer.create({ title: 'Concurrent Update Note', content: 'original' });
+    const [first, second] = await Promise.all([
+        x.svc.writer.update({ uri: created.uri, append: '\\nfirst concurrent append' }),
+        x.svc.writer.update({ uri: created.uri, append: '\\nsecond concurrent append' })
+    ]);
+    const combined = await readFile(created.uri, 'utf8');
+    assert.ok(combined.includes('first concurrent append') && combined.includes('second concurrent append'), 'concurrent append operations must not lose either update');
+    await assert.rejects(x.svc.writer.undo(first.mutationId), /changed after this mutation/i, 'an older update cannot overwrite a later update');
+    await x.svc.writer.undo(second.mutationId);
+    const afterSecond = await readFile(created.uri, 'utf8');
+    assert.ok(afterSecond.includes('first concurrent append'));
+    assert.ok(!afterSecond.includes('second concurrent append'));
+    await x.svc.writer.undo(first.mutationId);
+    const restored = await readFile(created.uri, 'utf8');
+    assert.match(restored, /original/);
+    assert.ok(!restored.includes('concurrent append'));
+    x.svc.db.close();
+});
+test('undoing creation never removes a note changed after that creation', async () => {
+    const x = await setup();
+    const created = await x.svc.writer.create({ title: 'Retained study note', content: 'original' });
+    const updated = await x.svc.writer.update({ uri: created.uri, append: ' Important new material' });
+    await assert.rejects(x.svc.writer.undo(created.mutationId), /changed after this mutation/i, 'undoing an older create must not delete subsequent note edits');
+    assert.match(await readFile(created.uri, 'utf8'), /Important new material/);
+    await x.svc.writer.undo(updated.mutationId);
+    await x.svc.writer.undo(created.mutationId);
+    await assert.rejects(readFile(created.uri, 'utf8'), { code: 'ENOENT' });
+    x.svc.db.close();
+});
+test('independent PKS connections preserve concurrent appends and index the final file', async () => {
+    const x = await setup();
+    const second = await new PKSService(x.svc.cfg).open();
+    try {
+        const created = await x.svc.writer.create({ title: 'Shared managed note', content: 'original' });
+        const { sha256File } = await import('../src/util/fs.js');
+        for (let round = 0; round < 3; round++) {
+            const left = ' [left-' + round + ']';
+            const right = ' [right-' + round + ']';
+            const outcomes = await Promise.allSettled([
+                x.svc.writer.update({ uri: created.uri, append: left }),
+                second.writer.update({ uri: created.uri, append: right })
+            ]);
+            assert.deepEqual(outcomes.map(r => r.status), ['fulfilled', 'fulfilled']);
+            const content = await readFile(created.uri, 'utf8');
+            assert.ok(content.includes(left) && content.includes(right), 'a second PKS process must not silently overwrite an accepted append');
+            const indexed = x.svc.db.db.prepare('SELECT content_hash FROM documents WHERE uri=?').get(created.uri);
+            assert.equal(indexed.content_hash, await sha256File(created.uri), 'the canonical index must match the final managed file');
+        }
+    }
+    finally {
+        second.db.close();
+        x.svc.db.close();
+    }
+});
+test('late embeddings cannot publish an obsolete managed-file index', async () => {
+    const x = await setup();
+    const second = await new PKSService(x.svc.cfg).open();
+    let resume, notify, timer;
+    const gate = new Promise(resolve => { resume = resolve; });
+    const reached = new Promise(resolve => { notify = resolve; });
+    try {
+        const created = await x.svc.writer.create({ title: 'Delayed index writer', content: 'original' });
+        const originalEmbed = x.svc.embeddings.embed.bind(x.svc.embeddings);
+        let intercepted = false;
+        x.svc.embeddings.embed = async (text) => {
+            if (!intercepted && text.includes('slow older revision')) {
+                intercepted = true;
+                notify();
+                await gate;
+            }
+            return originalEmbed(text);
+        };
+        const older = x.svc.writer.update({ uri: created.uri, append: ' slow older revision' });
+        await Promise.race([
+            reached,
+            new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('first embedding was not reached')), 2500); })
+        ]);
+        clearTimeout(timer);
+        await second.writer.update({ uri: created.uri, append: ' newer canonical revision' });
+        resume();
+        await older;
+        const content = await readFile(created.uri, 'utf8');
+        assert.match(content, /slow older revision/);
+        assert.match(content, /newer canonical revision/);
+        const { sha256File } = await import('../src/util/fs.js');
+        const indexed = x.svc.db.db.prepare('SELECT content_hash FROM documents WHERE uri=?').get(created.uri);
+        assert.equal(indexed.content_hash, await sha256File(created.uri), 'stale embedding must not overwrite the latest canonical index');
+    }
+    finally {
+        clearTimeout(timer);
+        resume();
+        second.db.close();
+        x.svc.db.close();
+    }
 });
