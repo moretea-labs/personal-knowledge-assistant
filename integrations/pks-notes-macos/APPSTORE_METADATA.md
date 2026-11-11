@@ -5,7 +5,7 @@ This file is the submission-copy authority for the first macOS App Store release
 ## App identity
 
 - Bundle ID: `com.moretea.pks.notes`
-- App name (en-US / zh-Hans): `Leafspan` (target; App Store Connect rename pending)
+- App name (en-US): `Leafspan` — updated in App Store Connect on 2026-11-12. The zh-Hans App Info localization has not yet been created.
 - Primary category draft: Productivity
 - App price: Free
 - Pro model: one Non-Consumable In-App Purchase
@@ -15,6 +15,16 @@ This file is the submission-copy authority for the first macOS App Store release
 - App Store Connect SKU: `pks-notes-mac-2026`
 - First macOS version: `1.0`; source candidate build number `3` (not uploaded). Existing uploaded build `2` is older and not a verified candidate for the latest source.
 - Sign-in required: No
+
+## Current App Store Connect draft state (2026-11-12)
+
+- App Info en-US localization is `Leafspan` with subtitle `Local Markdown & Mind Maps`; the Privacy Policy URL points to the current `main` branch.
+- macOS version `1.0` remains `PREPARE_FOR_SUBMISSION`. Its existing en-US version localization now matches the Leafspan description, keywords, promotional text, and Support URL in this file.
+- App Info and version metadata each currently expose only one localization (`en-US`). The zh-Hans copy below is ready in this source draft but has not been created in App Store Connect; the available connector supports updating existing localizations but does not expose a create-localization action.
+- App age rating and version copyright are unset. Review contact name/email/phone remain required.
+- App Store Connect contains only builds `1` and `2`; build `2` is `VALID`. The current local source candidate is build `3` and has not been uploaded.
+- No App Review submission records exist. This remains a draft-only state; no build upload, review submission, or publication occurred.
+- The available screenshot-set read action rejects a `MAC_OS` version as unsupported; macOS screenshot upload state is not verified through that connector and remains a release gate.
 
 ## Required external values before submission
 
