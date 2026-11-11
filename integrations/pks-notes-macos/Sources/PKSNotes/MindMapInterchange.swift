@@ -7,12 +7,14 @@ enum MindMapInterchange {
         case empty
         case invalid
         case tooLarge
+        case tooDeep
 
         var errorDescription: String? {
             switch self {
             case .empty: "No headings or list nodes were found."
             case .invalid: "This is not a valid OPML mind map."
             case .tooLarge: "This OPML file is too large (maximum 5 MB)."
+            case .tooDeep: "This mind map is nested too deeply (maximum 64 levels)."
             }
         }
     }
@@ -20,6 +22,7 @@ enum MindMapInterchange {
     static func exportOPML(_ markdown: String) throws -> Data {
         let nodes = MindMapOutline.nodes(in: markdown)
         guard !nodes.isEmpty else { throw Failure.empty }
+        guard nodes.allSatisfy({ $0.depth < 64 }) else { throw Failure.tooDeep }
         var output = """
         <?xml version="1.0" encoding="UTF-8"?>
         <opml version="2.0">
@@ -73,7 +76,7 @@ enum MindMapInterchange {
         }
         var lines = [prefix.trimmingCharacters(in: .newlines)]
         for item in items.dropFirst(roots == 1 ? 1 : 0) {
-            let indentation = min(32, max(0, item.depth - indentAdjustment))
+            let indentation = item.depth - indentAdjustment
             lines.append(String(repeating: "  ", count: indentation) + "- " + item.text)
         }
         return lines.joined(separator: "\n") + "\n"

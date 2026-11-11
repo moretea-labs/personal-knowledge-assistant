@@ -162,6 +162,24 @@ final class MindNodePackageTests: XCTestCase {
         }
     }
 
+    func testNativeExportRejectsOutlineDeeperThanImporterLimit() throws {
+        let (base, template) = try fixture()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let levels = (1...64).map { depth in
+            String(repeating: " ", count: (depth - 1) * 2) + "- Level \(depth)"
+        }.joined(separator: "\n")
+        let source = "# Root\n\(levels)\n"
+        let destination = base.appendingPathComponent("TooDeep.mindnode", isDirectory: true)
+        XCTAssertThrowsError(try MindNodePackage.exportOutline(
+            source, usingTemplate: template, to: destination
+        )) { error in
+            guard case MindNodePackage.Failure.tooDeep = error else {
+                return XCTFail("Expected the explicit maximum-depth error, got: \(error)")
+            }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    }
+
     func testNativeExportRejectsTemplateSymlinks() throws {
         let (base, template) = try fixture()
         defer { try? FileManager.default.removeItem(at: base) }

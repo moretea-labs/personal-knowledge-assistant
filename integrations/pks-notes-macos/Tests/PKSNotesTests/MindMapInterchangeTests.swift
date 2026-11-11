@@ -55,6 +55,25 @@ final class MindMapInterchangeTests: XCTestCase {
         XCTAssertEqual(markdown, "# First # Not a heading\n")
     }
 
+    func testOPMLRoundTripPreservesDeepHierarchyAndRejectsUnimportableDepth() throws {
+        let fortyLevels = (1...40).map { depth in
+            String(repeating: " ", count: (depth - 1) * 2) + "- Level \(depth)"
+        }.joined(separator: "\n")
+        let source = "# Root\n\(fortyLevels)\n"
+        let exported = try MindMapInterchange.exportOPML(source)
+        XCTAssertEqual(try MindMapInterchange.importOPML(exported), source)
+
+        let sixtyFourLevels = (1...64).map { depth in
+            String(repeating: " ", count: (depth - 1) * 2) + "- Level \(depth)"
+        }.joined(separator: "\n")
+        let tooDeep = "# Root\n\(sixtyFourLevels)\n"
+        XCTAssertThrowsError(try MindMapInterchange.exportOPML(tooDeep)) { error in
+            guard case MindMapInterchange.Failure.tooDeep = error else {
+                return XCTFail("Expected the explicit maximum-depth error, got: \(error)")
+            }
+        }
+    }
+
     func testExportSkipsFencedCodeInMarkdown() throws {
         let source = "# Root\n~~~md\n- hidden\n~~~\n- Visible"
         let xml = String(decoding: try MindMapInterchange.exportOPML(source), as: UTF8.self)

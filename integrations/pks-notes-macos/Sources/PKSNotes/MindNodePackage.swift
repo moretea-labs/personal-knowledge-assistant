@@ -9,6 +9,7 @@ enum MindNodePackage {
         case unsupported
         case malformed
         case tooLarge
+        case tooDeep
         case notOutline
         case destinationExists
 
@@ -17,6 +18,7 @@ enum MindNodePackage {
             case .unsupported: "Only verified MindNode package versions 7 and 9 are supported in this importer."
             case .malformed: "This is not a valid MindNode package with a readable node tree."
             case .tooLarge: "The MindNode node data is too large (maximum 12 MB)."
+            case .tooDeep: "This MindNode outline is nested too deeply (maximum 64 levels)."
             case .notOutline: "Native MindNode export requires one root and only Markdown heading/list nodes. Use OPML to exchange a larger note."
             case .destinationExists: "The destination already exists; choose a new filename to avoid overwriting existing mind maps."
             }
@@ -208,6 +210,7 @@ enum MindNodePackage {
         guard !topics.isEmpty, topics.first?.depth == 0, topics.count <= 10_000 else {
             throw Failure.notOutline
         }
+        guard topics.allSatisfy({ $0.depth < 64 }) else { throw Failure.tooDeep }
         let topicLines = Set(topics.map(\.id))
         // Do not silently downgrade Markdown tasks, linked notes, or images
         // into plain textual node titles. OPML remains the interchange option.
