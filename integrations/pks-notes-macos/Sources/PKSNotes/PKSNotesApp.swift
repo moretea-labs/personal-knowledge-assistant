@@ -108,6 +108,8 @@ struct PKSNotesApp: App {
                     .keyboardShortcut("8", modifiers: [.command, .shift])
                 Button(language.text("Task")) { MarkdownNativeCommand.perform("task") }
                     .keyboardShortcut("9", modifiers: [.command, .shift])
+                Button(language.text("Quote")) { MarkdownNativeCommand.perform("quote") }
+                Button(language.text("Insert Table")) { MarkdownNativeCommand.perform("table") }
             }
             CommandMenu("Leafspan") {
                 Button(language.text("New Markdown Note")) {
@@ -266,7 +268,12 @@ enum MarkdownNativeCommand {
 
     @discardableResult
     static func perform(_ value: String) -> Bool {
-        guard let textView = activeTextView(),
+        perform(value, in: activeTextView())
+    }
+
+    @discardableResult
+    static func perform(_ value: String, in textView: NSTextView?) -> Bool {
+        guard let textView, textView.isEditable, !textView.isFieldEditor,
               let command = editCommand(for: value) else { return false }
         let original = textView.string
         let result = MarkdownEditing.apply(command, to: original, selection: textView.selectedRange())
@@ -295,6 +302,8 @@ enum MarkdownNativeCommand {
         case "h3": .heading(3)
         case "bullet": .bullet
         case "task": .task
+        case "quote": .quote
+        case "table": .table
         default: nil
         }
     }
@@ -383,6 +392,7 @@ struct NotesWindow: View {
     @State private var showingBacklinks = false
     @State private var showingOutline = false
     @AppStorage("LeafspanAuxiliaryListPresentation") private var auxiliaryListPresentation = "pane"
+    @AppStorage("LeafspanShowMarkdownToolbar") private var showMarkdownToolbar = true
     @State private var showingProUpsell = false
     @State private var quickOpenQuery = ""
     @State private var quickOpenIndex = 0
@@ -526,6 +536,19 @@ struct NotesWindow: View {
                     }
                     .padding(3)
                     .background(.ultraThinMaterial, in: Capsule())
+                }
+
+                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil
+                    && !showingMindMap && mode != .read {
+                    Toggle(isOn: $showMarkdownToolbar) {
+                        toolbarSymbol("textformat")
+                    }
+                    .toggleStyle(.button)
+                    .buttonStyle(.plain)
+                    .help(language.text(showMarkdownToolbar ? "Hide Markdown Toolbar" : "Show Markdown Toolbar"))
+                    .accessibilityLabel(language.text("Markdown formatting toolbar"))
+                    .accessibilityValue(language.text(showMarkdownToolbar ? "On" : "Off"))
+                    .accessibilityIdentifier("pks-markdown-toolbar-toggle")
                 }
 
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
@@ -2597,6 +2620,26 @@ struct NotesWindow: View {
             NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
             return
         }
+        insertClipboardImage(into: textView)
+    }
+
+    private func pasteImageFromClipboard() {
+        guard model.selected != nil,
+              model.externalBody == nil,
+              let textView = markdownTextView(in: NSApp.keyWindow?.contentView) else { return }
+
+        let pasteboard = NSPasteboard.general
+        let hasImage = pasteboard.data(forType: .png) != nil
+            || pasteboard.data(forType: .tiff) != nil
+            || NSImage(pasteboard: pasteboard) != nil
+        guard hasImage else {
+            model.message = language.text("Copy an image to the clipboard first.")
+            return
+        }
+        insertClipboardImage(into: textView)
+    }
+
+    private func insertClipboardImage(into textView: NSTextView) {
         guard let markdown = model.importClipboardImage() else {
             model.message = language.text("Could not save the pasted image inside this notes workspace.")
             return
@@ -2607,8 +2650,9 @@ struct NotesWindow: View {
         model.draft = result.text
         Task { @MainActor in
             await Task.yield()
-            guard let active = MarkdownNativeCommand.activeTextView()
-                    ?? markdownTextView(in: NSApp.keyWindow?.contentView) else { return }
+            guard let active = markdownTextView(in: NSApp.keyWindow?.contentView)
+                    ?? MarkdownNativeCommand.activeTextView() else { return }
+            NSApp.keyWindow?.makeFirstResponder(active)
             active.setSelectedRange(result.selection)
             active.scrollRangeToVisible(result.selection)
         }
@@ -3206,32 +3250,130 @@ struct NotesWindow: View {
     }
 
     private var editor: some View {
-        TextEditor(text: $model.draft)
-            .focused($editorFocused)
-            .font(.system(size: theme.typography.bodySize + fontAdjustment,
-                          design: theme.typography.design))
-            .lineSpacing(CGFloat(max(0.08, theme.typography.lineSpacing + lineAdjustment) * 9))
-            .foregroundColor(theme.ink)
-            .tint(theme.linkColor)
-            .scrollContentBackground(.hidden)
-            .frame(maxWidth: theme.typography.pageWidth + widthAdjustment)
-            .padding(.horizontal, 28)
-            .padding(.vertical, 24)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(theme.canvas)
-            // Only the blank 20pt page gutter toggles back to Preview.
-            // Double-clicking actual NSTextView text must still select a word.
-            .overlay(alignment: .leading) {
-                Color.clear
-                    .frame(width: 20)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { switchReadingMode(to: .read) }
-                    .help(language.text("Double-click the margin to preview (⌘Return)"))
+        VStack(spacing: 0) {
+            if showMarkdownToolbar {
+                markdownFormattingToolbar
             }
-            // The old draft remains intact until an off-main file load succeeds.
-            .disabled(model.loadingNote)
-            .accessibilityIdentifier("pks-markdown-editor")
-            .onAppear { resetNativeEditorUndoBaseline() }
+            TextEditor(text: $model.draft)
+                .focused($editorFocused)
+                .font(.system(size: theme.typography.bodySize + fontAdjustment,
+                              design: theme.typography.design))
+                .lineSpacing(CGFloat(max(0.08, theme.typography.lineSpacing + lineAdjustment) * 9))
+                .foregroundColor(theme.ink)
+                .tint(theme.linkColor)
+                .scrollContentBackground(.hidden)
+                .frame(maxWidth: theme.typography.pageWidth + widthAdjustment)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(theme.canvas)
+                // Only the blank 20pt page gutter toggles back to Preview.
+                // Double-clicking actual NSTextView text must still select a word.
+                .overlay(alignment: .leading) {
+                    Color.clear
+                        .frame(width: 20)
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) { switchReadingMode(to: .read) }
+                        .help(language.text("Double-click the margin to preview (⌘Return)"))
+                }
+                // The old draft remains intact until an off-main file load succeeds.
+                .disabled(model.loadingNote)
+                .accessibilityIdentifier("pks-markdown-editor")
+                .onAppear { resetNativeEditorUndoBaseline() }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(theme.canvas)
+    }
+
+    private var markdownFormattingToolbar: some View {
+        HStack(spacing: 7) {
+            Menu {
+                Button(language.text("Heading 1")) { applyMarkdownFormatting("h1") }
+                Button(language.text("Heading 2")) { applyMarkdownFormatting("h2") }
+                Button(language.text("Heading 3")) { applyMarkdownFormatting("h3") }
+            } label: {
+                Label(language.text("Heading"), systemImage: "textformat.size")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .help(language.text("Heading"))
+            .accessibilityIdentifier("pks-markdown-format-heading")
+
+            markdownCommandButton("bold", title: "Bold", symbol: "bold",
+                                  identifier: "pks-markdown-format-bold")
+            markdownCommandButton("italic", title: "Italic", symbol: "italic",
+                                  identifier: "pks-markdown-format-italic")
+
+            Menu {
+                Button(language.text("Bullet List")) { applyMarkdownFormatting("bullet") }
+                Button(language.text("Task")) { applyMarkdownFormatting("task") }
+            } label: {
+                Label(language.text("List"), systemImage: "list.bullet")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .help(language.text("List"))
+            .accessibilityIdentifier("pks-markdown-format-list")
+
+            markdownCommandButton("quote", title: "Quote", symbol: "text.quote",
+                                  identifier: "pks-markdown-format-quote")
+            markdownCommandButton("link", title: "Link", symbol: "link",
+                                  identifier: "pks-markdown-format-link")
+            markdownCommandButton("code", title: "Inline Code",
+                                  symbol: "chevron.left.forwardslash.chevron.right",
+                                  identifier: "pks-markdown-format-code")
+
+            Menu {
+                Button(language.text("Insert Table"), systemImage: "tablecells") {
+                    applyMarkdownFormatting("table")
+                }
+                Button(language.text("Paste Image from Clipboard"), systemImage: "photo") {
+                    pasteImageFromClipboard()
+                }
+            } label: {
+                Label(language.text("Insert"), systemImage: "plus")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .help(language.text("Insert"))
+            .accessibilityIdentifier("pks-markdown-format-insert")
+
+            Spacer(minLength: 0)
+        }
+        .buttonStyle(.plain)
+        .controlSize(.small)
+        .padding(.horizontal, 16)
+        .frame(height: 36)
+        .background(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
+        .accessibilityIdentifier("pks-markdown-formatting-toolbar")
+    }
+
+    private func markdownCommandButton(
+        _ command: String,
+        title: String,
+        symbol: String,
+        identifier: String
+    ) -> some View {
+        Button {
+            applyMarkdownFormatting(command)
+        } label: {
+            Label(language.text(title), systemImage: symbol)
+                .font(.system(size: 11, weight: .medium))
+        }
+        .buttonStyle(.plain)
+        .help(language.text(title))
+        .accessibilityLabel(language.text(title))
+        .accessibilityIdentifier(identifier)
+    }
+
+    private func applyMarkdownFormatting(_ command: String) {
+        guard let textView = markdownTextView(in: NSApp.keyWindow?.contentView) else { return }
+        NSApp.keyWindow?.makeFirstResponder(textView)
+        editorFocused = true
+        _ = MarkdownNativeCommand.perform(command, in: textView)
     }
 
     private func setMindMapVisible(_ visible: Bool) {

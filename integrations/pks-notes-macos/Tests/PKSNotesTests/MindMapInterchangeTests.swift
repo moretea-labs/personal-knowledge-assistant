@@ -61,4 +61,37 @@ final class MindMapInterchangeTests: XCTestCase {
         XCTAssertFalse(xml.contains("hidden"))
         XCTAssertTrue(xml.contains("Visible"))
     }
+
+    func testMindMapNodesInheritAttachedPDFCitationsWithoutCrossingNodeBoundaries() throws {
+        let chapterTarget = "/Books/Study%20Guide.pdf#page=4&rects=0.1,0.2,0.3,0.04&fp=0123456789abcdef"
+        let conceptTarget = "/Books/Diagram.pdf#page=7&rects=0.2,0.3,0.4,0.05&fp=abcdef0123456789"
+        let nextTarget = "/Books/Next.pdf#page=1"
+        let markdown = """
+        # Chapter
+        Summary
+        [Textbook · p. 4](\(chapterTarget))
+        > Selected passage
+        ~~~markdown
+        [Example only](\(conceptTarget))
+        ~~~
+        - Concept
+          Supporting note
+          [Diagram · p. 7](\(conceptTarget))
+        - Another
+        # Next Chapter
+        [Next · p. 1](\(nextTarget))
+        """
+
+        let nodes = MindMapOutline.nodes(in: markdown)
+        let presentations = MindMapOutline.presentations(in: markdown, nodes: nodes)
+        let chapter = try XCTUnwrap(nodes.first(where: { $0.title == "Chapter" }))
+        let concept = try XCTUnwrap(nodes.first(where: { $0.title == "Concept" }))
+        let another = try XCTUnwrap(nodes.first(where: { $0.title == "Another" }))
+        let next = try XCTUnwrap(nodes.first(where: { $0.title == "Next Chapter" }))
+
+        XCTAssertEqual(try XCTUnwrap(presentations[chapter.id]).links.map(\.target), [chapterTarget])
+        XCTAssertEqual(try XCTUnwrap(presentations[concept.id]).links.map(\.target), [conceptTarget])
+        XCTAssertEqual(try XCTUnwrap(presentations[another.id]).links, [])
+        XCTAssertEqual(try XCTUnwrap(presentations[next.id]).links.map(\.target), [nextTarget])
+    }
 }

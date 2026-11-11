@@ -1,7 +1,7 @@
 import Foundation
 
 /// Read-only outline projection; the Markdown file remains the source of truth.
-struct MindMapNode: Equatable, Identifiable {
+struct MindMapNode: Equatable, Identifiable, Sendable {
     let id: Int
     let depth: Int
     let title: String
@@ -248,7 +248,7 @@ extension MindMapOutline {
 
 
 /// A note relationship extracted from existing Markdown syntax; no second graph database.
-struct MindMapLink: Equatable {
+struct MindMapLink: Equatable, Sendable {
     let label: String
     let target: String
 }
@@ -258,7 +258,7 @@ struct MarkdownLinkOccurrence: Equatable {
     let lineIndex: Int
 }
 
-struct MindMapNodePresentation: Equatable {
+struct MindMapNodePresentation: Equatable, Sendable {
     let title: String
     let links: [MindMapLink]
 }
@@ -475,6 +475,47 @@ extension MindMapOutline {
 
         let clean = rendered.trimmingCharacters(in: .whitespacesAndNewlines)
         return .init(title: clean.isEmpty ? title : clean, links: parsed.map(\.link))
+    }
+
+    /// Derive each node's links from its title plus the Markdown body attached
+    /// to that structural line. Body ownership ends at the next heading/list node,
+    /// matching nodeID(atUTF16Offset); descendants never leak citations upward.
+    /// Markdown remains the only source of truth and each body line is scanned once.
+    static func presentations(
+        in markdown: String,
+        nodes: [MindMapNode]
+    ) -> [Int: MindMapNodePresentation] {
+        let lines = markdown.components(separatedBy: "\n")
+        var result: [Int: MindMapNodePresentation] = [:]
+        result.reserveCapacity(nodes.count)
+
+        for (position, node) in nodes.enumerated() {
+            let title = presentation(for: node.title)
+            guard lines.indices.contains(node.id) else {
+                result[node.id] = title
+                continue
+            }
+
+            let bodyStart = node.id + 1
+            let nextNodeLine = position + 1 < nodes.count
+                ? nodes[position + 1].id
+                : lines.count
+            let bodyEnd = min(lines.count, max(bodyStart, nextNodeLine))
+            let body = bodyStart < bodyEnd
+                ? lines[bodyStart..<bodyEnd].joined(separator: "\n")
+                : ""
+
+            var links = title.links
+            var seen = Set(links.map { $0.target + "\u{0}" + $0.label })
+            for link in linkOccurrences(in: body).map(\.link) {
+                let key = link.target + "\u{0}" + link.label
+                if seen.insert(key).inserted {
+                    links.append(link)
+                }
+            }
+            result[node.id] = .init(title: title.title, links: links)
+        }
+        return result
     }
 
     /// Add one canonical WikiLink to an existing structural node. The source

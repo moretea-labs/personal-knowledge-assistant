@@ -13,6 +13,8 @@ enum MarkdownEditCommand {
     case heading(Int)
     case bullet
     case task
+    case quote
+    case table
 }
 
 struct MarkdownReplacement: Equatable {
@@ -70,6 +72,28 @@ enum MarkdownEditing {
             return prefixLines(text, range: range, prefix: "- ")
         case .task:
             return prefixLines(text, range: range, prefix: "- [ ] ")
+        case .quote:
+            return prefixLines(text, range: range, prefix: "> ")
+        case .table:
+            let table = "| Column 1 | Column 2 |\n| --- | --- |\n| Cell | Cell |"
+            let before = ns.substring(to: range.location)
+            let after = ns.substring(from: NSMaxRange(range))
+            let leading = before.isEmpty || before.hasSuffix("\n\n")
+                ? ""
+                : (before.hasSuffix("\n") ? "\n" : "\n\n")
+            let trailing = after.isEmpty || after.hasPrefix("\n\n")
+                ? ""
+                : (after.hasPrefix("\n") ? "\n" : "\n\n")
+            let insertion = leading + table + trailing
+            let updated = ns.replacingCharacters(in: range, with: insertion)
+            let header = (table as NSString).range(of: "Column 1")
+            return .init(
+                text: updated,
+                selection: NSRange(
+                    location: range.location + (leading as NSString).length + header.location,
+                    length: header.length
+                )
+            )
         }
     }
 

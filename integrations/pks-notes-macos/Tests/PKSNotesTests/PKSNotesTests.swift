@@ -2259,6 +2259,21 @@ extension PKSNotesTests {
         )
     }
 
+    func testMarkdownEditingQuotesLinesAndInsertsEditableTable() {
+        XCTAssertEqual(
+            MarkdownEditing.apply(.quote, to: "one\ntwo", selection: NSRange(location: 0, length: 7)).text,
+            "> one\n> two"
+        )
+
+        XCTAssertEqual(
+            MarkdownEditing.apply(.table, to: "Heading\n", selection: NSRange(location: 8, length: 0)),
+            MarkdownEditResult(
+                text: "Heading\n\n| Column 1 | Column 2 |\n| --- | --- |\n| Cell | Cell |",
+                selection: NSRange(location: 11, length: 8)
+            )
+        )
+    }
+
     func testMarkdownReplacementPreservesUnchangedTextAndUnicodeOffsets() {
         XCTAssertEqual(
             MarkdownEditing.minimalChange(from: "alpha beta", to: "alpha **beta**"),

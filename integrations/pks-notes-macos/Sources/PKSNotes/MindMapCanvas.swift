@@ -259,6 +259,7 @@ struct MindMapCanvas: View {
     @State private var dropTargetID: Int?
     @State private var gestureBaseZoom: CGFloat?
     @State private var nodes: [MindMapNode] = []
+    @State private var nodePresentations: [Int: MindMapNodePresentation] = [:]
     @State private var visible: [MindMapNode] = []
     @State private var mapLayout = MindMapSpatialLayout.layout([])
     @State private var projectionReady = false
@@ -413,16 +414,19 @@ struct MindMapCanvas: View {
             if nodes.isEmpty { projectionReady = false }
 
             let parser = Task.detached(priority: .userInitiated) {
-                MindMapOutline.nodes(in: input)
+                let nodes = MindMapOutline.nodes(in: input)
+                let presentations = MindMapOutline.presentations(in: input, nodes: nodes)
+                return (nodes: nodes, presentations: presentations)
             }
             defer { parser.cancel() }
-            let parsed = await parser.value
+            let projection = await parser.value
             guard !Task.isCancelled, revision == sourceRevision else { return }
 
-            nodes = parsed
+            nodes = projection.nodes
+            nodePresentations = projection.presentations
             projectionReady = true
             rebuildVisibleLayout()
-            if let selectedID, !parsed.contains(where: { $0.id == selectedID }) {
+            if let selectedID, !projection.nodes.contains(where: { $0.id == selectedID }) {
                 self.selectedID = nil
             }
         }
@@ -934,7 +938,7 @@ struct MindMapCanvas: View {
     @ViewBuilder
     private func nodeCard(_ node: MindMapNode, hasChildren: Bool,
                           branch: Int, exporting: Bool = false) -> some View {
-        let presentation = MindMapOutline.presentation(for: node.title)
+        let presentation = nodePresentations[node.id] ?? MindMapOutline.presentation(for: node.title)
         let task = MindMapTaskNode.parse(presentation.title)
         let visibleTitle = task?.title ?? presentation.title
         let accent = mapStyle.branchColor(branch)
@@ -1060,8 +1064,9 @@ struct MindMapCanvas: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("\(language.text("Open linked note")) · \(link.label)")
-                .accessibilityLabel("\(language.text("Open linked note")) \(link.label)")
+                .help("\(language.text("Open linked source")) · \(link.label)")
+                .accessibilityLabel("\(language.text("Open linked source")) \(link.label)")
+                .accessibilityIdentifier("pks-mind-map-node-link-\(node.id)")
             } else if !exporting, presentation.links.count > 1 {
                 Menu {
                     ForEach(Array(presentation.links.enumerated()), id: \.offset) { _, link in
@@ -1086,8 +1091,9 @@ struct MindMapCanvas: View {
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .help(language.text("Open linked note"))
-                .accessibilityLabel("\(language.text("Open linked note")) \(presentation.links.count)")
+                .help(language.text("Open linked source"))
+                .accessibilityLabel("\(language.text("Open linked source")) \(presentation.links.count)")
+                .accessibilityIdentifier("pks-mind-map-node-link-\(node.id)")
             }
         }
         .padding(.horizontal, 13)
