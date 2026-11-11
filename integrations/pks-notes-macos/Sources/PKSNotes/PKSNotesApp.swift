@@ -574,6 +574,7 @@ struct NotesWindow: View {
                     .buttonStyle(.plain)
                     .disabled(outlineHeadings.isEmpty)
                     .help(language.text("Document Outline"))
+                    .accessibilityLabel(language.text("Document Outline"))
                     .accessibilityIdentifier("pks-outline-menu")
 
                     Button {
@@ -583,6 +584,7 @@ struct NotesWindow: View {
                     }
                     .buttonStyle(.plain)
                     .help(language.text(model.selectedIsFavorite ? "Remove from Favorites" : "Add to Favorites"))
+                    .accessibilityLabel(language.text(model.selectedIsFavorite ? "Remove from Favorites" : "Add to Favorites"))
                     .accessibilityIdentifier("pks-favorite-toggle")
                 }
 
@@ -615,6 +617,9 @@ struct NotesWindow: View {
                     .help(language.text(model.previewPDF == nil
                                         ? "Links and related notes"
                                         : "Linked notes for this PDF"))
+                    .accessibilityLabel(language.text(model.previewPDF == nil
+                                                      ? "Links and related notes"
+                                                      : "Linked notes for this PDF"))
                     .accessibilityIdentifier("pks-relationships-menu")
 
                 }
@@ -673,6 +678,7 @@ struct NotesWindow: View {
                 .menuIndicator(.hidden)
                 .accessibilityIdentifier("pks-file-actions-menu")
                 .help(language.text("File actions and workspace options"))
+                .accessibilityLabel(language.text("File actions and workspace options"))
             }
         }
         .sheet(isPresented: $showingProUpsell) {
