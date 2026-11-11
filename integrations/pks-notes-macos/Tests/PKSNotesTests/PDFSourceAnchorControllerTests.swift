@@ -104,6 +104,59 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testRepeatedPDFSelectionAnchorReturnsToPageTwoAfterPageOne() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let firstText = NSTextView(frame: bounds)
+        firstText.string = "First page"
+        let secondText = NSTextView(frame: bounds)
+        secondText.string = "Second page exact evidence"
+        let first = try XCTUnwrap(PDFDocument(data: firstText.dataWithPDF(inside: bounds)))
+        let second = try XCTUnwrap(PDFDocument(data: secondText.dataWithPDF(inside: bounds)))
+        let document = PDFDocument()
+        document.insert(try XCTUnwrap(first.page(at: 0)), at: 0)
+        document.insert(try XCTUnwrap(second.page(at: 0)), at: 1)
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Repeat-Page-Two-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        XCTAssertTrue(document.write(to: url))
+        let reopened = try XCTUnwrap(PDFDocument(url: url))
+        XCTAssertEqual(reopened.pageCount, 2)
+
+        let sourceView = PDFView(frame: bounds)
+        let source = PDFReaderController()
+        source.attach(view: sourceView, document: reopened, url: url,
+                      requestedPage: nil, requestedAnchor: nil)
+        sourceView.currentSelection = try XCTUnwrap(
+            reopened.findString("Second page exact evidence", withOptions: []).first
+        )
+        let anchor = try XCTUnwrap(source.selectedSourceAnchor())
+        XCTAssertEqual(anchor.page, 2)
+
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        defer { source.detach(view: sourceView); controller.detach(view: view) }
+        controller.attach(view: view, document: reopened, url: url,
+                          requestedPage: nil, requestedAnchor: anchor, navigationSequence: 0)
+        XCTAssertEqual(controller.currentPageIndex, 1)
+        XCTAssertEqual(reopened.index(for: try XCTUnwrap(view.currentPage)), 1)
+
+        controller.goToPage(1)
+        XCTAssertEqual(controller.currentPageIndex, 0)
+        XCTAssertEqual(reopened.index(for: try XCTUnwrap(view.currentPage)), 0)
+
+        // Reopening the same exact Markdown link is a new navigation intent.
+        controller.attach(view: view, document: reopened, url: url,
+                          requestedPage: nil, requestedAnchor: anchor, navigationSequence: 1)
+        XCTAssertEqual(controller.currentPageIndex, 1)
+        XCTAssertEqual(reopened.index(for: try XCTUnwrap(view.currentPage)), 1)
+        XCTAssertEqual(
+            PDFSourceAnchor.fingerprint(for: try XCTUnwrap(view.currentSelection?.string)),
+            anchor.fingerprint
+        )
+    }
+
+    @MainActor
     func testPDFReaderSearchFindsAndClearsMatches() async throws {
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
         textView.string = "PDF search fixture\nFirst page content\nSecond page navigation fixture."
