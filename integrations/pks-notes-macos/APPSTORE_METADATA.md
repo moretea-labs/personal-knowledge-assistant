@@ -1,11 +1,11 @@
-# PKS Notes — App Store Connect Metadata Draft
+# Leafspan — App Store Connect Metadata Draft
 
 This file is the submission-copy authority for the first macOS App Store release. Keep it synchronized with the shipped feature set. Do not put a fixed Pro price in metadata; StoreKit/App Store Connect owns storefront pricing.
 
 ## App identity
 
 - Bundle ID: `com.moretea.pks.notes`
-- App name (en-US / zh-Hans): `PKS Notes`
+- App name (en-US / zh-Hans): `Leafspan` (target; App Store Connect rename pending)
 - Primary category draft: Productivity
 - App price: Free
 - Pro model: one Non-Consumable In-App Purchase
@@ -13,7 +13,7 @@ This file is the submission-copy authority for the first macOS App Store release
 - App Store Connect App ID: `6831932674`
 - App Store Connect IAP Apple ID: `6831933705`
 - App Store Connect SKU: `pks-notes-mac-2026`
-- First macOS version: `1.0 (1)`
+- First macOS version: `1.0`; source candidate build number `3` (not uploaded). Existing uploaded build `2` is older and not a verified candidate for the latest source.
 - Sign-in required: No
 
 ## Required external values before submission
@@ -38,18 +38,18 @@ Local Markdown & Mind Maps
 
 ### Description
 
-PKS Notes is a native macOS workspace for people who keep their knowledge in plain Markdown files.
+Leafspan is a native macOS workspace for people who keep their knowledge in plain Markdown files.
 
-Your notes stay in the folder you choose. There is no PKS account, custom sync service, subscription, or proprietary document format.
+Your notes stay in the folder you choose. There is no account, custom sync service, subscription, or proprietary document format.
 
 Free features:
 - Open and manage an existing Markdown folder.
-- Create, edit, rename, move, search, and preview Markdown notes.
+- Create, edit, rename, move, and preview Markdown notes. Search Markdown filenames and note content in the selected workspace.
 - Preview PDFs alongside your notes.
 - Use Quick Open, Recent, Favorites, document outline, wiki links, and basic local search/navigation.
-- Keep working even when the optional local PKS knowledge service is unavailable.
+- Keep working even when the optional local related-knowledge service is unavailable.
 
-PKS Notes Pro is a one-time in-app purchase that unlocks advanced knowledge tools:
+Leafspan Pro is a one-time in-app purchase that unlocks advanced knowledge tools:
 - Editable mind maps backed by the same Markdown file.
 - MindNode interoperability and portable outline exchange.
 - Backlinks, related-knowledge, and relationship views.
@@ -72,18 +72,18 @@ Own your notes as plain Markdown. Edit locally, visualize outlines as mind maps,
 
 ### Description
 
-PKS Notes 是一款原生 macOS 知识笔记工具，面向希望把资料长期保存在普通 Markdown 文件中的用户。
+Leafspan 是一款原生 macOS 知识笔记工具，面向希望把资料长期保存在普通 Markdown 文件中的用户。
 
-你的笔记始终保存在自己选择的文件夹中。PKS Notes 不要求注册账号，不依赖自建同步服务器，不采用订阅制，也不会把文档锁进专有格式。
+你的笔记始终保存在自己选择的文件夹中。Leafspan 不要求注册账号，不依赖自建同步服务器，不采用订阅制，也不会把文档锁进专有格式。
 
 免费功能：
 - 打开并管理已有 Markdown 文件夹。
-- 新建、编辑、重命名、移动、搜索和预览 Markdown 笔记。
+- 新建、编辑、重命名、移动和预览 Markdown 笔记；搜索所选工作区中的 Markdown 文件名与正文。
 - 在笔记工作区中预览 PDF。
 - 使用快速打开、最近使用、收藏、文档大纲、Wiki 链接和基础本地搜索/导航。
 - 即使可选的本地 PKS 知识服务不可用，也可以继续正常管理和编辑文件。
 
-PKS Notes Pro 为一次性 App 内购买，解锁高级知识功能：
+Leafspan Pro 为一次性 App 内购买，解锁高级知识功能：
 - 基于同一 Markdown 文件的可编辑思维导图。
 - MindNode 互通与可移植的大纲交换。
 - 反向链接、相关知识与关系视图。
@@ -104,39 +104,39 @@ Current implementation intent:
 
 - Select **No, we do not collect data from this app** only after confirming the release build contains no analytics, ads, telemetry, developer-operated account service, or third-party SDK that collects user data.
 - User documents remain in the local/iCloud folder selected by the user.
-- StoreKit purchase processing is handled by Apple; PKS Notes does not run a custom payment or entitlement server.
-- The optional PKS related-knowledge service is local and its absence must not block Markdown/file workflows.
-- Markdown can contain user-provided external links or images; those destinations are selected by the user's content, not a PKS Notes data-collection service.
+- StoreKit purchase processing is handled by Apple; Leafspan does not run a custom payment or entitlement server.
+- The optional local related-knowledge service is local and its absence must not block Markdown/file workflows.
+- Markdown can contain user-provided external links or images; those destinations are selected by the user's content, not a Leafspan data-collection service.
 
 The public privacy policy must accurately describe the final release behavior.
 
 ### Current source/dependency audit (2026-11-07)
 
 - Direct package graph: MarkdownUI → NetworkImage and swift-cmark only.
-- Source scan finds no analytics, advertising, telemetry, crash-reporting or tracking SDK integration. The only fixed application network endpoint is the optional local PKS service at `127.0.0.1:3217`; user-authored Markdown may also reference external images/links selected by the user's own content.
+- Source scan finds no analytics, advertising, telemetry, crash-reporting or tracking SDK integration. The only fixed application network endpoint is the optional local related-knowledge service at `127.0.0.1:3217`; user-authored Markdown may also reference external images/links selected by the user's own content.
 - No `PrivacyInfo.xcprivacy` is added solely for Required Reason APIs in this macOS-only V1: Apple's current Required Reason API platform list does not include macOS. Re-check Apple submission requirements and the final dependency graph immediately before upload.
 - App Store Connect App Privacy answers are still mandatory. Select “No, we do not collect data from this app” only if the final release audit remains consistent with the implementation above.
 
 ## Non-Consumable IAP
 
 - Type: Non-Consumable
-- Reference Name: `PKS Notes Pro`
+- Reference Name: `Leafspan Pro`
 - Product ID: `com.moretea.pks.notes.pro`
 - Initial China pricing intent: target approximately CNY ¥98 in App Store Connect. Never hardcode this price in the app or metadata; the app displays `Product.displayPrice`.
 
 ### en-US
 
-- Display Name: `PKS Notes Pro`
+- Display Name: `Leafspan Pro`
 - Description: `Mind maps, MindNode and knowledge links`
 
 ### zh-Hans
 
-- Display Name: `PKS Notes Pro`
+- Display Name: `Leafspan Pro`
 - Description: `思维导图、MindNode 与知识关联`
 
 ### IAP review notes draft
 
-PKS Notes Pro is a one-time non-consumable purchase. It unlocks editable mind maps, MindNode interoperability, and related-knowledge views. Core Markdown/PDF/file management remains free.
+Leafspan Pro is a one-time non-consumable purchase. It unlocks editable mind maps, MindNode interoperability, and related-knowledge views. Core Markdown/PDF/file management remains free.
 
 To review:
 1. Open any Markdown note.
@@ -145,21 +145,21 @@ To review:
 4. Verify the Pro feature becomes available.
 5. Use Restore Purchases in Settings → Pro to verify restore behavior.
 
-No PKS login or demo account is required.
+No account or demo login is required.
 
 ## App Review notes draft
 
-PKS Notes does not require an account or sign-in.
+Leafspan does not require an account or sign-in.
 
 The app works with a folder chosen by the reviewer. Choose any writable folder containing Markdown files, or choose an empty writable folder and create notes in the app. File access uses the macOS user-selected-folder sandbox entitlement and persistent security-scoped bookmarks.
 
-Core Markdown, PDF, file management, Quick Open, basic search/navigation, and wiki-link workflows are free. Backlinks and related-knowledge relationship views are part of Pro.
+Core Markdown, PDF, file management, Quick Open, local Markdown body/filename search, and wiki-link workflows are free. Backlinks and related-knowledge relationship views are part of Pro.
 
-PKS Notes Pro is one non-consumable in-app purchase. Pro unlocks editable mind maps, MindNode interoperability, and related-knowledge views. Use the App Store Sandbox account supplied by Apple for purchase testing. Restore Purchases is available in Settings → Pro.
+Leafspan Pro is one non-consumable in-app purchase. Pro unlocks editable mind maps, MindNode interoperability, and related-knowledge views. Use the App Store Sandbox account supplied by Apple for purchase testing. Restore Purchases is available in Settings → Pro.
 
-The optional PKS related-knowledge service is not required for review. If it is unavailable, the Pro relationship view shows an unavailable related-knowledge state while normal local Markdown/file workflows continue; local backlinks remain available inside that Pro relationship view.
+The optional related-knowledge service is not required for review. If it is unavailable, the Pro relationship view shows an unavailable related-knowledge state while normal local Markdown/file workflows continue; local backlinks remain available inside that Pro relationship view.
 
-No custom server, custom payment system, subscription, or PKS user account is used.
+No custom server, custom payment system, subscription, or user account is used.
 
 ## Screenshot plan
 
@@ -192,4 +192,4 @@ Do not submit until all are true:
 - Apple Sandbox purchase, restore, refund/revocation, Ask-to-Buy approval, dynamic price, and unavailable-storefront paths pass.
 - Security-scoped folder bookmark survives relaunch with a sandboxed signed build, including iCloud Drive.
 - Support URL, Privacy Policy URL, Review contact, copyright, and final screenshots are supplied.
-- Standalone reviewer flow works with the optional PKS provider absent.
+- Standalone reviewer flow works with the optional local related-knowledge provider absent.

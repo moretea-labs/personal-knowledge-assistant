@@ -3,7 +3,7 @@ import Darwin
 import AppKit
 import SwiftUI
 
-struct SearchHit: Decodable, Identifiable {
+struct SearchHit: Decodable, Identifiable, Sendable {
     let documentId: String
     let chunkId: String?
     let title: String
@@ -15,7 +15,7 @@ struct SearchHit: Decodable, Identifiable {
 
     var id: String { chunkId ?? documentId }
 
-    // PKS indexes both vault files (local) and other user-owned files (managed).
+    // The related-knowledge index may contain workspace files and other user-owned files.
     // Never interpret network/opaque source URIs as local filesystem paths.
     var localFileURL: URL? {
         guard ["local", "managed"].contains(sourceType?.lowercased() ?? ""),
@@ -35,7 +35,7 @@ struct SearchHit: Decodable, Identifiable {
             return file.path.contains("/Mobile Documents/") ? "iCloud Drive" : "Local file"
         }
         if webURL != nil { return "Web page" }
-        return sourceType?.capitalized ?? "PKS source"
+        return sourceType?.capitalized ?? "Source"
     }
 
     var sourceLocation: String {
@@ -933,13 +933,13 @@ final class NotesModel: ObservableObject {
             hits = []
             searching = false
             searchFailed = false
-            searchStatus = "PKS search · 127.0.0.1:3217"
+            searchStatus = ""
         }
     }
     @Published private(set) var hits: [SearchHit] = []
     @Published private(set) var searching = false
     @Published var message: String?
-    @Published private(set) var searchStatus = "PKS search · 127.0.0.1:3217"
+    @Published private(set) var searchStatus = ""
     @Published private(set) var searchFailed = false
     @Published private(set) var backlinks: [NoteBacklink] = []
     @Published private(set) var loadingBacklinks = false
@@ -1120,6 +1120,7 @@ final class NotesModel: ObservableObject {
         // cache object isolates any late writes to the old workspace instance.
         backlinkParseCache = WorkspaceBacklinkParseCache()
         root = resolved
+        query = ""
         message = nil
         UserDefaults.standard.set(resolved.path, forKey: "PKSNotesWorkspace")
         reloadNavigationPreferences()
@@ -1174,6 +1175,12 @@ final class NotesModel: ObservableObject {
     }
 
     private func invalidateGlobalFileIndex() {
+        searchTask?.cancel()
+        searchTask = nil
+        hits = []
+        searching = false
+        searchFailed = false
+        searchStatus = ""
         globalFileScanTask?.cancel()
         globalFileScanTask = nil
         globalFileIndexGeneration &+= 1
@@ -1915,7 +1922,7 @@ final class NotesModel: ObservableObject {
             } catch {
                 guard !Task.isCancelled, let self, self.selected == note else { return }
                 self.relatedHits = []
-                self.relatedError = "PKS related search unavailable."
+                self.relatedError = "Related search unavailable."
                 self.loadingRelated = false
             }
         }
@@ -2017,14 +2024,19 @@ final class NotesModel: ObservableObject {
     }
 
     func save() {
-        guard !loadingNote, isDirty, let root, let selected,
-              WorkspaceFiles.contains(selected, in: root) else { return }
+        guard !loadingNote, isDirty, let root, let selected else { return }
+        autoSaveTask?.cancel()
+        autoSaveTask = nil
         defer { autoSavePending = false }
+        guard WorkspaceFiles.contains(selected, in: root) else {
+            message = AppLanguage.current.text("The file changed outside Leafspan. Reopen it before saving to avoid overwriting edits.")
+            return
+        }
         do {
             // POSIX ctime/inode/size/mtime together detect ordinary writes and atomic
             // replacement without rereading the whole Markdown file on every autosave.
             guard let actualStamp = WorkspaceFiles.fileStamp(selected) else {
-                message = AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
+                message = AppLanguage.current.text("The file changed outside Leafspan. Reopen it before saving to avoid overwriting edits.")
                 return
             }
             if actualStamp != savedFileStamp {
@@ -2033,7 +2045,7 @@ final class NotesModel: ObservableObject {
                 // before classifying the stamp drift as an external edit.
                 guard let diskContent = try? String(contentsOf: selected, encoding: .utf8),
                       WorkspaceFiles.editorText(diskContent) == baseline else {
-                    message = AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
+                    message = AppLanguage.current.text("The file changed outside Leafspan. Reopen it before saving to avoid overwriting edits.")
                     return
                 }
                 savedFileStamp = actualStamp
@@ -2051,6 +2063,21 @@ final class NotesModel: ObservableObject {
         } catch {
             message = "\(AppLanguage.current.text("Save failed")): \(error.localizedDescription)"
         }
+    }
+
+    /// Preserve a conflicted draft using the existing exclusive note writer.
+    /// Never overwrite the external edit or discard/navigate away from the draft.
+    @discardableResult
+    func saveDraftCopy() -> URL? {
+        guard !loadingNote, isDirty, let root, let selected else { return nil }
+        let parent = selected.deletingLastPathComponent()
+        let folder = parent == root || WorkspaceFiles.contains(parent, in: root) ? parent : root
+        let title = selected.deletingPathExtension().lastPathComponent + " (Recovered)"
+        guard let name = WorkspaceFiles.nextAvailableNoteName(basedOn: title, in: folder),
+              let created = newNote(named: name, in: folder, initialContent: draft,
+                                    activateAfterCreation: false) else { return nil }
+        message = AppLanguage.current.text("Draft saved as a separate note") + ": " + created.lastPathComponent
+        return created
     }
 
     /// Appends a portable PDF page reference without replacing the target note.
@@ -2283,7 +2310,7 @@ final class NotesModel: ObservableObject {
     }
 
     func search(using session: URLSession = .shared) {
-        // The latest submission is the sole owner of search presentation.
+        // The local workspace remains searchable without the optional related-knowledge service.
         searchTask?.cancel()
         searchTask = nil
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2291,44 +2318,96 @@ final class NotesModel: ObservableObject {
         searchFailed = false
         guard !text.isEmpty else {
             searching = false
-            searchStatus = "PKS search · 127.0.0.1:3217"
+            searchStatus = ""
             return
         }
+
         searching = true
-        searchStatus = AppLanguage.current.text("Searching PKS…")
+        searchStatus = AppLanguage.current.text("Searching…")
         searchTask = Task { [weak self] in
             guard let self else { return }
-            do {
-                var parts = URLComponents(string: "http://127.0.0.1:3217/api/search")!
-                parts.queryItems = [URLQueryItem(name: "q", value: text),
-                                    URLQueryItem(name: "limit", value: "30")]
-                var request = URLRequest(url: parts.url!)
-                request.timeoutInterval = 8
-                let (data, response) = try await session.data(for: request)
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                    throw URLError(.badServerResponse)
-                }
-                let results = try JSONDecoder().decode([SearchHit].self, from: data)
-                guard !Task.isCancelled,
-                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
-                self.hits = results
-                self.searchStatus = String(
-                    format: "%d %@ · %d %@ · PKS",
-                    self.hits.count, AppLanguage.current.text("matches"),
-                    self.groupedHits.count, AppLanguage.current.text("documents")
-                )
-            } catch {
-                guard !Task.isCancelled,
-                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
-                self.searchFailed = true
-                self.searchStatus = AppLanguage.current.text("PKS offline · no fallback index")
-                self.message = "\(AppLanguage.current.text("PKS search failed")): \(error.localizedDescription)"
+            let workspaceRoot = self.root
+            if workspaceRoot != nil {
+                guard await self.ensureGlobalFileIndex() else { return }
             }
             guard !Task.isCancelled,
-                  self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+                  self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text,
+                  self.root == workspaceRoot else { return }
+
+            // Reuse the complete-vault Quick Open projection; search does not start
+            // another recursive directory scan or create a second file index.
+            let entries = self.globalQuickOpenEntries.map { WorkspaceSearch.Entry($0) }
+            let currentNote = self.selected
+            let currentDraft = self.draft
+            let localTask = Task.detached(priority: .userInitiated) {
+                guard let workspaceRoot else { return WorkspaceSearch.Result() }
+                return WorkspaceSearch.search(
+                    entries: entries,
+                    root: workspaceRoot,
+                    query: text,
+                    draftURL: currentNote,
+                    draft: currentDraft
+                )
+            }
+            let local = await withTaskCancellationHandler(operation: {
+                await localTask.value
+            }, onCancel: {
+                localTask.cancel()
+            })
+            guard !Task.isCancelled,
+                  self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text,
+                  self.root == workspaceRoot else { return }
+
+            // Publish local matches immediately; the optional library request must
+            // never hold workspace search behind its network timeout.
+            self.hits = local.hits
+            self.searchStatus = self.localSearchStatus(local, providerAvailable: nil)
+            var providerAvailable = false
+            do {
+                let remote = try await Self.fetchSearch(text, using: session)
+                guard !Task.isCancelled,
+                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text,
+                      self.root == workspaceRoot else { return }
+                self.hits = WorkspaceSearch.merging(local: local.hits, remote: remote)
+                providerAvailable = true
+            } catch {
+                guard !Task.isCancelled,
+                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text,
+                      self.root == workspaceRoot else { return }
+            }
+
+            self.searchFailed = workspaceRoot == nil && !providerAvailable
+            self.searchStatus = self.localSearchStatus(local, providerAvailable: providerAvailable)
             self.searching = false
             self.searchTask = nil
         }
+    }
+
+    private func localSearchStatus(_ local: WorkspaceSearch.Result, providerAvailable: Bool?) -> String {
+        let language = AppLanguage.current
+        let source = language.text(root == nil
+            ? "Knowledge Library"
+            : providerAvailable == true ? "Workspace + Library" : "Workspace")
+        var status = "\(groupedHits.count) \(language.text("documents")) · \(source)"
+        if providerAvailable == false { status += " · " + language.text("Library search unavailable") }
+        if local.coverage.limited { status += " · " + language.text("Partial results") }
+        if local.coverage.skippedFiles > 0 {
+            status += " · \(local.coverage.skippedFiles) " + language.text("bodies not searched")
+        }
+        return status
+    }
+
+    nonisolated private static func fetchSearch(_ text: String, using session: URLSession) async throws -> [SearchHit] {
+        var parts = URLComponents(string: "http://127.0.0.1:3217/api/search")!
+        parts.queryItems = [URLQueryItem(name: "q", value: text),
+                            URLQueryItem(name: "limit", value: "30")]
+        var request = URLRequest(url: parts.url!)
+        request.timeoutInterval = 8
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode([SearchHit].self, from: data)
     }
 
     private func requestMarkdownAnchor(_ fragment: String, note: URL) {
@@ -3092,7 +3171,7 @@ final class NotesModel: ObservableObject {
                       draftRevision == sourceDraftRevision, root == sourceRoot else { return }
                 selected = nil
                 previewPDF = nil
-                externalTitle = hit.title + " · read-only PKS result"
+                externalTitle = hit.title + " · " + AppLanguage.current.text("Read-only search result")
                 externalBody = result.content
                 previewSource = hit
                 activeMatch = hit
@@ -3103,7 +3182,7 @@ final class NotesModel: ObservableObject {
                 // The user opened a different note or preview while the request was in flight.
             } catch {
                 guard !Task.isCancelled else { return }
-                message = "\(AppLanguage.current.text("PKS preview failed")): \(error.localizedDescription)"
+                message = "\(AppLanguage.current.text("Could not preview source")): \(error.localizedDescription)"
             }
         }
     }

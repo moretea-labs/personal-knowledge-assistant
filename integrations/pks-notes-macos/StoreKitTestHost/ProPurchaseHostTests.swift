@@ -1,4 +1,5 @@
 import StoreKitTest
+import StoreKit
 import XCTest
 @testable import PKSNotesStoreKitHost
 
@@ -13,6 +14,7 @@ final class ProPurchaseHostTests: XCTestCase {
             "PKSNotes.storekit must be copied into the hosted test bundle."
         )
         session = try SKTestSession(contentsOf: config)
+        session.resetToDefaultState()
         session.disableDialogs = true
         session.clearTransactions()
     }
@@ -72,6 +74,16 @@ final class ProPurchaseHostTests: XCTestCase {
             if store.unlocked == expected { return }
             try? await Task.sleep(for: .milliseconds(50))
         }
-        XCTAssertEqual(store.unlocked, expected)
+        var evidence: [String] = []
+        for await result in Transaction.currentEntitlements {
+            switch result {
+            case .verified(let transaction):
+                evidence.append("verified product=\(transaction.productID) type=\(transaction.productType) revoked=\(transaction.revocationDate != nil)")
+            case .unverified(_, let error):
+                evidence.append("unverified: \(error.localizedDescription)")
+            }
+        }
+        XCTAssertEqual(store.unlocked, expected,
+                       "message=\(store.message ?? "none"); entitlements=\(evidence)")
     }
 }

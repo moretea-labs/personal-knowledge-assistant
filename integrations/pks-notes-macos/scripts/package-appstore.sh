@@ -62,8 +62,8 @@ then
   exit 5
 fi
 
-app="$root/.build/appstore/PKS Notes.app"
-pkg="$root/.build/appstore/PKSNotes-macOS.pkg"
+app="$root/.build/appstore/Leafspan.app"
+pkg="$root/.build/appstore/Leafspan-macOS.pkg"
 mkdir -p "$root/.build/appstore"
 if [[ -e "$app" || -e "$pkg" ]]; then
   echo "Existing packaging output detected; clean artifacts deliberately first." >&2

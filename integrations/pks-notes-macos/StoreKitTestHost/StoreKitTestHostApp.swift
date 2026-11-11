@@ -4,7 +4,7 @@ import SwiftUI
 struct PKSNotesStoreKitHostApp: App {
     var body: some Scene {
         WindowGroup {
-            Text("PKS Notes StoreKit Test Host")
+            Text("Leafspan StoreKit Test Host")
                 .frame(minWidth: 320, minHeight: 180)
         }
     }

@@ -109,7 +109,7 @@ struct PKSNotesApp: App {
                 Button(language.text("Task")) { MarkdownNativeCommand.perform("task") }
                     .keyboardShortcut("9", modifiers: [.command, .shift])
             }
-            CommandMenu("PKS") {
+            CommandMenu("Leafspan") {
                 Button(language.text("New Markdown Note")) {
                     NotificationCenter.default.post(name: NotesMenuEvent.newNote, object: nil)
                 }
@@ -130,11 +130,11 @@ struct PKSNotesApp: App {
                 Divider()
                 Button(language.text("Save Markdown")) { model.save() }
                     .keyboardShortcut("s", modifiers: .command)
-                Button(language.text("Find in PKS")) {
+                Button(language.text("Find in Notes")) {
                     NotificationCenter.default.post(name: NotesMenuEvent.search, object: nil)
                 }
                 .keyboardShortcut("f", modifiers: .command)
-                Button(language.text("Run PKS Search")) { model.search() }
+                Button(language.text("Search")) { model.search() }
                     .keyboardShortcut(.return, modifiers: [.command, .shift])
                 Divider()
                 Button(language.text("Refresh Files")) { model.refresh() }
@@ -218,7 +218,7 @@ enum NotesGeometry {
     static let selectionCorner: CGFloat = 9
 
     static func workspaceTitle(_ root: URL?, language: AppLanguage) -> String {
-        guard let root else { return language.text("PKS Library") }
+        guard let root else { return language.text("Knowledge Library") }
         let name = root.lastPathComponent
         return name == "com~apple~CloudDocs" ? language.text("iCloud Drive") : name
     }
@@ -479,10 +479,10 @@ struct NotesWindow: View {
                             } label: {
                                 Image(systemName: choice.symbol)
                                     .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(mode == choice ? theme.linkColor : Color.secondary)
-                                    .frame(width: 29, height: 27)
-                                    .background(mode == choice ? theme.linkColor.opacity(0.14) : .clear,
-                                                in: RoundedRectangle(cornerRadius: 7))
+                                    .foregroundStyle(mode == choice ? Color.primary : Color.secondary)
+                                    .frame(width: 30, height: 27)
+                                    .background(mode == choice ? Color.primary.opacity(0.09) : .clear,
+                                                in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -650,13 +650,13 @@ struct NotesWindow: View {
 
                                 if model.previewPDF == nil {
                                     Divider().padding(.vertical, 4)
-                                    relationshipSectionTitle(language.text("Related · PKS"))
+                                    relationshipSectionTitle(language.text("Related knowledge"))
                                     if model.loadingRelated {
                                         relationshipEmpty(language.text("Finding related knowledge…"))
                                     } else if let error = model.relatedError {
                                         relationshipEmpty(language.text(error))
                                     } else if model.relatedHits.isEmpty {
-                                        relationshipEmpty(language.text("No related PKS results."))
+                                        relationshipEmpty(language.text("No related results."))
                                     } else {
                                         ForEach(model.relatedHits) { hit in
                                             relationshipButton(
@@ -701,6 +701,11 @@ struct NotesWindow: View {
                     Button(language.text("Quick Open Note…"), systemImage: "doc.text.magnifyingglass") {
                         openQuickPicker()
                     }
+                    Button(language.text("Reveal Current File"), systemImage: "scope") {
+                        revealCurrentFile()
+                    }
+                    .disabled(currentWorkspaceFile == nil)
+                    .accessibilityIdentifier("pks-reveal-current-file-button")
                     Button(language.text("New Mind Map"), systemImage: "point.3.connected.trianglepath.dotted") {
                         beginNewMindMap()
                     }
@@ -1940,10 +1945,12 @@ struct NotesWindow: View {
             .frame(height: 34)
             .background(
                 selected
-                    ? Color(nsColor: .textBackgroundColor).opacity(colorScheme == .dark ? 0.30 : 0.72)
+                    ? Color(nsColor: .textBackgroundColor).opacity(colorScheme == .dark ? 0.14 : 0.68)
                     : .clear,
                 in: RoundedRectangle(cornerRadius: 9, style: .continuous)
             )
+            .shadow(color: .black.opacity(selected && colorScheme == .light ? 0.035 : 0),
+                    radius: 4, y: 1)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -2152,7 +2159,7 @@ struct NotesWindow: View {
     @ViewBuilder
     private var searchResultRows: some View {
                 if !model.hits.isEmpty {
-                    Section(language.text("PKS results · across all sources")) {
+                    Section(language.text("Search results")) {
                         ForEach(model.groupedHits) { group in
                             let hit = group.primary
                             VStack(alignment: .leading, spacing: 6) {
@@ -2242,8 +2249,20 @@ struct NotesWindow: View {
                             .help(hit.uri)
                         }
                     }
+                } else if model.searching {
+                    Text(language.text("Searching…"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if model.searchFailed {
+                    Text(language.text("Library search unavailable"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(language.text("Enter a name or words from a note."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 } else {
-                    Text(language.text(model.searching ? "Searching PKS…" : "Search the existing PKS index."))
+                    Text(language.text("No matching files or notes."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -2251,33 +2270,22 @@ struct NotesWindow: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Nulis-style compact app identity and Quick Find, followed by real
-            // PKS navigation destinations. No fake starred/archive/trash features.
-            HStack(spacing: 10) {
-                Image(systemName: "square.stack.3d.up")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 22)
+            // Reuse the actual Dock/Info.plist app icon as the sole brand mark.
+            // No second leaf-shaped identity is drawn separately in the sidebar.
+            HStack(spacing: 9) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 29, height: 29)
+                    .accessibilityHidden(true)
                 Text("Leafspan")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 15.5, weight: .semibold))
+                    .tracking(-0.35)
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                Button {
-                    revealCurrentFile()
-                } label: {
-                    Image(systemName: "scope")
-                        .font(.system(size: 14, weight: .medium))
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .disabled(currentWorkspaceFile == nil)
-                .help(language.text("Reveal Current File") + " (⌥F1)")
-                .accessibilityIdentifier("pks-reveal-current-file-button")
-
                 Button(action: openQuickPicker) {
-                    Image(systemName: "command")
+                    Image(systemName: "doc.text.magnifyingglass")
                         .font(.system(size: 13.5, weight: .medium))
                         .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
@@ -2300,16 +2308,16 @@ struct NotesWindow: View {
                 .help(language.text("New Markdown note (⌘N)"))
                 .accessibilityIdentifier("pks-new-note-button")
             }
-            .padding(.horizontal, 17)
-            .frame(height: 48)
-            .padding(.top, 1)
+            .padding(.horizontal, 12)
+            .frame(height: 56)
+            .padding(.top, 4)
 
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
-                TextField(language.text("Quick find in PKS…"), text: $model.query)
+                TextField(language.text("Search notes and files…"), text: $model.query)
                     .font(.system(size: 12))
                     .textFieldStyle(.plain)
                     .focused($searchFieldFocused)
@@ -2335,20 +2343,21 @@ struct NotesWindow: View {
             }
             .padding(.horizontal, 11)
             .frame(height: 33)
-            .background(Color(nsColor: .textBackgroundColor).opacity(colorScheme == .dark ? 0.22 : 0.46),
-                        in: RoundedRectangle(cornerRadius: 8))
+            .background(Color(nsColor: .textBackgroundColor).opacity(colorScheme == .dark ? 0.12 : 0.54),
+                        in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0 : 0.025), radius: 4, y: 1)
             .padding(.horizontal, 12)
             .padding(.top, 5)
             .padding(.bottom, 9)
 
             VStack(spacing: 2) {
-                navigationRow(.notes, symbol: "square.stack.3d.up", title: language.text("All Notes"))
+                navigationRow(.notes, symbol: "doc.on.doc", title: language.text("All Notes"))
                 navigationRow(.recent, symbol: "clock", title: language.text("Recent"))
                 navigationRow(.favorites, symbol: "star", title: language.text("Favorites"))
-                navigationRow(.search, symbol: "text.magnifyingglass", title: language.text("PKS Search"))
+                navigationRow(.search, symbol: "text.magnifyingglass", title: language.text("Search"))
             }
             .padding(.horizontal, 12)
-            .padding(.bottom, 6)
+            .padding(.bottom, 3)
 
             if sidebarTab == .notes {
                 HStack(spacing: 8) {
@@ -2394,7 +2403,7 @@ struct NotesWindow: View {
                 .padding(.trailing, 12)
                 .frame(height: 34)
                 .padding(.bottom, 4)
-            } else if model.searching || model.searchFailed {
+            } else if !model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(model.searchStatus)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -2494,7 +2503,7 @@ struct NotesWindow: View {
         }
         // The window remains the sole surface: native vibrancy supplies depth
         // without a second opaque panel or ornamental separator.
-        .background(.ultraThinMaterial)
+        .background(.regularMaterial)
     }
 
     private func toggleFolder(_ url: URL) {
@@ -2527,6 +2536,12 @@ struct NotesWindow: View {
         }
         Button(language.text("Copy File Path"), systemImage: "doc.on.doc") {
             model.copySource(url.path)
+        }
+        if model.selected == url, model.isDirty {
+            Button(language.text("Save Draft Copy"), systemImage: "doc.badge.plus") {
+                model.saveDraftCopy()
+            }
+            .accessibilityIdentifier("pks-save-draft-copy")
         }
         if let root = model.root,
            ["md", "markdown"].contains(url.pathExtension.lowercased()),
@@ -2795,9 +2810,10 @@ struct NotesWindow: View {
                 // A small reading desk rather than an empty dashboard or a promotional card.
                 VStack(alignment: .leading, spacing: 0) {
                     Text("Leafspan")
-                        .font(.system(size: 38, weight: .semibold, design: .serif))
+                        .font(.system(size: 40, weight: .regular, design: .serif))
+                        .tracking(-1.1)
                         .foregroundStyle(.primary)
-                        .padding(.bottom, 30)
+                        .padding(.bottom, 32)
 
                     if model.root == nil {
                         Text(language.text("Open a notes folder"))
@@ -2860,9 +2876,10 @@ struct NotesWindow: View {
                         }
                     }
                 }
-                .frame(maxWidth: 510, alignment: .leading)
-                .padding(.horizontal, 40)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: 570, alignment: .leading)
+                .padding(.horizontal, 54)
+                .padding(.top, 82)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             } else {
                 reader
             }
@@ -2871,6 +2888,11 @@ struct NotesWindow: View {
                     Image(systemName: "info.circle")
                     Text(message).font(.caption).lineLimit(2)
                     Spacer()
+                    if model.isDirty {
+                        Button(language.text("Save Draft Copy")) { model.saveDraftCopy() }
+                            .buttonStyle(.borderless)
+                            .accessibilityIdentifier("pks-recover-draft")
+                    }
                     Button(language.text("Dismiss")) { model.message = nil }
                         .buttonStyle(.borderless)
                 }
@@ -2940,8 +2962,7 @@ struct NotesWindow: View {
                             }
                             .padding(.horizontal, 14)
                             .frame(height: 42)
-                            .background(theme.canvas)
-                            Divider()
+                            .background(Color.primary.opacity(colorScheme == .dark ? 0.055 : 0.025))
 
                             if compactStudyShowsNote {
                                 studyNotePane(note)
@@ -3064,9 +3085,7 @@ struct NotesWindow: View {
             }
             .padding(.horizontal, 12)
             .frame(height: 38)
-            .background(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
-
-            Divider()
+            .background(Color.primary.opacity(colorScheme == .dark ? 0.055 : 0.03))
             // Study notes honor the normal Markdown reading mode. Do not
             // silently force raw source in an otherwise read-only session.
             if mode == .read {

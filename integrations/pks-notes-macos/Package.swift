@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "PKSNotes",
+    name: "Leafspan",
     platforms: [.macOS(.v14)],
     products: [.executable(name: "PKSNotes", targets: ["PKSNotes"])],
     dependencies: [

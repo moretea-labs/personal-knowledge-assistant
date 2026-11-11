@@ -23,7 +23,7 @@ enum MindMapInterchange {
         var output = """
         <?xml version="1.0" encoding="UTF-8"?>
         <opml version="2.0">
-          <head><title>PKS Notes Mind Map</title></head>
+          <head><title>Leafspan Mind Map</title></head>
           <body>
         """
         output += "\n"

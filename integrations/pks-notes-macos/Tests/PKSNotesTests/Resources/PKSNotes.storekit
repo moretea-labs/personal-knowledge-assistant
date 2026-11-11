@@ -7,17 +7,17 @@
       "localizations": [
         {
           "description": "Unlock advanced mind maps and linked knowledge.",
-          "displayName": "PKS Notes Pro",
+          "displayName": "Leafspan Pro",
           "locale": "en_US"
         },
         {
           "description": "解锁思维导图与关联知识等高级功能。",
-          "displayName": "PKS Notes 专业版",
+          "displayName": "Leafspan Pro",
           "locale": "zh_CN"
         }
       ],
       "productID": "com.moretea.pks.notes.pro",
-      "referenceName": "PKS Notes Pro",
+      "referenceName": "Leafspan Pro",
       "type": "NonConsumable"
     }
   ],

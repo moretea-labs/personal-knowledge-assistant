@@ -169,9 +169,9 @@ extension NotesTheme {
             )
         case .paper:
             ReadingTypography(
-                design: .rounded, bodySize: 17,
+                design: .rounded, bodySize: 16.5,
                 heading1: 2.22, heading2: 1.58, heading3: 1.24,
-                headingWeight: .bold, lineSpacing: 0.38,
+                headingWeight: .bold, lineSpacing: 0.40,
                 paragraphSpacing: 1.35, headingSpacing: 1.65,
                 pageWidth: 715, quoteInset: 14, codePadding: 20,
                 codeCorner: 3, listSpacing: 0.34
@@ -199,8 +199,8 @@ extension NotesTheme {
                 design: .default, bodySize: 16,
                 heading1: 1.94, heading2: 1.42, heading3: 1.15,
                 headingWeight: .semibold, lineSpacing: 0.31,
-                paragraphSpacing: 1.24, headingSpacing: 1.54,
-                pageWidth: 735, quoteInset: 15, codePadding: 17,
+                paragraphSpacing: 1.29, headingSpacing: 1.54,
+                pageWidth: 755, quoteInset: 15, codePadding: 17,
                 codeCorner: 6, listSpacing: 0.28
             )
         }
