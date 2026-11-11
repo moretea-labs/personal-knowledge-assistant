@@ -115,14 +115,25 @@ final class ProPurchases: ObservableObject {
 struct ProSettingsView: View {
     @EnvironmentObject private var purchases: ProPurchases
     @Environment(\.notesLanguage) private var language
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label(language.text("Leafspan Pro"), systemImage: "point.3.connected.trianglepath.dotted")
-                .font(.title2.weight(.semibold))
-            Text(language.text("Your Markdown and PDF files always remain yours. No account, subscription or server."))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Label(language.text("Leafspan Pro"), systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.title2.weight(.semibold))
+                Spacer(minLength: 8)
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .help(language.text("Close"))
+                .accessibilityLabel(language.text("Close"))
+                .accessibilityIdentifier("pks-pro-close")
+                .keyboardShortcut(.cancelAction)
+            }
             Divider()
             Label(language.text("Editable mind maps and MindNode interchange"), systemImage: "checkmark.circle")
             Label(language.text("Backlinks and related knowledge"), systemImage: "checkmark.circle")
