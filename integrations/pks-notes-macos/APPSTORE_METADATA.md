@@ -22,6 +22,7 @@ This file is the submission-copy authority for the first macOS App Store release
 - macOS version `1.0` remains `PREPARE_FOR_SUBMISSION`. Its existing en-US version localization now matches the Leafspan description, keywords, promotional text, and Support URL in this file.
 - App Info and version metadata each currently expose only one localization (`en-US`). The zh-Hans copy below is ready in this source draft but has not been created in App Store Connect; the available connector supports updating existing localizations but does not expose a create-localization action.
 - App age rating and version copyright are unset. Review contact name/email/phone remain required.
+- IAP `6831933705` exists. `Leafspan Pro` is the intended Reference Name and en-US/zh-Hans display name in this source draft, but the current connector cannot read or update IAP localizations; its actual App Store Connect name remains unverified.
 - App Store Connect contains only builds `1` and `2`; build `2` is `VALID`. The current local source candidate is build `3` and has not been uploaded.
 - No App Review submission records exist. This remains a draft-only state; no build upload, review submission, or publication occurred.
 - The available screenshot-set read action rejects a `MAC_OS` version as unsupported; macOS screenshot upload state is not verified through that connector and remains a release gate.
