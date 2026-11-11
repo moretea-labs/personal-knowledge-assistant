@@ -252,7 +252,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.moretea.pks.notes;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moretea.pks.notes.storekit-host;
 				PRODUCT_NAME = PKSNotesStoreKitHost;
 				SDKROOT = macosx;
 				SWIFT_VERSION = 5.0;
@@ -323,7 +323,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.moretea.pks.notes;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moretea.pks.notes.storekit-host;
 				PRODUCT_NAME = PKSNotesStoreKitHost;
 				SDKROOT = macosx;
 				SWIFT_VERSION = 5.0;
