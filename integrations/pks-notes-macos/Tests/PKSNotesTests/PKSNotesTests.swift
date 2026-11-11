@@ -3353,3 +3353,54 @@ extension PKSNotesTests {
     }
 
 }
+
+
+extension PKSNotesTests {
+    func testPDFSelectionAnchorSurvivesMindMapProjectionAndResolvesExactPDFTarget() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let pdf = root.appendingPathComponent("Book.pdf")
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+        let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Quoted fact"))
+        let anchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 7,
+            normalizedRects: [CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.04)],
+            fingerprint: fingerprint
+        ))
+
+        let reference = try XCTUnwrap(PDFPageReference.markdown(
+            for: pdf, page: anchor.page, root: root, anchor: anchor
+        ))
+        let markdown = """
+        # Study
+
+        My interpretation
+
+        \(reference)
+
+        > Quoted fact
+
+        - Next topic
+        """
+        let nodes = MindMapOutline.nodes(in: markdown)
+        let presentation = try XCTUnwrap(
+            MindMapOutline.presentations(in: markdown, nodes: nodes)[0]
+        )
+
+        XCTAssertEqual(presentation.title, "Study")
+        XCTAssertEqual(presentation.links, [
+            MindMapLink(label: "Book.pdf · p. 7", target: "/Book.pdf#\(anchor.fragment)")
+        ])
+
+        let link = try XCTUnwrap(URL(string: presentation.links[0].target))
+        XCTAssertEqual(PDFPageReference.page(from: link), 7)
+        XCTAssertEqual(PDFPageReference.anchor(from: link), anchor)
+        XCTAssertEqual(
+            WorkspaceFiles.resolve(link, from: root.appendingPathComponent("Study.md"), in: root),
+            pdf.standardizedFileURL
+        )
+    }
+}
