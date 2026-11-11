@@ -363,6 +363,8 @@ struct NotesWindow: View {
     @EnvironmentObject private var purchases: ProPurchases
     @Environment(\.notesLanguage) private var language
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var readingModeNamespace
     @State private var mode: ReadingMode = .read
     @State private var showingMindMap = false
     @State private var mindMapSelectionLine: Int?
@@ -495,13 +497,26 @@ struct NotesWindow: View {
                             Button {
                                 switchReadingMode(to: choice)
                             } label: {
-                                Image(systemName: choice.symbol)
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(mode == choice ? Color.primary : Color.secondary)
-                                    .frame(width: 30, height: 27)
-                                    .background(mode == choice ? Color.primary.opacity(0.09) : .clear,
-                                                in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                                    .contentShape(Rectangle())
+                                HStack(spacing: 5) {
+                                    Image(systemName: choice.symbol)
+                                        .font(.system(size: 12, weight: .medium))
+                                    Text(language.text(choice.rawValue))
+                                        .font(.system(size: 11.5, weight: mode == choice ? .semibold : .medium))
+                                }
+                                .foregroundStyle(mode == choice ? Color.primary : Color.secondary)
+                                .padding(.horizontal, 10)
+                                .frame(height: 29)
+                                .background {
+                                    if mode == choice {
+                                        Capsule()
+                                            .fill(Color(nsColor: .textBackgroundColor)
+                                                .opacity(colorScheme == .dark ? 0.18 : 0.86))
+                                            .shadow(color: .black.opacity(colorScheme == .dark ? 0.08 : 0.06),
+                                                    radius: 4, y: 1)
+                                            .matchedGeometryEffect(id: "reading-mode", in: readingModeNamespace)
+                                    }
+                                }
+                                .contentShape(Capsule())
                             }
                             .buttonStyle(.plain)
                             .keyboardShortcut(choice.shortcut, modifiers: .command)
@@ -510,8 +525,7 @@ struct NotesWindow: View {
                         }
                     }
                     .padding(3)
-                    .background(Color.primary.opacity(colorScheme == .dark ? 0.075 : 0.045),
-                                in: RoundedRectangle(cornerRadius: 9))
+                    .background(.ultraThinMaterial, in: Capsule())
                 }
 
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
@@ -895,7 +909,9 @@ struct NotesWindow: View {
 
     private func switchReadingMode(to choice: ReadingMode) {
         guard model.selected != nil, model.previewPDF == nil, model.externalBody == nil else { return }
-        withAnimation(.easeOut(duration: 0.14)) { mode = choice }
+        withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.84)) {
+            mode = choice
+        }
         if choice == .edit {
             Task { @MainActor in
                 await Task.yield()
