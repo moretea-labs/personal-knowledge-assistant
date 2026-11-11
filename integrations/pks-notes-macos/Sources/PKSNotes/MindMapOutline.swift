@@ -7,6 +7,12 @@ struct MindMapNode: Equatable, Identifiable, Sendable {
     let title: String
 }
 
+enum MindMapDropPlacement: Equatable {
+    case before
+    case child
+    case after
+}
+
 struct MindMapActionAvailability: Equatable {
     let canPromote: Bool
     let canDemote: Bool
@@ -37,6 +43,20 @@ enum MindMapOutline {
         return ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) })
     }
 
+    /// List bodies move with their node only when every nonempty line is
+    /// indented inside that item. This preserves citations, quotes and code.
+    private static func hasSafelyIndentedListContent(
+        _ lines: [String], from start: Int, to end: Int, baseIndent: Int
+    ) -> Bool {
+        guard start >= 0, start <= end, end <= lines.count else { return false }
+        for line in lines[start..<end] {
+            if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
+            let indent = line.prefix(while: { $0 == " " }).count
+            guard indent >= baseIndent + 2 else { return false }
+        }
+        return true
+    }
+
     private static func shiftSubtreeEndLine(_ context: EditContext) -> Int {
         guard context.position + 1 < context.parsed.count else { return context.lines.count }
         for candidate in context.parsed[(context.position + 1)...] where candidate.depth <= context.node.depth {
@@ -49,10 +69,10 @@ enum MindMapOutline {
         let nodeID = context.node.id
         guard isListLine(context.lines[nodeID]) else { return false }
         let endLine = shiftSubtreeEndLine(context)
-        for index in nodeID..<endLine {
-            let trimmed = context.lines[index].trimmingCharacters(in: .whitespaces)
-            if !trimmed.isEmpty && !isListLine(context.lines[index]) { return false }
-        }
+        let indent = context.lines[nodeID].prefix(while: { $0 == " " }).count
+        guard hasSafelyIndentedListContent(
+            context.lines, from: nodeID + 1, to: endLine, baseIndent: indent
+        ) else { return false }
 
         if deeper {
             guard context.position > 0 else { return false }
@@ -146,38 +166,50 @@ extension MindMapOutline {
         "# \(title)\n"
     }
 
-    /// Both Add Child and drag-to-reparent insert immediately after the
-    /// target node. Reject attached prose/code at that boundary, otherwise
-    /// it silently becomes part of the newly inserted child.
-    private static func canInsertChild(
-        after parentID: Int, in lines: [String], nodes parsed: [MindMapNode]
-    ) -> Bool {
-        guard lines.indices.contains(parentID) else { return false }
-        let nextNodeLine = parsed.first(where: { $0.id > parentID })?.id ?? lines.count
-        return !lines[(parentID + 1)..<nextNodeLine].contains {
-            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
+    private static func subtreeEndLine(
+        at position: Int, nodes parsed: [MindMapNode], lineCount: Int
+    ) -> Int {
+        let node = parsed[position]
+        return parsed.dropFirst(position + 1)
+            .first(where: { $0.depth <= node.depth })?.id ?? lineCount
+    }
+
+    private static func firstDescendantLine(
+        at position: Int, nodes parsed: [MindMapNode], fallback: Int
+    ) -> Int {
+        let node = parsed[position]
+        return parsed.dropFirst(position + 1)
+            .first(where: { $0.depth > node.depth })?.id ?? fallback
+    }
+
+    static func isListNode(in source: String, nodeID: Int) -> Bool {
+        let lines = source.components(separatedBy: "\n")
+        return lines.indices.contains(nodeID) && isListLine(lines[nodeID])
     }
 
     /// Return/Enter creates a list sibling after the whole selected subtree.
-    /// Headings are structural anchors, so Return on a heading creates its first child.
+    /// On a heading it creates a child after section text and before descendants.
     static func addSibling(in source: String, nodeID: Int, title: String = "New idea") -> String? {
+        addSiblingWithOutcome(in: source, nodeID: nodeID, title: title)?.source
+    }
+
+    static func addSiblingWithOutcome(
+        in source: String, nodeID: Int, title: String = "New idea"
+    ) -> (source: String, nodeID: Int)? {
         let parsed = nodes(in: source)
         guard let position = parsed.firstIndex(where: { $0.id == nodeID }) else { return nil }
-        let node = parsed[position]
         var lines = source.components(separatedBy: "\n")
         guard lines.indices.contains(nodeID) else { return nil }
         let line = lines[nodeID]
-        let prefix = line.trimmingCharacters(in: .whitespaces)
-        guard ["- ", "* ", "+ "].contains(where: { prefix.hasPrefix($0) }) else {
-            return addChild(in: source, parentID: nodeID, title: title)
+        guard isListLine(line) else {
+            return addChildWithOutcome(in: source, parentID: nodeID, title: title)
         }
-        // The end of a list subtree is its next same-or-higher-depth node.
-        let insertion = parsed.dropFirst(position + 1).first(where: { $0.depth <= node.depth })?.id ?? lines.count
-        // Prose/code inside a subtree must not be moved or implicitly consumed.
+
+        let contentLineCount = lines.count - (source.hasSuffix("\n") ? 1 : 0)
+        let insertion = subtreeEndLine(at: position, nodes: parsed, lineCount: contentLineCount)
         let indent = line.prefix(while: { $0 == " " }).count
         lines.insert(String(repeating: " ", count: indent) + "- " + title, at: insertion)
-        return lines.joined(separator: "\n")
+        return (lines.joined(separator: "\n"), insertion)
     }
 
     static func rename(in source: String, nodeID: Int, to name: String) -> String? {
@@ -234,15 +266,33 @@ extension MindMapOutline {
     }
 
     static func addChild(in source: String, parentID: Int, title: String = "New idea") -> String? {
+        addChildWithOutcome(in: source, parentID: parentID, title: title)?.source
+    }
+
+    static func addChildWithOutcome(
+        in source: String, parentID: Int, title: String = "New idea"
+    ) -> (source: String, nodeID: Int)? {
+        let parsed = nodes(in: source)
+        guard let position = parsed.firstIndex(where: { $0.id == parentID }) else { return nil }
         var lines = source.components(separatedBy: "\n")
-        guard nodes(in: source).contains(where: { $0.id == parentID }), lines.indices.contains(parentID) else { return nil }
-        let line = lines[parentID]
-        let indent = line.prefix(while: { $0 == " " }).count
-        let isList = ["- ", "* ", "+ "].contains(where: { line.trimmingCharacters(in: .whitespaces).hasPrefix($0) })
-        guard canInsertChild(after: parentID, in: lines, nodes: nodes(in: source))
-        else { return nil }
-        lines.insert(String(repeating: " ", count: indent + (isList ? 2 : 0)) + "- " + title, at: parentID + 1)
-        return lines.joined(separator: "\n")
+        guard lines.indices.contains(parentID) else { return nil }
+
+        let parentLine = lines[parentID]
+        let isList = isListLine(parentLine)
+        let indent = parentLine.prefix(while: { $0 == " " }).count
+        let contentLineCount = lines.count - (source.hasSuffix("\n") ? 1 : 0)
+        let endLine = subtreeEndLine(at: position, nodes: parsed, lineCount: contentLineCount)
+        let insertion = firstDescendantLine(at: position, nodes: parsed, fallback: endLine)
+
+        if isList && !hasSafelyIndentedListContent(
+            lines, from: parentID + 1, to: insertion, baseIndent: indent
+        ) {
+            return nil
+        }
+
+        let childIndent = isList ? indent + 2 : 0
+        lines.insert(String(repeating: " ", count: childIndent) + "- " + title, at: insertion)
+        return (lines.joined(separator: "\n"), insertion)
     }
 }
 
@@ -577,65 +627,84 @@ extension MindMapOutline {
 }
 
 extension MindMapOutline {
-    /// Move a pure Markdown list subtree under another structural node.
-    /// The moved list remains canonical Markdown; headings are anchors, not movable nodes.
+    /// Move a list subtree under another structural node or reorder it beside a sibling.
     static func moveListSubtree(in source: String, nodeID: Int, asChildOf targetID: Int) -> String? {
         moveListSubtreeWithOutcome(in: source, nodeID: nodeID, asChildOf: targetID)?.source
     }
 
-    /// Same move, but also reports the moved root's new canonical line index so
-    /// callers can keep the moved node selected instead of dropping selection.
+    /// Backwards-compatible child placement for existing callers.
     static func moveListSubtreeWithOutcome(
         in source: String, nodeID: Int, asChildOf targetID: Int
+    ) -> (source: String, movedNodeID: Int)? {
+        moveListSubtreeWithOutcome(
+            in: source, nodeID: nodeID, relativeTo: targetID, placement: .child
+        )
+    }
+
+    /// Move before/after a sibling or make the dragged node a child of its target.
+    /// The whole source body moves with it; Markdown remains the sole authority.
+    static func moveListSubtreeWithOutcome(
+        in source: String,
+        nodeID: Int,
+        relativeTo targetID: Int,
+        placement: MindMapDropPlacement
     ) -> (source: String, movedNodeID: Int)? {
         guard nodeID != targetID else { return nil }
         let parsed = nodes(in: source)
         guard let sourcePosition = parsed.firstIndex(where: { $0.id == nodeID }),
-              parsed.contains(where: { $0.id == targetID }) else { return nil }
+              let targetPosition = parsed.firstIndex(where: { $0.id == targetID }) else { return nil }
 
         var lines = source.components(separatedBy: "\n")
-        guard lines.indices.contains(nodeID), lines.indices.contains(targetID) else { return nil }
+        guard lines.indices.contains(nodeID), lines.indices.contains(targetID),
+              isListLine(lines[nodeID]) else { return nil }
 
-        func listPrefix(_ line: String) -> Bool {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            return ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) })
-        }
-
-        guard listPrefix(lines[nodeID]) else { return nil }
-
-        let sourceNode = parsed[sourcePosition]
-        let endLine: Int = {
-            guard sourcePosition + 1 < parsed.count else { return lines.count }
-            for candidate in parsed[(sourcePosition + 1)...] where candidate.depth <= sourceNode.depth {
-                return candidate.id
-            }
-            return lines.count
-        }()
-
-        guard !(nodeID..<endLine).contains(targetID) else { return nil }
-        for index in nodeID..<endLine {
-            let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
-            if !trimmed.isEmpty && !listPrefix(lines[index]) { return nil }
-        }
-
-        let targetLine = lines[targetID]
-        let targetTrimmed = targetLine.trimmingCharacters(in: .whitespaces)
-        let targetIsList = listPrefix(targetLine)
-        let targetHashes = targetTrimmed.prefix(while: { $0 == "#" }).count
-        guard targetIsList || ((1...6).contains(targetHashes) && targetTrimmed.dropFirst(targetHashes).first == " ") else {
-            return nil
-        }
-        // Use the same target-side protection as Add Child. The dragged
-        // subtree may be pure list markup even when its destination has prose
-        // or code that would become attached to the newly inserted child.
-        guard canInsertChild(after: targetID, in: lines, nodes: parsed) else { return nil }
+        let contentLineCount = lines.count - (source.hasSuffix("\n") ? 1 : 0)
+        let sourceEnd = subtreeEndLine(at: sourcePosition, nodes: parsed, lineCount: contentLineCount)
+        guard !(nodeID..<sourceEnd).contains(targetID) else { return nil }
 
         let sourceIndent = lines[nodeID].prefix(while: { $0 == " " }).count
-        let targetIndent = targetLine.prefix(while: { $0 == " " }).count
-        let desiredIndent = targetIsList ? targetIndent + 2 : 0
-        let delta = desiredIndent - sourceIndent
+        guard hasSafelyIndentedListContent(
+            lines, from: nodeID + 1, to: sourceEnd, baseIndent: sourceIndent
+        ) else { return nil }
 
-        var moved = Array(lines[nodeID..<endLine])
+        let targetLine = lines[targetID]
+        let targetIsList = isListLine(targetLine)
+        let targetIndent = targetLine.prefix(while: { $0 == " " }).count
+        let targetEnd = subtreeEndLine(at: targetPosition, nodes: parsed, lineCount: contentLineCount)
+        let targetFirstChild = firstDescendantLine(
+            at: targetPosition, nodes: parsed, fallback: targetEnd
+        )
+
+        let insertionLine: Int
+        let desiredIndent: Int
+        switch placement {
+        case .child:
+            if targetIsList {
+                guard hasSafelyIndentedListContent(
+                    lines, from: targetID + 1, to: targetFirstChild, baseIndent: targetIndent
+                ) else { return nil }
+                desiredIndent = targetIndent + 2
+            } else {
+                desiredIndent = 0
+            }
+            insertionLine = targetFirstChild
+
+        case .before:
+            guard targetIsList else { return nil }
+            desiredIndent = targetIndent
+            insertionLine = targetID
+
+        case .after:
+            guard targetIsList,
+                  hasSafelyIndentedListContent(
+                    lines, from: targetID + 1, to: targetEnd, baseIndent: targetIndent
+                  ) else { return nil }
+            desiredIndent = targetIndent
+            insertionLine = targetEnd
+        }
+
+        let delta = desiredIndent - sourceIndent
+        var moved = Array(lines[nodeID..<sourceEnd])
         for index in moved.indices where !moved[index].trimmingCharacters(in: .whitespaces).isEmpty {
             let currentIndent = moved[index].prefix(while: { $0 == " " }).count
             let nextIndent = currentIndent + delta
@@ -643,12 +712,12 @@ extension MindMapOutline {
             moved[index] = String(repeating: " ", count: nextIndent) + moved[index].dropFirst(currentIndent)
         }
 
-        lines.removeSubrange(nodeID..<endLine)
-        let removedCount = endLine - nodeID
-        let adjustedTarget = targetID > nodeID ? targetID - removedCount : targetID
-        guard lines.indices.contains(adjustedTarget) else { return nil }
-        lines.insert(contentsOf: moved, at: adjustedTarget + 1)
-        return (lines.joined(separator: "\n"), adjustedTarget + 1)
+        let removedCount = sourceEnd - nodeID
+        lines.removeSubrange(nodeID..<sourceEnd)
+        let adjustedInsertion = insertionLine > nodeID ? insertionLine - removedCount : insertionLine
+        guard adjustedInsertion >= 0, adjustedInsertion <= lines.count else { return nil }
+        lines.insert(contentsOf: moved, at: adjustedInsertion)
+        return (lines.joined(separator: "\n"), adjustedInsertion)
     }
 }
 

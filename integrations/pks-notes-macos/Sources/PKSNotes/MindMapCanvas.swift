@@ -883,7 +883,8 @@ struct MindMapCanvas: View {
 
             ForEach(layout.placements) { placement in
                 nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id),
-                         branch: branchByID[placement.id] ?? 0, exporting: exporting)
+                         branch: branchByID[placement.id] ?? 0,
+                         dropHeight: placement.size.height, exporting: exporting)
                     .frame(width: placement.size.width, height: placement.size.height)
                     .position(placement.center)
                     .id(placement.id)
@@ -937,7 +938,8 @@ struct MindMapCanvas: View {
 
     @ViewBuilder
     private func nodeCard(_ node: MindMapNode, hasChildren: Bool,
-                          branch: Int, exporting: Bool = false) -> some View {
+                          branch: Int, dropHeight: CGFloat,
+                          exporting: Bool = false) -> some View {
         let presentation = nodePresentations[node.id] ?? MindMapOutline.presentation(for: node.title)
         let task = MindMapTaskNode.parse(presentation.title)
         let visibleTitle = task?.title ?? presentation.title
@@ -1121,10 +1123,29 @@ struct MindMapCanvas: View {
                 radius: mapStyle == .minimal ? 0 : 8, y: mapStyle == .minimal ? 0 : 3)
         .contentShape(RoundedRectangle(cornerRadius: cardRadius))
         .draggable(String(node.id))
-        .dropDestination(for: String.self) { items, _ in
+        .dropDestination(for: String.self) { items, location in
             guard let raw = items.first, let draggedID = Int(raw) else { return false }
+            guard draggedID != node.id else {
+                dropTargetID = nil
+                return true
+            }
+
+            let placement: MindMapDropPlacement
+            if MindMapOutline.isListNode(in: source, nodeID: node.id) {
+                let edgeZone = min(16, dropHeight * 0.25)
+                if location.y < edgeZone {
+                    placement = .before
+                } else if location.y > dropHeight - edgeZone {
+                    placement = .after
+                } else {
+                    placement = .child
+                }
+            } else {
+                placement = .child
+            }
+
             guard let outcome = MindMapOutline.moveListSubtreeWithOutcome(
-                in: source, nodeID: draggedID, asChildOf: node.id
+                in: source, nodeID: draggedID, relativeTo: node.id, placement: placement
             ) else {
                 interchangeError = language.text(
                     "Cannot move this branch without changing attached Markdown. Use the editor."
@@ -1273,38 +1294,30 @@ struct MindMapCanvas: View {
     @discardableResult
     private func addChild() -> Bool {
         guard let id = selectedID ?? nodes.first?.id else { return false }
-        guard let updated = MindMapOutline.addChild(in: source, parentID: id) else {
+        guard let outcome = MindMapOutline.addChildWithOutcome(in: source, parentID: id) else {
             interchangeError = language.text(
                 "Cannot add a node here without changing attached Markdown. Use the editor."
             )
             return false
         }
-        source = updated
+        source = outcome.source
         collapsed.removeAll()
-        startEditingNode(id + 1, title: "New idea", created: true)
+        startEditingNode(outcome.nodeID, title: "New idea", created: true)
         return true
     }
 
     @discardableResult
     private func addSibling() -> Bool {
-        guard let id = selectedID ?? nodes.first?.id,
-              let position = nodes.firstIndex(where: { $0.id == id }) else { return false }
-        guard let updated = MindMapOutline.addSibling(in: source, nodeID: id) else {
+        guard let id = selectedID ?? nodes.first?.id else { return false }
+        guard let outcome = MindMapOutline.addSiblingWithOutcome(in: source, nodeID: id) else {
             interchangeError = language.text(
                 "Cannot add a node here without changing attached Markdown. Use the editor."
             )
             return false
         }
-        let original = nodes
-        let siblingLine = original.dropFirst(position + 1)
-            .first(where: { $0.depth <= original[position].depth })?.id
-            ?? source.components(separatedBy: "\n").count
-        let trimmedLine = source.components(separatedBy: "\n")[id]
-            .trimmingCharacters(in: .whitespaces)
-        let isList = ["- ", "* ", "+ "].contains(where: { trimmedLine.hasPrefix($0) })
-        source = updated
+        source = outcome.source
         collapsed.removeAll()
-        startEditingNode(isList ? siblingLine : id + 1, title: "New idea", created: true)
+        startEditingNode(outcome.nodeID, title: "New idea", created: true)
         return true
     }
 

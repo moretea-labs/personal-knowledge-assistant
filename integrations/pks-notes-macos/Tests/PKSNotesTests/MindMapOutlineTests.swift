@@ -71,14 +71,25 @@ extension MindMapOutlineTests {
         )
     }
 
-    func testAddChildRejectsReparentingExistingMarkdownProse() {
+    func testAddChildPreservesAttachedMarkdownAndRejectsAmbiguousListBoundaries() {
         let heading = "# Root\nThis is a paragraph.\n- Existing"
-        XCTAssertNil(MindMapOutline.addChild(in: heading, parentID: 0))
+        XCTAssertEqual(
+            MindMapOutline.addChild(in: heading, parentID: 0),
+            "# Root\nThis is a paragraph.\n- New idea\n- Existing"
+        )
+
         let list = "# Root\n- A\n  Attached paragraph\n- B"
-        XCTAssertNil(MindMapOutline.addChild(in: list, parentID: 1))
-        XCTAssertEqual(MindMapOutline.addChild(
-            in: "# Root\n\n- A", parentID: 0
-        ), "# Root\n- New idea\n\n- A")
+        XCTAssertEqual(
+            MindMapOutline.addChild(in: list, parentID: 1),
+            "# Root\n- A\n  Attached paragraph\n  - New idea\n- B"
+        )
+
+        let unsafe = "# Root\n- A\nOutside paragraph\n- B"
+        XCTAssertNil(MindMapOutline.addChild(in: unsafe, parentID: 1))
+        XCTAssertEqual(
+            MindMapOutline.addChild(in: "# Root\n\n- A", parentID: 0),
+            "# Root\n\n- New idea\n- A"
+        )
     }
 
     func testLeafDeletionDoesNotDiscardDescendantsOrHeadings() {

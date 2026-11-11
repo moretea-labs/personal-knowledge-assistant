@@ -44,9 +44,21 @@ final class MindMapFunctionalShortcutsTests: XCTestCase {
         ))
     }
 
-    func testAddingChildrenRefusesToReparentAttachedMarkdown() {
-        let protected = "# Topic\nAn explanation that belongs to the original heading.\n- Next\n"
-        XCTAssertNil(MindMapOutline.addChild(in: protected, parentID: 0))
+    func testAddingChildrenPreservesAttachedMarkdownAndRejectsAmbiguousBoundaries() {
+        let heading = "# Topic\nAn explanation that belongs to the original heading.\n- Next\n"
+        XCTAssertEqual(
+            MindMapOutline.addChild(in: heading, parentID: 0),
+            "# Topic\nAn explanation that belongs to the original heading.\n- New idea\n- Next\n"
+        )
+
+        let list = "# Topic\n- Parent\n  Explanation belongs to Parent.\n- Next\n"
+        XCTAssertEqual(
+            MindMapOutline.addChild(in: list, parentID: 1),
+            "# Topic\n- Parent\n  Explanation belongs to Parent.\n  - New idea\n- Next\n"
+        )
+
+        let unsafe = "# Topic\n- Parent\nUnindented text outside Parent.\n- Next\n"
+        XCTAssertNil(MindMapOutline.addChild(in: unsafe, parentID: 1))
         XCTAssertEqual(
             MindMapOutline.addChild(in: "# Topic\n- Existing\n", parentID: 0),
             "# Topic\n- New idea\n- Existing\n"
@@ -60,6 +72,34 @@ final class MindMapFunctionalShortcutsTests: XCTestCase {
         XCTAssertEqual(
             AppLanguage.simplifiedChinese.text("Enter a nonempty, single-line node title."),
             "请输入非空的单行节点标题。"
+        )
+    }
+
+    func testReturnCreatesTheCorrectSiblingOrHeadingChildAfterAttachedContent() throws {
+        let heading = "# Topic\nHeading explanation.\n- Existing\n"
+        let headingOutcome = try XCTUnwrap(
+            MindMapOutline.addSiblingWithOutcome(in: heading, nodeID: 0)
+        )
+        XCTAssertEqual(
+            headingOutcome.source,
+            "# Topic\nHeading explanation.\n- New idea\n- Existing\n"
+        )
+        XCTAssertEqual(headingOutcome.nodeID, 2)
+
+        let list = "# Topic\n- Parent\n  [PDF · p. 2](Books/Study.pdf#page=2)\n  - Existing child\n- Next\n"
+        let parentID = try XCTUnwrap(
+            MindMapOutline.nodes(in: list).first(where: { $0.title == "Parent" })?.id
+        )
+        let listOutcome = try XCTUnwrap(
+            MindMapOutline.addSiblingWithOutcome(in: list, nodeID: parentID)
+        )
+        XCTAssertEqual(
+            listOutcome.source,
+            "# Topic\n- Parent\n  [PDF · p. 2](Books/Study.pdf#page=2)\n  - Existing child\n- New idea\n- Next\n"
+        )
+        XCTAssertEqual(
+            MindMapOutline.nodes(in: listOutcome.source).first(where: { $0.id == listOutcome.nodeID })?.title,
+            "New idea"
         )
     }
 
