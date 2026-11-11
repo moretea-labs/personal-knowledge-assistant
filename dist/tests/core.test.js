@@ -435,3 +435,50 @@ test('late embeddings cannot publish an obsolete managed-file index', async () =
         x.svc.db.close();
     }
 });
+test('a delayed source scan cannot publish an obsolete managed-file snapshot', async () => {
+    const x = await setup();
+    const second = await new PKSService(x.svc.cfg).open();
+    let resume, notify, timer;
+    const gate = new Promise(resolve => { resume = resolve; });
+    const reached = new Promise(resolve => { notify = resolve; });
+    try {
+        const created = await x.svc.writer.create({ title: 'Delayed source scan', content: 'original' });
+        await writeFile(created.uri, (await readFile(created.uri, 'utf8')) + ' stale scan revision');
+        const { stat } = await import('node:fs/promises');
+        const { sha256File } = await import('../src/util/fs.js');
+        const snapshot = await stat(created.uri);
+        const snapshotHash = await sha256File(created.uri);
+        const originalEmbed = x.svc.embeddings.embed.bind(x.svc.embeddings);
+        let intercepted = false;
+        x.svc.embeddings.embed = async (text) => {
+            if (!intercepted && text.includes('stale scan revision')) {
+                intercepted = true;
+                notify();
+                await gate;
+            }
+            return originalEmbed(text);
+        };
+        const staleIndex = x.svc.indexer.indexFile('managed', 'managed', created.uri, snapshot.mtime.toISOString(), snapshot.birthtime.toISOString(), snapshot.size, snapshotHash);
+        await Promise.race([
+            reached,
+            new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('stale scan embedding was not reached')), 2500); })
+        ]);
+        clearTimeout(timer);
+        await second.writer.update({ uri: created.uri, append: ' newer writer revision' });
+        resume();
+        assert.equal(await staleIndex, null, 'changed source snapshots must be discarded rather than committed');
+        const content = await readFile(created.uri, 'utf8');
+        assert.match(content, /stale scan revision/);
+        assert.match(content, /newer writer revision/);
+        const indexed = x.svc.db.db.prepare('SELECT content_hash FROM documents WHERE uri=?').get(created.uri);
+        assert.equal(indexed.content_hash, await sha256File(created.uri), 'the catalog hash must match the latest canonical file');
+        const chunks = x.svc.db.db.prepare('SELECT c.text FROM chunks c JOIN documents d ON d.id=c.document_id WHERE d.uri=?').all(created.uri).map((row) => row.text).join('\\n');
+        assert.match(chunks, /newer writer revision/, 'the published chunks must contain the latest file revision');
+    }
+    finally {
+        clearTimeout(timer);
+        resume();
+        second.db.close();
+        x.svc.db.close();
+    }
+});
