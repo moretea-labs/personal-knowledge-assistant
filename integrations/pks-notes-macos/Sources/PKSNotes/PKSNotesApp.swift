@@ -465,7 +465,7 @@ struct NotesWindow: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
-                .navigationSplitViewColumnWidth(min: 205, ideal: 242, max: 325)
+                .navigationSplitViewColumnWidth(min: 320, ideal: 368, max: 480)
         } detail: {
             detail
         }
@@ -1920,44 +1920,6 @@ struct NotesWindow: View {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private func navigationRow(_ tab: SidebarTab, symbol: String, title: String) -> some View {
-        let selected = sidebarTab == tab
-        return Button {
-            withAnimation(.easeOut(duration: 0.14)) { sidebarTab = tab }
-        } label: {
-            HStack(spacing: 11) {
-                Image(systemName: symbol)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(selected ? Color.primary : Color.secondary)
-                    .frame(width: 18, height: 18)
-                Text(title)
-                    .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
-                    .foregroundStyle(selected ? Color.primary : Color.secondary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                if tab == .search && !model.hits.isEmpty {
-                    Circle()
-                        .fill(Color.secondary.opacity(0.7))
-                        .frame(width: 5, height: 5)
-                }
-            }
-            .padding(.horizontal, 12)
-            .frame(height: 34)
-            .background(
-                selected
-                    ? Color(nsColor: .textBackgroundColor).opacity(colorScheme == .dark ? 0.14 : 0.68)
-                    : .clear,
-                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-            )
-            .shadow(color: .black.opacity(selected && colorScheme == .light ? 0.035 : 0),
-                    radius: 4, y: 1)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(title)
-        .accessibilityIdentifier("pks-sidebar-\(tab.rawValue.lowercased())")
-    }
-
     private func fileTreeRow(_ row: NoteTreePresentation.Row) -> some View {
                         let isSelected = model.selected == row.item.url || model.previewPDF == row.item.url
                         return Group {
@@ -2268,51 +2230,69 @@ struct NotesWindow: View {
                 }
     }
 
+    // The toolbar is a persistent icon rail; navigation and file content remain
+    // a single information pane, preserving the existing model and keyboard routing.
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Reuse the actual Dock/Info.plist app icon as the sole brand mark.
-            // No second leaf-shaped identity is drawn separately in the sidebar.
-            HStack(spacing: 9) {
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
                 Image(nsImage: NSApp.applicationIconImage)
                     .resizable()
                     .interpolation(.high)
                     .scaledToFit()
-                    .frame(width: 29, height: 29)
-                    .accessibilityHidden(true)
-                Text("Leafspan")
-                    .font(.system(size: 15.5, weight: .semibold))
-                    .tracking(-0.35)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
+                    .frame(width: 32, height: 32)
+                    .accessibilityLabel("Leafspan")
+                    .padding(.top, 12)
+                    .padding(.bottom, 23)
+
+                VStack(spacing: 8) {
+                    railButton(.notes, symbol: "square.stack", title: language.text("All Notes"))
+                    railButton(.recent, symbol: "clock", title: language.text("Recent"))
+                    railButton(.favorites, symbol: "star", title: language.text("Favorites"))
+                    railButton(.search, symbol: "magnifyingglass", title: language.text("Search"))
+                }
+                Spacer(minLength: 12)
                 Button(action: openQuickPicker) {
                     Image(systemName: "doc.text.magnifyingglass")
-                        .font(.system(size: 13.5, weight: .medium))
-                        .frame(width: 28, height: 28)
+                        .font(.system(size: 16))
+                        .frame(width: 38, height: 38)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help(language.text("Quick Open a file in the current library") + " (⌘P)")
                 .accessibilityIdentifier("pks-sidebar-quick-open")
-
-                Button {
-                    beginNewNote()
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 14, weight: .medium))
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help(language.text("New Markdown note (⌘N)"))
-                .accessibilityIdentifier("pks-new-note-button")
+                .padding(.bottom, 14)
             }
-            .padding(.horizontal, 12)
-            .frame(height: 56)
-            .padding(.top, 4)
+            .frame(width: 62)
+            .frame(maxHeight: .infinity)
+            .background(.ultraThinMaterial)
 
-            HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 10) {
+                    Text(language.text(sidebarTab == .notes ? "All Notes" :
+                                       sidebarTab == .recent ? "Recent" :
+                                       sidebarTab == .favorites ? "Favorites" : "Search"))
+                        .font(.system(size: 15, weight: .semibold))
+                        .tracking(-0.25)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Button {
+                        beginNewNote()
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 15))
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help(language.text("New Markdown note (⌘N)"))
+                    .accessibilityIdentifier("pks-new-note-button")
+                }
+                .padding(.leading, 17)
+                .padding(.trailing, 13)
+                .frame(height: 61)
+
+                HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -2349,15 +2329,6 @@ struct NotesWindow: View {
             .padding(.horizontal, 12)
             .padding(.top, 5)
             .padding(.bottom, 9)
-
-            VStack(spacing: 2) {
-                navigationRow(.notes, symbol: "doc.on.doc", title: language.text("All Notes"))
-                navigationRow(.recent, symbol: "clock", title: language.text("Recent"))
-                navigationRow(.favorites, symbol: "star", title: language.text("Favorites"))
-                navigationRow(.search, symbol: "text.magnifyingglass", title: language.text("Search"))
-            }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 3)
 
             if sidebarTab == .notes {
                 HStack(spacing: 8) {
@@ -2500,10 +2471,32 @@ struct NotesWindow: View {
             }
             .frame(maxHeight: .infinity)
             .layoutPriority(1)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.thinMaterial)
         }
-        // The window remains the sole surface: native vibrancy supplies depth
-        // without a second opaque panel or ornamental separator.
-        .background(.regularMaterial)
+        .background(.ultraThinMaterial)
+    }
+
+    private func railButton(_ tab: SidebarTab, symbol: String, title: String) -> some View {
+        let selected = sidebarTab == tab
+        return Button {
+            withAnimation(.easeOut(duration: 0.14)) { sidebarTab = tab }
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 17, weight: selected ? .semibold : .regular))
+                .foregroundStyle(selected ? Color.primary : Color.secondary)
+                .frame(width: 40, height: 40)
+                .background(
+                    selected ? Color.primary.opacity(colorScheme == .dark ? 0.13 : 0.075) : .clear,
+                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier("pks-sidebar-\(tab.rawValue.lowercased())")
     }
 
     private func toggleFolder(_ url: URL) {
