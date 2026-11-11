@@ -25,6 +25,7 @@ This file is the submission-copy authority for the first macOS App Store release
 - IAP `6831933705` exists. `Leafspan Pro` is the intended Reference Name and en-US/zh-Hans display name in this source draft, but the current connector cannot read or update IAP localizations; its actual App Store Connect name remains unverified.
 - App Store Connect contains only builds `1` and `2`; build `2` is `VALID`. The current local source candidate is build `3` and has not been uploaded.
 - No App Review submission records exist. This remains a draft-only state; no build upload, review submission, or publication occurred.
+- **Connector routing guard:** always pass explicit `app_id=6831932674` for Leafspan App Store Connect actions. The connector global default `6775778505` belongs to Avela and must never be used for Leafspan. Verified by exact Bundle ID lookup on 2026-11-12.
 - The available screenshot-set read action rejects a `MAC_OS` version as unsupported; macOS screenshot upload state is not verified through that connector and remains a release gate.
 
 ## Required external values before submission
