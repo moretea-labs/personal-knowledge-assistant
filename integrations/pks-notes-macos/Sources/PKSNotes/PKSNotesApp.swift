@@ -499,6 +499,7 @@ struct NotesWindow: View {
                 auxiliaryListPanel.frame(width: 550, height: 610)
             }
         }
+        .toolbarBackground(.ultraThinMaterial, for: .windowToolbar)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil && !showingMindMap {
@@ -2170,8 +2171,8 @@ struct NotesWindow: View {
                 }
     }
 
-    // One quiet navigation island floats over the translucent sidebar;
-    // information and file navigation retain their existing state owner.
+    // The icon rail and file/search surface share one continuous native material;
+    // selection is expressed on each control rather than a floating rail container.
     private var sidebar: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
@@ -2192,13 +2193,6 @@ struct NotesWindow: View {
                 }
                 .padding(.horizontal, 5)
                 .padding(.vertical, 7)
-                .background(
-                    Color(nsColor: .textBackgroundColor)
-                        .opacity(colorScheme == .dark ? 0.13 : 0.56),
-                    in: RoundedRectangle(cornerRadius: 17, style: .continuous)
-                )
-                .shadow(color: .black.opacity(colorScheme == .dark ? 0.09 : 0.055),
-                        radius: 12, y: 3)
 
                 Spacer(minLength: 12)
                 Button(action: openQuickPicker) {
@@ -2277,9 +2271,8 @@ struct NotesWindow: View {
             }
             .padding(.horizontal, 11)
             .frame(height: 33)
-            .background(Color(nsColor: .textBackgroundColor).opacity(colorScheme == .dark ? 0.12 : 0.54),
+            .background(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.035),
                         in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .shadow(color: .black.opacity(colorScheme == .dark ? 0 : 0.025), radius: 4, y: 1)
             .padding(.horizontal, 12)
             .padding(.top, 5)
             .padding(.bottom, 9)
@@ -2427,7 +2420,6 @@ struct NotesWindow: View {
             .layoutPriority(1)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(.thinMaterial)
         }
         .background(.ultraThinMaterial)
     }
