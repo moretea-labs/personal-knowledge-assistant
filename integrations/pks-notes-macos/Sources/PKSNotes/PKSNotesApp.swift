@@ -419,15 +419,6 @@ struct NotesWindow: View {
         return text
     }
 
-    private var sidebarSectionTitleKey: String {
-        switch sidebarTab {
-        case .notes: "FOLDERS"
-        case .recent: "RECENT NOTES"
-        case .favorites: "FAVORITES"
-        case .search: "SEARCH RESULTS"
-        }
-    }
-
     private var theme: NotesTheme { NotesTheme.restored(themeID) }
 
     private var mindMapToggleBinding: Binding<Bool> {
@@ -1924,42 +1915,35 @@ struct NotesWindow: View {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    /// Bear/Panda-inspired quiet navigation tint. Editorial content retains its own
-    /// untouched white/paper canvas; no translucent cards or decorative shadows.
-    private var sidebarCanvas: Color {
-        colorScheme == .dark
-            ? Color(red: 0.105, green: 0.112, blue: 0.121)
-            : Color(red: 0.972, green: 0.978, blue: 0.975)
-    }
-
     private func navigationRow(_ tab: SidebarTab, symbol: String, title: String) -> some View {
         let selected = sidebarTab == tab
         return Button {
             withAnimation(.easeOut(duration: 0.14)) { sidebarTab = tab }
         } label: {
-            VStack(spacing: 3) {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: symbol)
-                        .font(.system(size: 13.5, weight: .medium))
-                        .frame(width: 22, height: 18)
-                        .foregroundStyle(selected ? Color.primary : Color.secondary)
-                    if tab == .search && !model.hits.isEmpty {
-                        Circle()
-                            .fill(theme.linkColor)
-                            .frame(width: 5, height: 5)
-                            .offset(x: 2, y: -1)
-                    }
-                }
+            HStack(spacing: 11) {
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(selected ? Color.primary : Color.secondary)
+                    .frame(width: 18, height: 18)
                 Text(title)
-                    .font(.system(size: 9.5, weight: selected ? .semibold : .medium))
+                    .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
                     .foregroundStyle(selected ? Color.primary : Color.secondary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.78)
+                Spacer(minLength: 0)
+                if tab == .search && !model.hits.isEmpty {
+                    Circle()
+                        .fill(Color.secondary.opacity(0.7))
+                        .frame(width: 5, height: 5)
+                }
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 38)
-            .background(selected ? Color.primary.opacity(colorScheme == .dark ? 0.13 : 0.065) : .clear,
-                        in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .background(
+                selected
+                    ? Color(nsColor: .controlBackgroundColor).opacity(colorScheme == .dark ? 0.28 : 0.8)
+                    : .clear,
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -2274,8 +2258,8 @@ struct NotesWindow: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(colorScheme == .dark ? theme.linkColor : Color.primary)
                     .frame(width: 22)
-                Text("PKS Notes")
-                    .font(.system(size: 14, weight: .semibold))
+                Text("Leafspan")
+                    .font(.system(size: 15, weight: .semibold))
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 Button {
@@ -2357,22 +2341,29 @@ struct NotesWindow: View {
             .padding(.top, 5)
             .padding(.bottom, 9)
 
-            HStack(spacing: 4) {
+            VStack(spacing: 2) {
                 navigationRow(.notes, symbol: "square.stack.3d.up", title: language.text("All Notes"))
                 navigationRow(.recent, symbol: "clock", title: language.text("Recent"))
                 navigationRow(.favorites, symbol: "star", title: language.text("Favorites"))
                 navigationRow(.search, symbol: "text.magnifyingglass", title: language.text("PKS Search"))
             }
-            .padding(.horizontal, 10)
-            .padding(.bottom, 8)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
 
-            HStack(spacing: 6) {
-                Text(language.text(sidebarSectionTitleKey))
-                    .font(.system(size: 10, weight: .semibold))
-                    .tracking(0.75)
-                    .foregroundStyle(.tertiary)
-                Spacer(minLength: 0)
-                if sidebarTab == .notes {
+            if sidebarTab == .notes {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .frame(width: 17)
+                        .foregroundStyle(.secondary)
+                    Text(NotesGeometry.workspaceTitle(model.root, language: language))
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if model.loadingFiles {
+                        ProgressView().controlSize(.mini)
+                    }
                     Menu {
                         if let root = model.root {
                             Button(language.text("New Folder…"), systemImage: "folder.badge.plus") {
@@ -2391,7 +2382,7 @@ struct NotesWindow: View {
                     } label: {
                         Image(systemName: "ellipsis")
                             .font(.system(size: 13, weight: .medium))
-                            .frame(width: 25, height: 24)
+                            .frame(width: 25, height: 25)
                     }
                     .buttonStyle(.plain)
                     .menuIndicator(.hidden)
@@ -2399,35 +2390,17 @@ struct NotesWindow: View {
                     .help(language.text("Current library folder"))
                     .accessibilityIdentifier("pks-workspace-menu")
                 }
-                if model.loadingFiles && sidebarTab == .notes {
-                    ProgressView().controlSize(.mini)
-                }
-            }
-            .padding(.leading, 21)
-            .padding(.trailing, 12)
-            .frame(height: 28)
-
-            if sidebarTab == .notes {
-                HStack(spacing: 7) {
-                    Image(systemName: "externaldrive")
-                        .font(.system(size: 12))
-                        .frame(width: 15)
-                        .foregroundStyle(.tertiary)
-                    Text(NotesGeometry.workspaceTitle(model.root, language: language))
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer()
-                }
-                .padding(.horizontal, 22)
-                .frame(height: 28)
+                .padding(.leading, 22)
+                .padding(.trailing, 12)
+                .frame(height: 34)
+                .padding(.bottom, 4)
             } else if model.searching || model.searchFailed {
                 Text(model.searchStatus)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .padding(.horizontal, 20)
-                    .frame(height: 27)
+                    .padding(.horizontal, 22)
+                    .frame(height: 31)
             }
 
             ScrollViewReader { proxy in
@@ -2519,7 +2492,9 @@ struct NotesWindow: View {
             .frame(maxHeight: .infinity)
             .layoutPriority(1)
         }
-        .background(sidebarCanvas)
+        // The window remains the sole surface: native vibrancy supplies depth
+        // without a second opaque panel or ornamental separator.
+        .background(.ultraThinMaterial)
     }
 
     private func toggleFolder(_ url: URL) {
@@ -2817,25 +2792,76 @@ struct NotesWindow: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.selected == nil && model.previewPDF == nil && model.externalBody == nil {
-                VStack(spacing: 12) {
-                    Image(systemName: "text.book.closed")
-                        .font(.system(size: 27, weight: .ultraLight))
-                        .foregroundStyle(.tertiary)
-                    Text(language.text(model.root == nil ? "Open a notes folder" : "Choose a note"))
-                        .font(.title3.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    Text(language.text(model.root == nil
-                         ? "Open your existing Markdown folder. Files stay where they are."
-                         : "Select a document in the sidebar, or search your PKS knowledge with ⌘F."))
-                        .font(.subheadline)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 370)
+                // A small reading desk rather than an empty dashboard or a promotional card.
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Leafspan")
+                        .font(.system(size: 38, weight: .semibold, design: .serif))
+                        .foregroundStyle(.primary)
+                        .padding(.bottom, 30)
+
                     if model.root == nil {
+                        Text(language.text("Open a notes folder"))
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.bottom, 16)
                         Button(language.text("Choose Folder")) { model.chooseWorkspace() }
-                            .padding(.top, 6)
+                            .buttonStyle(.borderedProminent)
+                    } else {
+                        HStack {
+                            Text(language.text("Recent"))
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button {
+                                beginNewNote()
+                            } label: {
+                                Label(language.text("New Note"), systemImage: "square.and.pencil")
+                                    .font(.system(size: 11.5))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                        }
+                        .padding(.bottom, 12)
+
+                        if model.recentNotes.isEmpty {
+                            Button {
+                                beginNewNote()
+                            } label: {
+                                Label(language.text("New Note"), systemImage: "square.and.pencil")
+                                    .font(.system(size: 13))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            ForEach(Array(model.recentNotes.prefix(6)), id: \.path) { note in
+                                Button {
+                                    model.openFile(note)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "doc.text")
+                                            .font(.system(size: 13))
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 18)
+                                        Text(note.deletingPathExtension().lastPathComponent)
+                                            .font(.system(size: 13, weight: .medium))
+                                            .lineLimit(1)
+                                        Spacer(minLength: 0)
+                                        Image(systemName: "arrow.up.right")
+                                            .font(.system(size: 9, weight: .medium))
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .contentShape(Rectangle())
+                                    .padding(.vertical, 11)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("pks-welcome-recent-\(note.lastPathComponent)")
+                            }
+                        }
                     }
                 }
+                .frame(maxWidth: 510, alignment: .leading)
+                .padding(.horizontal, 40)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 reader
@@ -2875,7 +2901,7 @@ struct NotesWindow: View {
         .navigationTitle(model.previewPDF?.lastPathComponent
                          ?? model.selected?.deletingPathExtension().lastPathComponent
                          ?? model.previewSource?.title
-                         ?? language.text("PKS Notes"))
+                         ?? "Leafspan")
     }
 
     @ViewBuilder
