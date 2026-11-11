@@ -2244,6 +2244,19 @@ extension PKSNotesTests {
 
 
 extension PKSNotesTests {
+    @MainActor
+    func testNativeMarkdownFormattingPreservesUnicodeSelectionInTextView() async throws {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 180))
+        textView.string = "中文测试"
+        textView.setSelectedRange(NSRange(location: 2, length: 2))
+
+        XCTAssertTrue(MarkdownNativeCommand.perform("bold", in: textView))
+        XCTAssertEqual(textView.string, "中文**测试**")
+
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 4, length: 2))
+    }
+
     func testMarkdownEditingWrapsSelectionAndPrefixesLines() {
         XCTAssertEqual(
             MarkdownEditing.apply(.bold, to: "hello world", selection: NSRange(location: 0, length: 5)),
