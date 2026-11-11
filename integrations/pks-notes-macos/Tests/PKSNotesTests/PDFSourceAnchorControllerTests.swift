@@ -132,4 +132,44 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         XCTAssertEqual(controller.searchMatchCount, 0)
         XCTAssertNil(controller.selectedText())
     }
+
+    @MainActor
+    func testPDFReaderSearchNavigatesMultipleMatchesAndWraps() async throws {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
+        textView.string = "target alpha target beta target"
+        let document = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: textView.bounds)))
+        let page = try XCTUnwrap(document.page(at: 0))
+        let view = PDFView(frame: NSRect(x: 0, y: 0, width: 700, height: 800))
+        let controller = PDFReaderController()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Search-Navigation-\(UUID().uuidString).pdf")
+        defer { controller.detach(view: view) }
+
+        controller.attach(view: view, document: document, url: url,
+                          requestedPage: nil, requestedAnchor: nil)
+        controller.search(" target ")
+        for _ in 0..<400 where controller.isSearching {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertFalse(controller.isSearching)
+        XCTAssertEqual(controller.completedSearchQuery, "target")
+        XCTAssertEqual(controller.searchMatchCount, 3)
+        XCTAssertEqual(controller.searchMatchIndex, 0)
+        let firstBounds = try XCTUnwrap(view.currentSelection).bounds(for: page)
+
+        controller.nextSearchMatch()
+        XCTAssertEqual(controller.searchMatchIndex, 1)
+        let secondBounds = try XCTUnwrap(view.currentSelection).bounds(for: page)
+        XCTAssertNotEqual(firstBounds.minX, secondBounds.minX, accuracy: 0.5)
+
+        controller.previousSearchMatch()
+        XCTAssertEqual(controller.searchMatchIndex, 0)
+        controller.previousSearchMatch()
+        XCTAssertEqual(controller.searchMatchIndex, 2)
+        XCTAssertTrue(try XCTUnwrap(controller.selectedText()).contains("target"))
+
+        controller.nextSearchMatch()
+        XCTAssertEqual(controller.searchMatchIndex, 0)
+    }
 }
