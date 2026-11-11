@@ -107,6 +107,28 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         XCTAssertEqual(aPresentation.links.map(\.target), [citation])
     }
 
+    func testAddChildKeepsTheParentsPDFCitationOnTheParentNode() throws {
+        let citation = "/Books/Study.pdf#page=3&rects=0.2,0.3,0.4,0.05&fp=abcdef0123456789"
+        let source = "# Plan\n- Parent\n  [Textbook · p. 3](\(citation))\n  - Existing child\n"
+        let parent = try XCTUnwrap(
+            MindMapOutline.nodes(in: source).first(where: { $0.title == "Parent" })
+        )
+        let outcome = try XCTUnwrap(
+            MindMapOutline.addChildWithOutcome(in: source, parentID: parent.id)
+        )
+        XCTAssertEqual(
+            outcome.source,
+            "# Plan\n- Parent\n  [Textbook · p. 3](\(citation))\n  - New idea\n  - Existing child\n"
+        )
+
+        let nodes = MindMapOutline.nodes(in: outcome.source)
+        let updatedParent = try XCTUnwrap(nodes.first(where: { $0.title == "Parent" }))
+        let newChild = try XCTUnwrap(nodes.first(where: { $0.id == outcome.nodeID }))
+        let presentations = MindMapOutline.presentations(in: outcome.source, nodes: nodes)
+        XCTAssertEqual(presentations[updatedParent.id]?.links.map(\.target), [citation])
+        XCTAssertEqual(presentations[newChild.id]?.links, [])
+    }
+
     func testMoveKeepsPDFCitationQuoteAndFencedCodeWithItsNode() throws {
         let citation = "/Books/Study%20Guide.pdf#page=4&rects=0.1,0.2,0.3,0.04&fp=0123456789abcdef"
         let source = """
