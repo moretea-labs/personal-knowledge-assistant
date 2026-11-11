@@ -150,3 +150,37 @@ test('ordinary recent/latest search terms do not get routed to health-only struc
     assert.deepEqual(explicitStructured, []);
     x.svc.db.close();
 });
+test('related suggestions require content evidence, exclude self and suppress generic collisions', async () => {
+    const x = await setup();
+    const source = join(x.docs, 'guitar-practice.md');
+    const relevant = join(x.docs, 'chord-finger-exercises.md');
+    const noise = join(x.docs, 'guitar-shopping.md');
+    const unrelated = join(x.docs, 'finance.md');
+    await writeFile(source, '# Guitar practice\nChord switching and finger positioning exercises for smooth transitions.');
+    await writeFile(relevant, '# Chord switching technique\nGuitar finger positioning exercises improve chord switching precision.');
+    await writeFile(noise, '# Guitar price comparison\nGuitar accessories and retail store prices.');
+    await writeFile(unrelated, '# Financial planning\nMonthly budget and banking transaction analysis.');
+    await x.svc.sync();
+    const query = 'Guitar chord switching finger positioning exercises';
+    const results = await x.svc.search(query, { mode: 'related', excludeUri: source, limit: 8 });
+    assert.ok(results.some((r) => r.uri === relevant), 'strong overlapping evidence must survive');
+    assert.ok(!results.some((r) => r.uri === source), 'the current file is not a recommendation');
+    assert.ok(!results.some((r) => r.uri === noise), 'one shared topic word is insufficient');
+    assert.ok(!results.some((r) => r.uri === unrelated), 'unrelated content must be omitted');
+    assert.ok(results.every((r) => r.reasons.includes('related_content')));
+    assert.equal(new Set(results.map((r) => r.documentId)).size, results.length);
+    assert.deepEqual(await x.svc.search('notes about the page', { mode: 'related' }), [], 'generic note UI terms alone must not generate suggestions');
+    x.svc.db.close();
+});
+test('related Chinese evidence distinguishes a specific topic from generic learning notes', async () => {
+    const x = await setup();
+    const relevant = join(x.docs, 'renal-diet.md');
+    const noise = join(x.docs, 'english-study.md');
+    await writeFile(relevant, '# 慢性肾病饮食控制\n注意蛋白质摄入与钾磷管理，记录饮食控制方案。');
+    await writeFile(noise, '# 学习笔记\n英语听力学习与阅读记录。');
+    await x.svc.sync();
+    const results = await x.svc.search('慢性肾病饮食控制蛋白质摄入', { mode: 'related', limit: 8 });
+    assert.ok(results.some((r) => r.uri === relevant), 'CJK content overlap must be usable');
+    assert.ok(!results.some((r) => r.uri === noise), 'generic shared Chinese text is not evidence');
+    x.svc.db.close();
+});

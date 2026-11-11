@@ -573,7 +573,7 @@ struct NotesWindow: View {
                                         : "Linked notes for this PDF"))
                     .accessibilityIdentifier("pks-relationships-menu")
                     .popover(isPresented: $showingBacklinks, arrowEdge: .bottom) {
-                        ScrollView {
+                        ScrollView(.vertical) {
                             VStack(alignment: .leading, spacing: 0) {
                                 HStack {
                                     Text(language.text("Relationships")).font(.headline)
@@ -667,11 +667,12 @@ struct NotesWindow: View {
                                     } else if model.relatedHits.isEmpty {
                                         relationshipEmpty(language.text("No related PKS results."))
                                     } else {
-                                        ForEach(model.relatedHits.prefix(6)) { hit in
+                                        ForEach(model.relatedHits) { hit in
                                             relationshipButton(
                                                 title: hit.title,
-                                                detail: language.text(hit.sourceLabel),
-                                                symbol: "sparkles"
+                                                detail: hit.snippet.flatMap { $0.isEmpty ? nil : $0 }
+                                                    ?? language.text(hit.sourceLabel),
+                                                symbol: "text.magnifyingglass"
                                             ) {
                                                 showingBacklinks = false
                                                 model.openResult(hit)
@@ -680,7 +681,9 @@ struct NotesWindow: View {
                                 }
                             }
                         }
-                        .frame(width: 340, height: 430)
+                        .scrollIndicators(.visible)
+                        .accessibilityIdentifier("pks-relationships-scroll")
+                        .frame(width: 380, height: 460)
                     }
                 }
 
@@ -2786,14 +2789,16 @@ struct NotesWindow: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).lineLimit(1)
+                    Text(title)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .padding(.horizontal, 14)
             .padding(.vertical, 7)

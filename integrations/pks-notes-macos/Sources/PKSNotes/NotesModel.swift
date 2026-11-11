@@ -1877,7 +1877,10 @@ final class NotesModel: ObservableObject {
         relatedHits = []
         relatedError = nil
         loadingRelated = true
-        let queryText = note.deletingPathExtension().lastPathComponent
+        // Filename-only similarity creates noisy matches. Use the current note's
+        // canonical editor text as retrieval evidence; do not create an index.
+        let title = note.deletingPathExtension().lastPathComponent
+        let queryText = String((title + " " + String(draft.prefix(420))).prefix(500))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !queryText.isEmpty else {
             loadingRelated = false
@@ -1889,6 +1892,8 @@ final class NotesModel: ObservableObject {
                 var parts = URLComponents(string: "http://127.0.0.1:3217/api/search")!
                 parts.queryItems = [
                     URLQueryItem(name: "q", value: queryText),
+                    URLQueryItem(name: "mode", value: "related"),
+                    URLQueryItem(name: "excludeUri", value: note.standardizedFileURL.path),
                     URLQueryItem(name: "limit", value: "8")
                 ]
                 var request = URLRequest(url: parts.url!)

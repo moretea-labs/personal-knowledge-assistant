@@ -69,6 +69,8 @@ OCR is deliberately not a default. A future image/OCR parser should only run aft
 
 The bundled hash-ngram embedding is an offline fuzzy fallback, not a claim of true semantic understanding. A remote OpenAI-compatible embedding provider is implemented and can be configured without changing index/search contracts.
 
+The dedicated `mode=related` search uses the same FTS/chunk and semantic candidates but requires multiple concrete overlaps in candidate content, ranks by term coverage, excludes the requesting document by `excludeUri` and returns at most one evidence-bearing hit per document. It intentionally returns fewer or no related items when evidence is weak; ordinary `auto` search behavior is unchanged. This does not introduce a second graph or index.
+
 ### Writes
 
 Standalone PKS mutations are restricted to the managed canonical store. Create/update performs atomic file write -> reindex -> memory invalidation. Undo restores/removes the canonical file and removes or rebuilds derived data. Physical moves outside the managed store are not duplicated inside PKS; PKS generates organization proposals and Forge performs approved filesystem mutations.
