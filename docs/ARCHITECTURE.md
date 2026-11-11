@@ -48,7 +48,7 @@ SQLite holds the catalog, FTS5 index, chunks, structured records, health observa
 
 A source scan compares metadata and content hashes. Changed content flows through parser -> chunker -> FTS -> embedding -> domain extraction -> entity extraction. Unchanged files skip parsing/embedding. Nested configured roots are excluded from parent scans to avoid duplicate indexing.
 
-**Index correctness:** parsing and Embedding preparation complete before opening the SQLite write transaction; the transaction only commits the new document, chunks, FTS and derived records atomically. An unreadable source root or subtree makes the scan incomplete: keep previously indexed documents, report the error in `sync_state.last_error`, and resume ordinary pruning only after a complete scan. A genuinely removed file in a complete scan is tombstoned. Managed note creation uses exclusive file creation rather than a check-then-overwrite race; update/undo temporary paths have unique names.
+**Index correctness:** parsing and Embedding preparation complete before opening the SQLite write transaction; the transaction only commits the new document, chunks, FTS and derived records atomically. An unreadable source root or subtree makes the scan incomplete: keep previously indexed documents, report the error in `sync_state.last_error`, and resume ordinary pruning only after a complete scan. A genuinely removed file in a complete scan is tombstoned. Managed note creation uses exclusive file creation rather than a check-then-overwrite race; update/undo temporary paths have unique names. Managed Store mutations reject symbolic-link components beneath the configured root so that creation, update and undo cannot follow ordinary linked paths outside the canonical store.
 
 ### Parsers
 

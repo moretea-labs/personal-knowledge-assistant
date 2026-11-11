@@ -1,6 +1,6 @@
 // @ts-nocheck
-import { join, resolve } from 'node:path';
-import { readFile, stat } from 'node:fs/promises';
+import { join, resolve, relative, sep } from 'node:path';
+import { readFile, stat, lstat } from 'node:fs/promises';
 import { atomicWrite, createExclusive, safeInside, ensureDir, removeIfExists } from '../util/fs.js';
 import { id } from './ids.js';
 function slug(s) { return s.trim().replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, '-').slice(0, 100) || 'note'; }
@@ -12,6 +12,26 @@ export class KnowledgeWriter {
         this.db = db;
         this.cfg = cfg;
         this.indexer = indexer;
+    }
+    // Managed Store ownership is a filesystem boundary, not merely a path prefix.
+    async checkedManagedPath(candidate) {
+        const root = resolve(this.cfg.managedStore);
+        const path = resolve(candidate);
+        if (!safeInside(root, path))
+            throw new Error('destination must stay inside managedStore');
+        let current = root;
+        for (const component of relative(root, path).split(sep).filter(Boolean)) {
+            current = join(current, component);
+            try {
+                if ((await lstat(current)).isSymbolicLink())
+                    throw new Error('symbolic link path is not allowed in managedStore');
+            }
+            catch (error) {
+                if (error?.code !== 'ENOENT')
+                    throw error;
+            }
+        }
+        return path;
     }
     invalidateMemory() { this.db.db.prepare('DELETE FROM memory_profiles').run(); }
     removeDerivedByUri(uri) {
@@ -37,9 +57,9 @@ export class KnowledgeWriter {
         const domain = (input.domain || 'Inbox').replace(/[^\p{L}\p{N}_ -]/gu, '').trim() || 'Inbox';
         const title = input.title || new Date().toISOString().slice(0, 10);
         const folder = input.destination ? resolve(input.destination) : join(this.cfg.managedStore, domain[0].toUpperCase() + domain.slice(1));
-        if (!safeInside(this.cfg.managedStore, folder))
-            throw new Error('destination must stay inside managedStore');
+        await this.checkedManagedPath(folder);
         await ensureDir(folder);
+        await this.checkedManagedPath(folder);
         const body = this.render(title, domain, input.content, input.structuredData);
         let path;
         for (let attempt = 0; attempt < 10000; attempt++) {
@@ -64,9 +84,7 @@ export class KnowledgeWriter {
         return { mutationId, action: 'create', uri: path, reversible: true };
     }
     async update(input) {
-        const path = resolve(input.uri);
-        if (!safeInside(this.cfg.managedStore, path))
-            throw new Error('Standalone write only permits managedStore; use Forge local_system for external source mutation.');
+        const path = await this.checkedManagedPath(input.uri);
         const before = await readFile(path, 'utf8');
         const after = input.replace !== undefined ? input.replace : before + (input.append ?? '');
         await atomicWrite(path, after);
@@ -81,6 +99,7 @@ export class KnowledgeWriter {
         const m = this.db.db.prepare('SELECT * FROM mutations WHERE id=?').get(mutationId);
         if (!m || m.undone_at)
             throw new Error('Mutation not found or already undone');
+        await this.checkedManagedPath(m.uri);
         if (m.action === 'create') {
             await removeIfExists(m.uri);
             this.removeDerivedByUri(m.uri);

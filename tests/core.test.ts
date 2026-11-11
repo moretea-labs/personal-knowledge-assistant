@@ -306,3 +306,29 @@ test('concurrent managed note creation preserves all original content without ov
   for(let i=0;i<8;i++)assert.ok(stored[i].includes('Unique payload '+i),'a newer create must never overwrite an earlier note');
   x.svc.db.close();
 });
+
+
+test('managed writer rejects symlink paths that escape the canonical store',async()=>{
+  const { symlink, stat: fileStat }=await import('node:fs/promises');
+  const x=await setup();
+  const outside=join(x.root,'outside');await mkdir(outside,{recursive:true});
+  const linkedFolder=join(x.managed,'outside-folder');
+  await symlink(outside,linkedFolder,'dir');
+  await assert.rejects(
+    x.svc.writer.create({destination:linkedFolder,title:'escaped-note',content:'must remain inside'}),
+    /managedStore|symbolic|symlink|outside/i
+  );
+  await assert.rejects(fileStat(join(outside,'escaped-note.md')),{code:'ENOENT'});
+  const outsideNote=join(outside,'existing.md');await writeFile(outsideNote,'original outside content');
+  const linkedNote=join(x.managed,'linked-note.md');
+  await symlink(outsideNote,linkedNote,'file');
+  await assert.rejects(
+    x.svc.writer.update({uri:linkedNote,replace:'unauthorized replacement'}),
+    /managedStore|symbolic|symlink|outside/i
+  );
+  assert.equal(await readFile(outsideNote,'utf8'),'original outside content');
+  const legitimate=await x.svc.writer.create({title:'safe-note',content:'original inside'});
+  await x.svc.writer.update({uri:legitimate.uri,replace:'updated inside'});
+  assert.match(await readFile(legitimate.uri,'utf8'),/updated inside/);
+  x.svc.db.close();
+});
