@@ -1,4 +1,4 @@
-# Leafspan (PKS Notes) development authority
+# Leafspan development authority
 
 - Source code and UI: `moretea-labs/personal-knowledge-assistant` → `integrations/pks-notes-macos/`. Current integration branch: `feature/pks-notes-mac-storekit-20261107`, with existing Requirement `REQ-PKS-NOTES-READY-TO-RELEASE-20261109`, Plan `PLAN-PKS-NOTES-READY-TO-RELEASE-20261109` and GitHub Issue #37. Do not create a parallel UI project, branch, worktree, Requirement, Plan or Issue; existing historical worktrees are read-only until their writers and unique changes are reconciled.
 - One canonical app: `~/Applications/Leafspan.app`, bundle ID `com.moretea.pks.notes`. No separate QA/preview/acceptance application or alternate bundle ID. Do not build a second running instance. Preserve real notebooks, preferences and existing assets. Before replacing a bundle, ensure all Leafspan/PKS GUI processes have exited normally; if not, stop without killing them or overwriting live bundles. Legacy apps may only be retired after process/owner/data checks.

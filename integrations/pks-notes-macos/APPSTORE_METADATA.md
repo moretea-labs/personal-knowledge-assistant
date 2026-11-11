@@ -77,6 +77,10 @@ Own your notes as plain Markdown. Edit locally, visualize outlines as mind maps,
 
 ## zh-Hans
 
+### App Name
+
+Leafspan
+
 ### Subtitle
 
 本地 Markdown 与思维导图
@@ -92,7 +96,7 @@ Leafspan 是一款原生 macOS 知识笔记工具，面向希望把资料长期�
 - 新建、编辑、重命名、移动和预览 Markdown 笔记；搜索所选工作区中的 Markdown 文件名与正文。
 - 在笔记工作区中预览 PDF。
 - 使用快速打开、最近使用、收藏、文档大纲、Wiki 链接和基础本地搜索/导航。
-- 即使可选的本地 PKS 知识服务不可用，也可以继续正常管理和编辑文件。
+- 即使可选的本地相关知识服务不可用，也可以继续正常管理和编辑文件。
 
 Leafspan Pro 为一次性 App 内购买，解锁高级知识功能：
 - 基于同一 Markdown 文件的可编辑思维导图。
