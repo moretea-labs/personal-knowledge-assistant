@@ -379,6 +379,8 @@ struct NotesWindow: View {
     @State private var quickOpenMatches: [NoteItem] = []
     @State private var showingQuickOpen = false
     @State private var showingBacklinks = false
+    @State private var showingOutline = false
+    @AppStorage("LeafspanAuxiliaryListPresentation") private var auxiliaryListPresentation = "pane"
     @State private var showingProUpsell = false
     @State private var quickOpenQuery = ""
     @State private var quickOpenIndex = 0
@@ -439,6 +441,7 @@ struct NotesWindow: View {
     }
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarTab: SidebarTab = .notes
+    @State private var hoveredRailTab: SidebarTab?
     @State private var pendingEditorFocus: URL?
     @State private var pendingBacklinkNote: URL?
     @State private var pendingBacklinkLine: Int?
@@ -467,7 +470,22 @@ struct NotesWindow: View {
             sidebar
                 .navigationSplitViewColumnWidth(min: 320, ideal: 368, max: 480)
         } detail: {
-            detail
+            HStack(spacing: 0) {
+                detail
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if auxiliaryListPresentation != "sheet" && (showingOutline || showingBacklinks) {
+                    auxiliaryListPanel
+                        .frame(width: 312)
+                        .shadow(color: .black.opacity(colorScheme == .dark ? 0.10 : 0.04),
+                                radius: 10, x: -2)
+                }
+            }
+            .sheet(isPresented: Binding(
+                get: { auxiliaryListPresentation == "sheet" && (showingOutline || showingBacklinks) },
+                set: { if !$0 { showingOutline = false; showingBacklinks = false } }
+            )) {
+                auxiliaryListPanel.frame(width: 550, height: 610)
+            }
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -508,20 +526,13 @@ struct NotesWindow: View {
                     .accessibilityIdentifier("pks-mind-map-toggle")
                 }
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
-                    Menu {
-                        ForEach(outlineHeadings) { heading in
-                            Button {
-                                jumpToOutlineHeading(heading)
-                            } label: {
-                                Label(heading.title, systemImage: "number")
-                            }
-                            .accessibilityIdentifier("pks-outline-heading-\(heading.id)")
-                        }
+                    Button {
+                        showingOutline.toggle()
+                        if showingOutline { showingBacklinks = false }
                     } label: {
                         toolbarSymbol("list.bullet.indent")
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
+                    .buttonStyle(.plain)
                     .disabled(outlineHeadings.isEmpty)
                     .help(language.text("Document Outline"))
                     .accessibilityIdentifier("pks-outline-menu")
@@ -540,7 +551,10 @@ struct NotesWindow: View {
                     Button {
                         if ProAccess.allows(.relationships, unlocked: purchases.unlocked) {
                             showingBacklinks.toggle()
-                            if showingBacklinks { model.loadRelationships() }
+                            if showingBacklinks {
+                                showingOutline = false
+                                model.loadRelationships()
+                            }
                         } else {
                             showingProUpsell = true
                         }
@@ -563,119 +577,7 @@ struct NotesWindow: View {
                                         ? "Links and related notes"
                                         : "Linked notes for this PDF"))
                     .accessibilityIdentifier("pks-relationships-menu")
-                    .popover(isPresented: $showingBacklinks, arrowEdge: .bottom) {
-                        ScrollView(.vertical) {
-                            VStack(alignment: .leading, spacing: 0) {
-                                HStack {
-                                    Text(language.text("Relationships")).font(.headline)
-                                    Spacer()
-                                    if model.loadingBacklinks || model.loadingRelated {
-                                        ProgressView().controlSize(.small)
-                                    }
-                                }
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 12)
 
-                                Divider()
-
-                                if model.previewPDF == nil {
-                                    relationshipSectionTitle(language.text("Outgoing"))
-                                    if outgoingLinks.isEmpty {
-                                        relationshipEmpty(language.text("No links from this note."))
-                                    } else {
-                                        ForEach(Array(outgoingLinks.enumerated()), id: \.offset) { _, link in
-                                            relationshipButton(
-                                                title: link.label,
-                                                detail: link.target,
-                                                symbol: "arrow.up.right"
-                                            ) {
-                                                showingBacklinks = false
-                                                _ = model.openKnowledgeLink(
-                                                    link.target,
-                                                    onUnresolved: { beginLinkRepair(link.target) }
-                                                )
-                                            }
-                                            .contextMenu {
-                                                Button(language.text("Change link target…")) {
-                                                    beginLinkRepair(link.target)
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Divider().padding(.vertical, 4)
-                                }
-
-                                relationshipSectionTitle(language.text(model.previewPDF == nil
-                                                                      ? "Backlinks"
-                                                                      : "Linked Notes"))
-                                if model.loadingBacklinks {
-                                    relationshipEmpty(language.text(model.previewPDF == nil
-                                                                    ? "Finding notes that link here…"
-                                                                    : "Finding notes linked to this PDF…"))
-                                } else if model.backlinks.isEmpty {
-                                    relationshipEmpty(language.text(model.backlinkSkippedCloudFiles > 0
-                                                                    ? "No local backlinks found yet."
-                                                                    : (model.previewPDF == nil
-                                                                        ? "No backlinks in this workspace."
-                                                                        : "No notes link to this PDF yet.")))
-                                } else {
-                                    ForEach(model.backlinks) { backlink in
-                                        ForEach(backlink.locations) { location in
-                                            relationshipButton(
-                                                title: backlink.title,
-                                                detail: location.count > 1
-                                                    ? "L\(location.lineIndex + 1) · \(location.count) \(language.text("references"))"
-                                                    : "L\(location.lineIndex + 1)",
-                                                symbol: "arrow.turn.up.left"
-                                            ) {
-                                                openBacklinkLocation(backlink, location: location)
-                                            }
-                                        }
-                                    }
-                                }
-                                if model.backlinkSkippedCloudFiles > 0 {
-                                    relationshipEmpty(String(
-                                        format: language.text("Cloud-only notes skipped: %d"),
-                                        model.backlinkSkippedCloudFiles
-                                    ))
-                                    Button(language.text("Check up to 6 more cloud notes")) {
-                                        model.loadMoreCloudBacklinks()
-                                    }
-                                    .buttonStyle(.borderless)
-                                    .disabled(model.loadingBacklinks)
-                                    .help(language.text("Download a small batch only when requested."))
-                                    .padding(.horizontal, 14)
-                                    .padding(.bottom, 10)
-                                }
-
-                                if model.previewPDF == nil {
-                                    Divider().padding(.vertical, 4)
-                                    relationshipSectionTitle(language.text("Related knowledge"))
-                                    if model.loadingRelated {
-                                        relationshipEmpty(language.text("Finding related knowledge…"))
-                                    } else if let error = model.relatedError {
-                                        relationshipEmpty(language.text(error))
-                                    } else if model.relatedHits.isEmpty {
-                                        relationshipEmpty(language.text("No related results."))
-                                    } else {
-                                        ForEach(model.relatedHits) { hit in
-                                            relationshipButton(
-                                                title: hit.title,
-                                                detail: hit.snippet.flatMap { $0.isEmpty ? nil : $0 }
-                                                    ?? language.text(hit.sourceLabel),
-                                                symbol: "text.magnifyingglass"
-                                            ) {
-                                                showingBacklinks = false
-                                                model.openResult(hit)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        .scrollIndicators(.visible)
-                        .accessibilityIdentifier("pks-relationships-scroll")
-                        .frame(width: 380, height: 460)
-                    }
                 }
 
                 if model.loadingNote, let requested = model.requestedNote {
@@ -733,7 +635,6 @@ struct NotesWindow: View {
                 .accessibilityIdentifier("pks-file-actions-menu")
                 .help(language.text("File actions and workspace options"))
             }
-        }
         }
         .sheet(isPresented: $showingProUpsell) {
             ProSettingsView()
@@ -2230,8 +2131,8 @@ struct NotesWindow: View {
                 }
     }
 
-    // The toolbar is a persistent icon rail; navigation and file content remain
-    // a single information pane, preserving the existing model and keyboard routing.
+    // One quiet navigation island floats over the translucent sidebar;
+    // information and file navigation retain their existing state owner.
     private var sidebar: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
@@ -2241,15 +2142,25 @@ struct NotesWindow: View {
                     .scaledToFit()
                     .frame(width: 32, height: 32)
                     .accessibilityLabel("Leafspan")
-                    .padding(.top, 12)
-                    .padding(.bottom, 23)
+                    .padding(.top, 13)
+                    .padding(.bottom, 25)
 
-                VStack(spacing: 8) {
+                VStack(spacing: 5) {
                     railButton(.notes, symbol: "square.stack", title: language.text("All Notes"))
                     railButton(.recent, symbol: "clock", title: language.text("Recent"))
                     railButton(.favorites, symbol: "star", title: language.text("Favorites"))
                     railButton(.search, symbol: "magnifyingglass", title: language.text("Search"))
                 }
+                .padding(.horizontal, 5)
+                .padding(.vertical, 7)
+                .background(
+                    Color(nsColor: .textBackgroundColor)
+                        .opacity(colorScheme == .dark ? 0.13 : 0.56),
+                    in: RoundedRectangle(cornerRadius: 17, style: .continuous)
+                )
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.09 : 0.055),
+                        radius: 12, y: 3)
+
                 Spacer(minLength: 12)
                 Button(action: openQuickPicker) {
                     Image(systemName: "doc.text.magnifyingglass")
@@ -2261,11 +2172,15 @@ struct NotesWindow: View {
                 .foregroundStyle(.secondary)
                 .help(language.text("Quick Open a file in the current library") + " (⌘P)")
                 .accessibilityIdentifier("pks-sidebar-quick-open")
-                .padding(.bottom, 14)
+                .background(
+                    Color(nsColor: .textBackgroundColor)
+                        .opacity(colorScheme == .dark ? 0.12 : 0.48),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+                .padding(.bottom, 15)
             }
-            .frame(width: 62)
+            .frame(width: 66)
             .frame(maxHeight: .infinity)
-            .background(.ultraThinMaterial)
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
@@ -2484,16 +2399,25 @@ struct NotesWindow: View {
             withAnimation(.easeOut(duration: 0.14)) { sidebarTab = tab }
         } label: {
             Image(systemName: symbol)
-                .font(.system(size: 17, weight: selected ? .semibold : .regular))
+                .font(.system(size: 16, weight: selected ? .semibold : .medium))
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .frame(width: 40, height: 40)
                 .background(
-                    selected ? Color.primary.opacity(colorScheme == .dark ? 0.13 : 0.075) : .clear,
+                    selected
+                        ? Color.primary.opacity(colorScheme == .dark ? 0.14 : 0.085)
+                        : (hoveredRailTab == tab ? Color.primary.opacity(0.045) : .clear),
                     in: RoundedRectangle(cornerRadius: 11, style: .continuous)
                 )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            if hovering {
+                hoveredRailTab = tab
+            } else if hoveredRailTab == tab {
+                hoveredRailTab = nil
+            }
+        }
         .help(title)
         .accessibilityLabel(title)
         .accessibilityIdentifier("pks-sidebar-\(tab.rawValue.lowercased())")
@@ -2787,6 +2711,180 @@ struct NotesWindow: View {
             .padding(.vertical, 7)
         }
         .buttonStyle(.plain)
+    }
+
+
+    private var relationshipsPanel: some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text(language.text("Relationships")).font(.headline)
+                    Spacer()
+                    Button {
+                        showingBacklinks = false
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(language.text("Close"))
+                    if model.loadingBacklinks || model.loadingRelated {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+
+                if model.previewPDF == nil {
+                    relationshipSectionTitle(language.text("Outgoing"))
+                    if outgoingLinks.isEmpty {
+                        relationshipEmpty(language.text("No links from this note."))
+                    } else {
+                        ForEach(Array(outgoingLinks.enumerated()), id: \.offset) { _, link in
+                            relationshipButton(
+                                title: link.label,
+                                detail: link.target,
+                                symbol: "arrow.up.right"
+                            ) {
+                                showingBacklinks = false
+                                _ = model.openKnowledgeLink(
+                                    link.target,
+                                    onUnresolved: { beginLinkRepair(link.target) }
+                                )
+                            }
+                            .contextMenu {
+                                Button(language.text("Change link target…")) {
+                                    beginLinkRepair(link.target)
+                                }
+                            }
+                        }
+                    }
+                    Color.clear.frame(height: 10)
+                }
+
+                relationshipSectionTitle(language.text(model.previewPDF == nil
+                                                      ? "Backlinks"
+                                                      : "Linked Notes"))
+                if model.loadingBacklinks {
+                    relationshipEmpty(language.text(model.previewPDF == nil
+                                                    ? "Finding notes that link here…"
+                                                    : "Finding notes linked to this PDF…"))
+                } else if model.backlinks.isEmpty {
+                    relationshipEmpty(language.text(model.backlinkSkippedCloudFiles > 0
+                                                    ? "No local backlinks found yet."
+                                                    : (model.previewPDF == nil
+                                                        ? "No backlinks in this workspace."
+                                                        : "No notes link to this PDF yet.")))
+                } else {
+                    ForEach(model.backlinks) { backlink in
+                        ForEach(backlink.locations) { location in
+                            relationshipButton(
+                                title: backlink.title,
+                                detail: location.count > 1
+                                    ? "L\(location.lineIndex + 1) · \(location.count) \(language.text("references"))"
+                                    : "L\(location.lineIndex + 1)",
+                                symbol: "arrow.turn.up.left"
+                            ) {
+                                openBacklinkLocation(backlink, location: location)
+                            }
+                        }
+                    }
+                }
+                if model.backlinkSkippedCloudFiles > 0 {
+                    relationshipEmpty(String(
+                        format: language.text("Cloud-only notes skipped: %d"),
+                        model.backlinkSkippedCloudFiles
+                    ))
+                    Button(language.text("Check up to 6 more cloud notes")) {
+                        model.loadMoreCloudBacklinks()
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(model.loadingBacklinks)
+                    .help(language.text("Download a small batch only when requested."))
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+                }
+
+                if model.previewPDF == nil {
+                    Color.clear.frame(height: 10)
+                    relationshipSectionTitle(language.text("Related knowledge"))
+                    if model.loadingRelated {
+                        relationshipEmpty(language.text("Finding related knowledge…"))
+                    } else if let error = model.relatedError {
+                        relationshipEmpty(language.text(error))
+                    } else if model.relatedHits.isEmpty {
+                        relationshipEmpty(language.text("No related results."))
+                    } else {
+                        ForEach(model.relatedHits) { hit in
+                            relationshipButton(
+                                title: hit.title,
+                                detail: hit.snippet.flatMap { $0.isEmpty ? nil : $0 }
+                                    ?? language.text(hit.sourceLabel),
+                                symbol: "text.magnifyingglass"
+                            ) {
+                                showingBacklinks = false
+                                model.openResult(hit)
+                        }
+                    }
+                }
+            }
+        }
+        }
+        .scrollIndicators(.visible)
+        .accessibilityIdentifier("pks-relationships-scroll")
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var auxiliaryListPanel: some View {
+        Group {
+            if showingOutline {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        Text(language.text("Document Outline"))
+                            .font(.headline)
+                        Spacer()
+                        Button {
+                            showingOutline = false
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(language.text("Close"))
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(height: 52)
+
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(outlineHeadings) { heading in
+                                Button {
+                                    jumpToOutlineHeading(heading)
+                                    if auxiliaryListPresentation == "sheet" { showingOutline = false }
+                                } label: {
+                                    Text(heading.title)
+                                        .font(.system(size: 13))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 9)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("pks-outline-heading-\(heading.id)")
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 18)
+                    }
+                    .accessibilityIdentifier("pks-outline-list")
+                }
+            } else if showingBacklinks {
+                relationshipsPanel
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.thinMaterial)
+        .accessibilityIdentifier("pks-auxiliary-list-panel")
     }
 
     private var detail: some View {

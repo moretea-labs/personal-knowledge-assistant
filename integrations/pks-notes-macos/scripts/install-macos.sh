@@ -13,6 +13,20 @@ if [[ ! -x "$binary" ]]; then
 fi
 destination="$HOME/Applications/Leafspan.app"
 staging="$HOME/Applications/.Leafspan-install.app"
+# No second app identity or binary replacement while another Leafspan/PKS app
+# (including legacy QA/acceptance) is running. Never kill a dirty editor.
+running="$(ps -axo pid=,command= | grep -E '[/](Leafspan|PKS Notes[^/]*)[.]app/Contents/MacOS/' | grep -v grep || true)"
+if [[ -n "$running" ]]; then
+  echo "Refusing to replace Leafspan while an existing Leafspan/PKS app is running:" >&2
+  echo "$running" >&2
+  exit 5
+fi
+for legacy in "$HOME/Applications/PKS Notes.app" "$HOME/Applications/PKS Notes QA.app" "$HOME/Applications/PKS Notes QA Fixture.app"; do
+  if [[ -e "$legacy" ]]; then
+    echo "Legacy app still installed: $legacy. Verify owner/data and retire it before installing the single canonical Leafspan.app." >&2
+    exit 6
+  fi
+done
 mkdir -p "$HOME/Applications"
 if [[ -d "$staging" ]]; then
   echo "Unexpected staging app already exists: $staging" >&2

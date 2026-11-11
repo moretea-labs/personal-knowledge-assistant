@@ -9,6 +9,7 @@ struct NotesAppearanceSettings: View {
     @AppStorage("PKSNotesFontAdjustment") private var fontAdjustment = 0.0
     @AppStorage("PKSNotesLineAdjustment") private var lineAdjustment = 0.0
     @AppStorage("PKSNotesWidthAdjustment") private var widthAdjustment = 0.0
+    @AppStorage("LeafspanAuxiliaryListPresentation") private var auxiliaryListPresentation = "pane"
 
     private var appearance: AppAppearance { AppAppearance.restored(appearanceID) }
     private var language: AppLanguage { AppLanguage.restored(languageID) }
@@ -45,6 +46,17 @@ struct NotesAppearanceSettings: View {
                     case .english: "textformat"
                     }
                 }
+            }
+
+            Divider()
+
+            settingsGroup(title: language.text("Lists and Document Outline")) {
+                Picker(language.text("List presentation"), selection: $auxiliaryListPresentation) {
+                    Text(language.text("Side Pane")).tag("pane")
+                    Text(language.text("Large Sheet")).tag("sheet")
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("pks-list-presentation-setting")
             }
 
             Divider()
