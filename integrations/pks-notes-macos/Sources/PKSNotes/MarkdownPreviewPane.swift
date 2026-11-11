@@ -92,6 +92,13 @@ struct MarkdownPreviewPane: View {
                         .frame(maxWidth: .infinity, minHeight: 180)
                 } else {
                     LazyVStack(alignment: .leading, spacing: 4) {
+                        if !live, let selected = model.selected, model.root != nil {
+                            Text(NoteTreePresentation.quickOpenFolder(for: selected, in: model.root))
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .padding(.bottom, 15)
+                        }
                         ForEach(rendered) { part in
                             Markdown(part.content)
                                 .markdownTheme(.pksReading(theme, fontAdjustment: fontAdjustment,
@@ -118,8 +125,8 @@ struct MarkdownPreviewPane: View {
                     }
                     .frame(maxWidth: theme.typography.pageWidth + widthAdjustment, alignment: .topLeading)
                     .frame(maxWidth: .infinity, alignment: .top)
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 36)
+                    .padding(.horizontal, 38)
+                    .padding(.vertical, 48)
                 }
             }
             .onAppear { jumpToNavigation(scroll) }
@@ -235,6 +242,7 @@ private extension Theme {
             }
             .heading1 { configuration in
                 configuration.label
+                    .fontDesign(theme == .system ? .serif : type.design)
                     .markdownTextStyle {
                         FontWeight(type.headingWeight)
                         FontSize(.em(type.heading1))
@@ -244,6 +252,7 @@ private extension Theme {
             }
             .heading2 { configuration in
                 configuration.label
+                    .fontDesign(theme == .system ? .serif : type.design)
                     .markdownTextStyle {
                         FontWeight(type.headingWeight)
                         FontSize(.em(type.heading2))

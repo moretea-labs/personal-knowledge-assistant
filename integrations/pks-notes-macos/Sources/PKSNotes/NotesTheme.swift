@@ -160,11 +160,11 @@ extension NotesTheme {
         switch self {
         case .system:
             ReadingTypography(
-                design: .default, bodySize: 16.5,
-                heading1: 1.92, heading2: 1.44, heading3: 1.17,
-                headingWeight: .semibold, lineSpacing: 0.33,
-                paragraphSpacing: 1.18, headingSpacing: 1.45,
-                pageWidth: 720, quoteInset: 12, codePadding: 16,
+                design: .default, bodySize: 17,
+                heading1: 2.16, heading2: 1.52, heading3: 1.17,
+                headingWeight: .medium, lineSpacing: 0.38,
+                paragraphSpacing: 1.24, headingSpacing: 1.72,
+                pageWidth: 735, quoteInset: 12, codePadding: 16,
                 codeCorner: 7, listSpacing: 0.34
             )
         case .paper:
