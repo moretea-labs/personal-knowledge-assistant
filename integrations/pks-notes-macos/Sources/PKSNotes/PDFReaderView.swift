@@ -186,6 +186,15 @@ enum PDFPageReference {
     ) -> String? {
         guard let reference = markdown(for: url, page: page, root: root, anchor: anchor) else { return nil }
 
+        if let selectedText {
+            let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                guard let anchor, anchor.page == page, anchor.matches(text: trimmed) else {
+                    return nil
+                }
+            }
+        }
+
         var sections: [String] = []
         if let commentary {
             let trimmed = commentary.trimmingCharacters(in: .whitespacesAndNewlines)

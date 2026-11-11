@@ -324,6 +324,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Copy PDF page link": "复制 PDF 页码链接",
         "PDF page link copied": "PDF 页码链接已复制",
         "PDF page is unavailable.": "PDF 页码不可用。",
+        "This PDF selection cannot be linked precisely. Only the current page will be added. Clear the selection and retry to capture the quote.": "当前 PDF 选区无法精确定位，本次只会添加当前页。若要保留原文引用，请关闭此面板、清除选区后重新选择。",
         "Referenced PDF selection has changed.": "引用的 PDF 选区已发生变化。",
         "Linked Notes": "关联笔记",
         "Linked notes for this PDF": "查看关联到此 PDF 的笔记",

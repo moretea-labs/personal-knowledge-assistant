@@ -150,6 +150,49 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testMultiPagePDFSelectionCannotProduceASinglePageAnchor() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let firstText = NSTextView(frame: bounds)
+        firstText.string = "First page evidence"
+        let secondText = NSTextView(frame: bounds)
+        secondText.string = "Second page evidence"
+        let first = try XCTUnwrap(PDFDocument(data: firstText.dataWithPDF(inside: bounds)))
+        let second = try XCTUnwrap(PDFDocument(data: secondText.dataWithPDF(inside: bounds)))
+        let document = PDFDocument()
+        document.insert(try XCTUnwrap(first.page(at: 0)), at: 0)
+        document.insert(try XCTUnwrap(second.page(at: 0)), at: 1)
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Multi-Page-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        XCTAssertTrue(document.write(to: url))
+        let reopened = try XCTUnwrap(PDFDocument(url: url))
+        XCTAssertEqual(reopened.pageCount, 2)
+
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        defer { controller.detach(view: view) }
+        controller.attach(
+            view: view, document: reopened, url: url,
+            requestedPage: nil, requestedAnchor: nil
+        )
+
+        let selection = try XCTUnwrap(
+            reopened.findString("First page evidence", withOptions: []).first
+        )
+        selection.add(try XCTUnwrap(
+            reopened.findString("Second page evidence", withOptions: []).first
+        ))
+        XCTAssertEqual(selection.pages.count, 2)
+        view.currentSelection = selection
+
+        let selectedText = try XCTUnwrap(controller.selectedText())
+        XCTAssertTrue(selectedText.contains("First page evidence"))
+        XCTAssertTrue(selectedText.contains("Second page evidence"))
+        XCTAssertNil(controller.selectedSourceAnchor())
+    }
+
+    @MainActor
     func testRepeatedPDFSelectionAnchorReturnsToPageTwoAfterPageOne() throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let firstText = NSTextView(frame: bounds)

@@ -2828,16 +2828,35 @@ extension PKSNotesTests {
             PDFPageReference.noteSnippet(for: pdf, page: 2, root: root, commentary: "  \n "),
             "[Book.pdf · p. 2](/Book.pdf#page=2)"
         )
+        let quoteFingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Quoted fact"))
+        let quoteAnchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 2,
+            normalizedRects: [CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.05)],
+            fingerprint: quoteFingerprint
+        ))
         XCTAssertEqual(
             PDFPageReference.noteSnippet(
                 for: pdf,
                 page: 2,
                 root: root,
                 commentary: "My interpretation\n- remember this",
-                selectedText: "Quoted fact"
+                selectedText: "Quoted fact",
+                anchor: quoteAnchor
             ),
-            "My interpretation\n- remember this\n\n[Book.pdf · p. 2](/Book.pdf#page=2)\n\n> Quoted fact"
+            "My interpretation\n- remember this\n\n[Book.pdf · p. 2](/Book.pdf#\(quoteAnchor.fragment))\n\n> Quoted fact"
         )
+        XCTAssertNil(PDFPageReference.noteSnippet(
+            for: pdf, page: 2, root: root, selectedText: "Quoted fact"
+        ))
+        let staleFingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Different fact"))
+        let staleAnchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 2,
+            normalizedRects: quoteAnchor.normalizedRects,
+            fingerprint: staleFingerprint
+        ))
+        XCTAssertNil(PDFPageReference.noteSnippet(
+            for: pdf, page: 2, root: root, selectedText: "Quoted fact", anchor: staleAnchor
+        ))
     }
 
     @MainActor
@@ -2866,6 +2885,15 @@ extension PKSNotesTests {
         }
         XCTAssertFalse(model.loadingFiles)
         model.openFile(pdf, pdfPage: 4)
+
+        let rejectedUnanchoredSelection = await model.appendPDFReference(
+            pdf: pdf,
+            page: 4,
+            selectedText: "Unanchored quote",
+            to: note
+        )
+        XCTAssertFalse(rejectedUnanchoredSelection)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "# Study\n")
 
         let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Important fact\nSecond line"))
         let anchor = try XCTUnwrap(PDFSourceAnchor(

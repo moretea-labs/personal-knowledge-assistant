@@ -365,6 +365,7 @@ private struct PDFCaptureRequest: Equatable {
     let page: Int
     let selectedText: String?
     let anchor: PDFSourceAnchor?
+    let selectionWasUnanchored: Bool
 }
 
 struct NotesWindow: View {
@@ -1146,11 +1147,21 @@ struct NotesWindow: View {
         pdfCaptureTask = nil
         linkRepairRequest = nil
         resetMindMapLinkState()
+        let normalizedSelectedText = selectedText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectionWasUnanchored: Bool
+        if let normalizedSelectedText, !normalizedSelectedText.isEmpty {
+            selectionWasUnanchored = anchor.map {
+                $0.page == page && $0.matches(text: normalizedSelectedText)
+            } != true
+        } else {
+            selectionWasUnanchored = false
+        }
         pdfCaptureRequest = PDFCaptureRequest(
             pdf: pdf,
             page: page,
-            selectedText: selectedText,
-            anchor: anchor
+            selectedText: selectionWasUnanchored ? nil : normalizedSelectedText,
+            anchor: selectionWasUnanchored ? nil : anchor,
+            selectionWasUnanchored: selectionWasUnanchored
         )
         pdfCaptureCommentary = ""
         quickOpenQuery = ""
@@ -1578,6 +1589,20 @@ struct NotesWindow: View {
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel(language.text("Selected PDF text"))
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 10)
+                }
+
+                if pdfCaptureRequest?.selectionWasUnanchored == true {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(language.text("This PDF selection cannot be linked precisely. Only the current page will be added. Clear the selection and retry to capture the quote."))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityIdentifier("pks-pdf-capture-selection-warning")
                     .padding(.horizontal, 20)
                     .padding(.bottom, 10)
                 }
