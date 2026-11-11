@@ -102,4 +102,34 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         let repeatedSelection = try XCTUnwrap(restoredView.currentSelection?.string)
         XCTAssertEqual(PDFSourceAnchor.fingerprint(for: repeatedSelection), anchor.fingerprint)
     }
+
+    @MainActor
+    func testPDFReaderSearchFindsAndClearsMatches() async throws {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
+        textView.string = "PDF search fixture\nFirst page content\nSecond page navigation fixture."
+        let document = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: textView.bounds)))
+        let view = PDFView(frame: NSRect(x: 0, y: 0, width: 700, height: 800))
+        let controller = PDFReaderController()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Search-\(UUID().uuidString).pdf")
+        defer { controller.detach(view: view) }
+
+        controller.attach(view: view, document: document, url: url,
+                          requestedPage: nil, requestedAnchor: nil)
+        controller.search("Second page navigation fixture")
+        for _ in 0..<400 where controller.isSearching {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertFalse(controller.isSearching)
+        XCTAssertEqual(controller.completedSearchQuery, "Second page navigation fixture")
+        XCTAssertEqual(controller.searchMatchCount, 1)
+        XCTAssertEqual(controller.searchMatchIndex, 0)
+        XCTAssertTrue(try XCTUnwrap(controller.selectedText()).contains("Second page navigation fixture"))
+
+        controller.search("")
+        XCTAssertEqual(controller.completedSearchQuery, "")
+        XCTAssertEqual(controller.searchMatchCount, 0)
+        XCTAssertNil(controller.selectedText())
+    }
 }
