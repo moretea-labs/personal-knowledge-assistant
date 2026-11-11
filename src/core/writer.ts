@@ -113,6 +113,8 @@ export class KnowledgeWriter{
     const m=this.db.db.prepare('SELECT * FROM mutations WHERE id=?').get(mutationId) as any;
     if(!m||m.undone_at)throw new Error('Mutation not found or already undone');
     const path=await this.checkedManagedPath(m.uri);
+    const latest=this.db.db.prepare('SELECT id FROM mutations WHERE uri=? AND undone_at IS NULL ORDER BY rowid DESC LIMIT 1').get(path) as any;
+    if(latest?.id!==mutationId)throw new Error('Cannot undo mutation: managed note changed after this mutation (newer managed note mutation exists)');
     let stats:any;
     if(m.action==='create'){
      const created=JSON.parse(m.after_json||'{}');

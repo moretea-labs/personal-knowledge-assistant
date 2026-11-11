@@ -354,7 +354,7 @@ test('managed writer serializes concurrent appends and rejects stale update undo
   ]);
   const combined=await readFile(created.uri,'utf8');
   assert.ok(combined.includes('first concurrent append')&&combined.includes('second concurrent append'),'concurrent append operations must not lose either update');
-  await assert.rejects(x.svc.writer.undo(first.mutationId),/changed after this mutation/i,'an older update cannot overwrite a later update');
+  await assert.rejects(x.svc.writer.undo(first.mutationId),/newer managed note mutation/i,'an older update cannot overwrite a later update');
   await x.svc.writer.undo(second.mutationId);
   const afterSecond=await readFile(created.uri,'utf8');
   assert.ok(afterSecond.includes('first concurrent append'));
@@ -372,7 +372,7 @@ test('undoing creation never removes a note changed after that creation',async()
   const created=await x.svc.writer.create({title:'Retained study note',content:'original'});
   const updated=await x.svc.writer.update({uri:created.uri,append:' Important new material'});
   await assert.rejects(
-    x.svc.writer.undo(created.mutationId),/changed after this mutation/i,
+    x.svc.writer.undo(created.mutationId),/newer managed note mutation/i,
     'undoing an older create must not delete subsequent note edits'
   );
   assert.match(await readFile(created.uri,'utf8'),/Important new material/);
@@ -479,4 +479,20 @@ test('a delayed source scan cannot publish an obsolete managed-file snapshot',as
     const chunks=x.svc.db.db.prepare('SELECT c.text FROM chunks c JOIN documents d ON d.id=c.document_id WHERE d.uri=?').all(created.uri).map((row:any)=>row.text).join('\\n');
     assert.match(chunks,/newer writer revision/,'the published chunks must contain the latest file revision');
   } finally { clearTimeout(timer);resume();second.db.close();x.svc.db.close(); }
+});
+
+
+test('managed undo requires the newest active mutation even when content is identical',async()=>{
+  const x=await setup();
+  const created=await x.svc.writer.create({title:'Identical Revision Note',content:'original'});
+  const first=await x.svc.writer.update({uri:created.uri,replace:'same content'});
+  const second=await x.svc.writer.update({uri:created.uri,replace:'same content'});
+  await assert.rejects(x.svc.writer.undo(first.mutationId),/newer managed note mutation/i);
+  assert.equal(await readFile(created.uri,'utf8'),'same content');
+  await x.svc.writer.undo(second.mutationId);
+  await x.svc.writer.undo(first.mutationId);
+  assert.match(await readFile(created.uri,'utf8'),/original/);
+  await x.svc.writer.undo(created.mutationId);
+  await assert.rejects(readFile(created.uri,'utf8'),{code:'ENOENT'});
+  x.svc.db.close();
 });
