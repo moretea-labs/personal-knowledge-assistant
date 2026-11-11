@@ -1940,7 +1940,7 @@ struct NotesWindow: View {
             .frame(height: 34)
             .background(
                 selected
-                    ? Color(nsColor: .controlBackgroundColor).opacity(colorScheme == .dark ? 0.28 : 0.8)
+                    ? Color(nsColor: .textBackgroundColor).opacity(colorScheme == .dark ? 0.30 : 0.72)
                     : .clear,
                 in: RoundedRectangle(cornerRadius: 9, style: .continuous)
             )
@@ -2335,7 +2335,7 @@ struct NotesWindow: View {
             }
             .padding(.horizontal, 11)
             .frame(height: 33)
-            .background(Color.primary.opacity(colorScheme == .dark ? 0.085 : 0.035),
+            .background(Color(nsColor: .textBackgroundColor).opacity(colorScheme == .dark ? 0.22 : 0.46),
                         in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
             .padding(.top, 5)
@@ -2348,7 +2348,7 @@ struct NotesWindow: View {
                 navigationRow(.search, symbol: "text.magnifyingglass", title: language.text("PKS Search"))
             }
             .padding(.horizontal, 12)
-            .padding(.bottom, 10)
+            .padding(.bottom, 6)
 
             if sidebarTab == .notes {
                 HStack(spacing: 8) {
