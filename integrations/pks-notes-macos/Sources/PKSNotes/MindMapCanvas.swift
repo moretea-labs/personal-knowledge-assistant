@@ -1337,15 +1337,19 @@ struct MindMapCanvas: View {
         sourcePanel.allowsMultipleSelection = false
         guard sourcePanel.runModal() == .OK, let template = sourcePanel.url else { return }
 
-        let savePanel = NSSavePanel()
-        savePanel.title = language.text("Export Native MindNode")
-        savePanel.directoryURL = template.deletingLastPathComponent()
-        savePanel.nameFieldStringValue = "Mind Map.mindnode"
-        savePanel.allowedContentTypes = [UTType(filenameExtension: "mindnode", conformingTo: .package) ?? .package]
-        guard savePanel.runModal() == .OK, let destination = savePanel.url else { return }
         do {
-            try MindNodePackage.exportOutline(source, usingTemplate: template, to: destination)
-            interchangeError = language.text("New MindNode package exported. The original template and Markdown were not changed.")
+            try withSecurityScopedAccess(to: template) {
+                let savePanel = NSSavePanel()
+                savePanel.title = language.text("Export Native MindNode")
+                savePanel.directoryURL = template.deletingLastPathComponent()
+                savePanel.nameFieldStringValue = "Mind Map.mindnode"
+                savePanel.allowedContentTypes = [UTType(filenameExtension: "mindnode", conformingTo: .package) ?? .package]
+                guard savePanel.runModal() == .OK, let destination = savePanel.url else { return }
+                try withSecurityScopedAccess(to: destination) {
+                    try MindNodePackage.exportOutline(source, usingTemplate: template, to: destination)
+                }
+                interchangeError = language.text("New MindNode package exported. The original template and Markdown were not changed.")
+            }
         } catch {
             interchangeError = error.localizedDescription
         }
@@ -1360,15 +1364,10 @@ struct MindMapCanvas: View {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            // NSOpenPanel grants a temporary security-scoped URL in the App Sandbox.
-            // Keep that access only for the read; the source package is never written.
-            let hasScopedAccess = url.startAccessingSecurityScopedResource()
-            defer {
-                if hasScopedAccess {
-                    url.stopAccessingSecurityScopedResource()
-                }
+            // Keep the open-panel grant only for the read; the source package is never written.
+            let markdown = try withSecurityScopedAccess(to: url) {
+                try MindNodePackage.importOutline(from: url)
             }
-            let markdown = try MindNodePackage.importOutline(from: url)
             if importOutline(markdown, url.deletingPathExtension().lastPathComponent) {
                 interchangeError = language.text("MindNode hierarchy imported into a new Markdown note. Themes, images, notes, tasks and cross-connections are not imported.")
             }
@@ -1384,7 +1383,10 @@ struct MindMapCanvas: View {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let text = try MindMapInterchange.importOPML(Data(contentsOf: url))
+            let data = try withSecurityScopedAccess(to: url) {
+                try Data(contentsOf: url)
+            }
+            let text = try MindMapInterchange.importOPML(data)
             _ = importOutline(text, url.deletingPathExtension().lastPathComponent)
         } catch {
             interchangeError = error.localizedDescription
@@ -1399,7 +1401,9 @@ struct MindMapCanvas: View {
             panel.allowedContentTypes = [UTType(filenameExtension: "opml") ?? .xml]
             panel.nameFieldStringValue = "Mind Map.opml"
             guard panel.runModal() == .OK, let url = panel.url else { return }
-            try data.write(to: url, options: .atomic)
+            try withSecurityScopedAccess(to: url) {
+                try data.write(to: url, options: .atomic)
+            }
         } catch {
             interchangeError = error.localizedDescription
         }
@@ -1456,8 +1460,26 @@ struct MindMapCanvas: View {
         panel.allowedContentTypes = [type]
         panel.nameFieldStringValue = "Mind Map.\(extensionName)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try data.write(to: url, options: .atomic) }
-        catch { interchangeError = error.localizedDescription }
+        do {
+            try withSecurityScopedAccess(to: url) {
+                try data.write(to: url, options: .atomic)
+            }
+        } catch {
+            interchangeError = error.localizedDescription
+        }
+    }
+
+    private func withSecurityScopedAccess<T>(
+        to url: URL,
+        perform operation: () throws -> T
+    ) rethrows -> T {
+        let didStartAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccess {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        return try operation()
     }
 
     private func clampedZoom(_ value: CGFloat) -> CGFloat {
