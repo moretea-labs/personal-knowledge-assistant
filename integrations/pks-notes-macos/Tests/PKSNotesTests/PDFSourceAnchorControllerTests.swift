@@ -104,6 +104,52 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testStalePDFSelectionAnchorNeverSelectsDifferentText() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let originalTextView = NSTextView(frame: bounds)
+        originalTextView.string = "Original exact evidence"
+        let originalDocument = try XCTUnwrap(
+            PDFDocument(data: originalTextView.dataWithPDF(inside: bounds))
+        )
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Stale-Anchor-\(UUID().uuidString).pdf")
+        let sourceView = PDFView(frame: bounds)
+        let sourceController = PDFReaderController()
+        sourceController.attach(
+            view: sourceView, document: originalDocument, url: sourceURL,
+            requestedPage: nil, requestedAnchor: nil
+        )
+        sourceView.currentSelection = try XCTUnwrap(
+            originalDocument.findString("Original exact evidence", withOptions: []).first
+        )
+        let anchor = try XCTUnwrap(sourceController.selectedSourceAnchor())
+
+        // Simulate the same PDF path being replaced while the Markdown link
+        // still carries its previous text fingerprint and selection geometry.
+        let changedTextView = NSTextView(frame: bounds)
+        changedTextView.string = "Original exact Evidence"
+        let changedDocument = try XCTUnwrap(
+            PDFDocument(data: changedTextView.dataWithPDF(inside: bounds))
+        )
+        let restoredView = PDFView(frame: bounds)
+        let restoredController = PDFReaderController()
+        defer {
+            sourceController.detach(view: sourceView)
+            restoredController.detach(view: restoredView)
+        }
+
+        restoredController.attach(
+            view: restoredView, document: changedDocument, url: sourceURL,
+            requestedPage: nil, requestedAnchor: anchor
+        )
+
+        XCTAssertTrue(restoredController.invalidRequestedSelection)
+        XCTAssertNil(restoredController.invalidRequestedPage)
+        XCTAssertNil(restoredView.currentSelection)
+        XCTAssertEqual(restoredController.currentPageIndex, 0)
+    }
+
+    @MainActor
     func testRepeatedPDFSelectionAnchorReturnsToPageTwoAfterPageOne() throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let firstText = NSTextView(frame: bounds)
