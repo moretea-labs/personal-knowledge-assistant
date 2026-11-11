@@ -496,3 +496,27 @@ test('managed undo requires the newest active mutation even when content is iden
   await assert.rejects(readFile(created.uri,'utf8'),{code:'ENOENT'});
   x.svc.db.close();
 });
+
+
+test('related Chinese feeding suggestions use full note evidence and suppress nearby sleep collisions',async()=>{
+  const x=await setup();
+  const source=join(x.docs,'宝宝喂奶记录.md');
+  const feeding=join(x.docs,'新生儿喂养间隔.md');
+  const routine=join(x.docs,'婴儿奶量与作息.md');
+  const sleep=join(x.docs,'宝宝睡眠记录.md');
+  const unrelated=join(x.docs,'家庭日程安排.md');
+  const body='记录宝宝每次喂奶时间、奶量、喂养间隔、奶瓶容量、按需喂养以及夜间喂养情况。';
+  await writeFile(source,'# 宝宝喂奶记录\n'+body);
+  await writeFile(feeding,'# 新生儿喂养间隔\n新生儿按需喂养，记录每次奶量、奶瓶和两次喂养的间隔。');
+  await writeFile(routine,'# 婴儿奶量与作息\n婴儿每天奶量、奶瓶喂养时间和喂养间隔记录。');
+  await writeFile(sleep,'# 宝宝睡眠记录\n记录宝宝白天小睡、夜间睡眠时间和醒来次数。');
+  await writeFile(unrelated,'# 家庭日程安排\n家庭成员日程、每周计划和待办事项。');
+  await x.svc.sync();
+  const query='宝宝喂奶记录 '+body;
+  const results=await x.svc.search(query,{mode:'related',excludeUri:source,limit:8});
+  assert.ok(results.some((hit:any)=>hit.uri===feeding),'newborn feeding interval note should be recommended');
+  assert.ok(results.some((hit:any)=>hit.uri===routine),'infant milk-volume routine should be recommended');
+  assert.ok(!results.some((hit:any)=>hit.uri===sleep),'two generic baby/sleep overlaps are insufficient evidence');
+  assert.ok(!results.some((hit:any)=>hit.uri===unrelated),'generic family scheduling must be suppressed');
+  x.svc.db.close();
+});
