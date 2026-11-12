@@ -2676,18 +2676,13 @@ struct NotesWindow: View {
             model.message = language.text("Could not save the pasted image inside this notes workspace.")
             return
         }
-        let result = MarkdownEditing.insert(markdown, into: model.draft, selection: textView.selectedRange())
-        // NotesModel.draft is the single Markdown writer. SwiftUI remounts the native
-        // editor from that canonical value; NSTextView only restores the caret.
-        model.draft = result.text
-        Task { @MainActor in
-            await Task.yield()
-            guard let active = markdownTextView(in: NSApp.keyWindow?.contentView)
-                    ?? MarkdownNativeCommand.activeTextView() else { return }
-            NSApp.keyWindow?.makeFirstResponder(active)
-            active.setSelectedRange(result.selection)
-            active.scrollRangeToVisible(result.selection)
-        }
+        let original = textView.string
+        let selection = textView.selectedRange()
+        let result = MarkdownEditing.insert(markdown, into: original, selection: selection)
+        NSApp.keyWindow?.makeFirstResponder(textView)
+        // Use the same native edit path as formatting commands so the TextEditor
+        // binding updates the canonical draft and AppKit keeps image insertion undoable.
+        MarkdownNativeCommand.apply(result, from: original, in: textView)
     }
 
     private func jumpToOutlineHeading(_ heading: MarkdownOutlineHeading) {

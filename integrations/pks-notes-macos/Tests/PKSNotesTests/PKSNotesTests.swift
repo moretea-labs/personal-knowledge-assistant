@@ -3473,4 +3473,38 @@ extension PKSNotesTests {
         undoManager.undo()
         XCTAssertEqual(textView.string, "Hello")
     }
+
+    @MainActor
+    func testMarkdownImageInsertionUsesOneStepAppKitUndo() async throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),
+            styleMask: [],
+            backing: .buffered,
+            defer: true
+        )
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 240))
+        textView.allowsUndo = true
+        window.contentView = textView
+        window.makeFirstResponder(textView)
+        textView.string = "before after"
+        textView.setSelectedRange((textView.string as NSString).range(of: "after"))
+        textView.undoManager?.removeAllActions()
+
+        let original = textView.string
+        let result = MarkdownEditing.insert(
+            "![](Attachments/photo.png)",
+            into: original,
+            selection: textView.selectedRange()
+        )
+        MarkdownNativeCommand.apply(result, from: original, in: textView)
+
+        XCTAssertEqual(textView.string, "before ![](Attachments/photo.png)")
+        await Task.yield()
+        XCTAssertEqual(textView.selectedRange(), result.selection)
+
+        let undoManager = try XCTUnwrap(textView.undoManager)
+        XCTAssertTrue(undoManager.canUndo)
+        undoManager.undo()
+        XCTAssertEqual(textView.string, original)
+    }
 }
