@@ -577,6 +577,22 @@ extension MindMapOutline {
         return result
     }
 
+    /// Return only the Markdown body attached directly to this structural
+    /// node. Descendant headings/list items own their own content.
+    static func attachedBody(
+        in markdown: String,
+        nodeID: Int,
+        nodes: [MindMapNode]
+    ) -> String {
+        guard let index = nodes.firstIndex(where: { $0.id == nodeID }) else { return "" }
+        let lines = markdown.components(separatedBy: "\n")
+        let start = nodeID + 1
+        let end = min(lines.count, index + 1 < nodes.count ? nodes[index + 1].id : lines.count)
+        guard start < end else { return "" }
+        return lines[start..<end].joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Add one canonical WikiLink to an existing structural node. The source
     /// Markdown line remains the only persistence authority.
     static func appendWikiLink(

@@ -256,6 +256,12 @@ struct MindMapCanvas: View {
     @State private var branchDeleteCandidateID: Int?
     @State private var collapsed: Set<Int> = []
     @State private var zoom: CGFloat = 1.0
+    @State private var viewportOffset: CGSize = .zero
+    @State private var viewportSize: CGSize = .zero
+    @State private var gestureBaseOffset: CGSize?
+    @GestureState private var canvasDrag: CGSize = .zero
+    @State private var showingNodeDetails = true
+    @State private var didInitializeViewport = false
     @State private var dropTargetID: Int?
     @State private var gestureBaseZoom: CGFloat?
     @State private var nodes: [MindMapNode] = []
@@ -286,89 +292,137 @@ struct MindMapCanvas: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            GeometryReader { viewport in
-                ScrollViewReader { scroller in
-                    ScrollView([.horizontal, .vertical]) {
-                    if !projectionReady {
-                        VStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text(language.text("Preparing mind map…"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(minWidth: max(560, viewport.size.width),
-                               minHeight: max(320, viewport.size.height))
-                    } else if nodes.isEmpty {
-                        VStack(spacing: 14) {
-                            Image(systemName: "point.3.connected.trianglepath.dotted")
-                                .font(.system(size: 36, weight: .ultraLight))
-                                .foregroundStyle(.secondary)
-                            Text(language.text("Start with a central topic"))
-                                .font(.headline)
-                            Text(language.text("The mind map is saved in the same Markdown note."))
-                                .foregroundStyle(.secondary)
-                            Button(language.text("Create Mind Map")) {
-                                source = MindMapOutline.createMap()
-                                startEditingNode(0, title: "New Mind Map")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .accessibilityIdentifier("pks-mind-map-create")
-                        }
-                        .frame(minWidth: max(560, viewport.size.width),
-                               minHeight: max(320, viewport.size.height))
-                    } else {
-                        spatialCanvas(mapLayout)
-                            .scaleEffect(zoom, anchor: .topLeading)
-                            .frame(
-                                width: max(viewport.size.width, mapLayout.size.width * zoom),
-                                height: max(viewport.size.height, mapLayout.size.height * zoom),
-                                alignment: .center
-                            )
-                    }
-                }
-                .background {
-                    if mapStyle == .colorful {
-                        LinearGradient(
-                            colors: [Color.accentColor.opacity(0.055), Color.primary.opacity(0.012)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    } else {
+            HStack(spacing: 0) {
+                GeometryReader { viewport in
+                    ZStack {
                         Color.primary.opacity(mapStyle == .minimal ? 0.005 : 0.012)
-                    }
-                }
-                .accessibilityIdentifier("pks-mind-map-canvas")
-                .simultaneousGesture(
-                    MagnifyGesture()
-                        .onChanged { value in
-                            if gestureBaseZoom == nil { gestureBaseZoom = zoom }
-                            zoom = clampedZoom((gestureBaseZoom ?? zoom) * value.magnification)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(minimumDistance: 3)
+                                    .updating($canvasDrag) { value, state, _ in
+                                        state = value.translation
+                                    }
+                                    .onEnded { value in
+                                        viewportOffset.width += value.translation.width
+                                        viewportOffset.height += value.translation.height
+                                    }
+                            )
+                            .onTapGesture { selectedID = nil }
+
+                        if !projectionReady {
+                            VStack(spacing: 10) {
+                                ProgressView().controlSize(.small)
+                                Text(language.text("Preparing mind map…"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else if nodes.isEmpty {
+                            VStack(spacing: 14) {
+                                Image(systemName: "point.3.connected.trianglepath.dotted")
+                                    .font(.system(size: 36, weight: .ultraLight))
+                                    .foregroundStyle(.secondary)
+                                Text(language.text("Start with a central topic"))
+                                    .font(.headline)
+                                Text(language.text("The mind map is saved in the same Markdown note."))
+                                    .foregroundStyle(.secondary)
+                                Button(language.text("Create Mind Map")) {
+                                    source = MindMapOutline.createMap()
+                                    startEditingNode(0, title: "New Mind Map")
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .accessibilityIdentifier("pks-mind-map-create")
+                            }
+                        } else {
+                            spatialCanvas(mapLayout)
+                                .scaleEffect(zoom)
+                                .position(
+                                    x: viewport.size.width / 2 + viewportOffset.width + canvasDrag.width,
+                                    y: viewport.size.height / 2 + viewportOffset.height + canvasDrag.height
+                                )
                         }
-                        .onEnded { _ in gestureBaseZoom = nil }
-                )
+                    }
+                    .frame(width: viewport.size.width, height: viewport.size.height)
+                    .clipped()
+                    .background {
+                        MindMapWheelCapture { delta in
+                            viewportOffset.width += delta.width
+                            viewportOffset.height += delta.height
+                        }
+                    }
+                    .accessibilityIdentifier("pks-mind-map-canvas")
+                    .simultaneousGesture(
+                        MagnifyGesture()
+                            .onChanged { value in
+                                if gestureBaseZoom == nil {
+                                    gestureBaseZoom = zoom
+                                    gestureBaseOffset = viewportOffset
+                                }
+                                let next = clampedZoom((gestureBaseZoom ?? zoom) * value.magnification)
+                                viewportOffset = MindMapViewportGeometry.offsetPreservingAnchor(
+                                    gestureBaseOffset ?? viewportOffset,
+                                    from: gestureBaseZoom ?? zoom,
+                                    to: next,
+                                    anchor: CGPoint(
+                                        x: value.startAnchor.x * viewport.size.width,
+                                        y: value.startAnchor.y * viewport.size.height
+                                    ),
+                                    viewport: viewport.size
+                                )
+                                zoom = next
+                            }
+                            .onEnded { _ in
+                                gestureBaseZoom = nil
+                                gestureBaseOffset = nil
+                            }
+                    )
+                    .onAppear {
+                        viewportSize = viewport.size
+                        if projectionReady && !didInitializeViewport {
+                            didInitializeViewport = fitToContent(viewport: viewport.size)
+                        }
+                    }
+                    .onChange(of: viewport.size) { _, size in
+                        viewportSize = size
+                        if let selectedID,
+                           let position = mapLayout.placements.first(where: { $0.id == selectedID }) {
+                            viewportOffset = MindMapViewportGeometry.centeredOffset(
+                                for: position.center, mapSize: mapLayout.size, zoom: zoom
+                            )
+                        }
+                    }
+                    .onChange(of: projectionReady) { _, ready in
+                        if ready && !didInitializeViewport {
+                            didInitializeViewport = fitToContent(viewport: viewport.size)
+                        }
+                    }
                     .onReceive(NotificationCenter.default.publisher(for: .pksMindMapFit)) { _ in
                         guard fitToContent(viewport: viewport.size) else { return }
-                        Task { @MainActor in
-                            await Task.yield()
-                            withAnimation(.easeOut(duration: 0.18)) {
-                                scroller.scrollTo("pks-mind-map-center", anchor: .center)
-                            }
-                        }
+                        withAnimation(.easeOut(duration: 0.18)) { viewportOffset = .zero }
                     }
                     .onChange(of: selectedID) { _, selected in
                         guard let selected,
-                              visible.contains(where: { $0.id == selected }) else { return }
-                        withAnimation(.easeOut(duration: 0.14)) {
-                            scroller.scrollTo(selected, anchor: .center)
+                              let position = mapLayout.placements.first(where: { $0.id == selected }) else { return }
+                        withAnimation(.easeOut(duration: 0.16)) {
+                            viewportOffset = MindMapViewportGeometry.centeredOffset(
+                                for: position.center, mapSize: mapLayout.size, zoom: zoom
+                            )
                         }
                     }
                     .onChange(of: visible) { _, rows in
-                        // New child/sibling nodes are parsed asynchronously after
-                        // the ID changes. Reveal them once their placement exists.
                         guard let selected = editingNodeID ?? selectedID,
-                              rows.contains(where: { $0.id == selected }) else { return }
-                        scroller.scrollTo(selected, anchor: .center)
+                              rows.contains(where: { $0.id == selected }),
+                              let position = mapLayout.placements.first(where: { $0.id == selected }) else { return }
+                        viewportOffset = MindMapViewportGeometry.centeredOffset(
+                            for: position.center, mapSize: mapLayout.size, zoom: zoom
+                        )
                     }
+                }
+                if showingNodeDetails,
+                   let selectedID,
+                   let node = nodes.first(where: { $0.id == selectedID }) {
+                    Divider()
+                    nodeDetails(node)
+                        .frame(width: 270)
                 }
             }
         }
@@ -535,6 +589,18 @@ struct MindMapCanvas: View {
             .accessibilityLabel(language.text("Rename node"))
             .accessibilityIdentifier("pks-mind-map-rename")
 
+            Button {
+                showingNodeDetails.toggle()
+                restoreCanvasFocusAfterMenu()
+            } label: {
+                Image(systemName: showingNodeDetails ? "sidebar.right" : "info.circle")
+                    .frame(width: 30, height: 30)
+            }
+            .disabled(selectedID == nil)
+            .help(language.text("Node Details"))
+            .accessibilityLabel(language.text("Node Details"))
+            .accessibilityIdentifier("pks-mind-map-node-details")
+
             Menu {
                 Button(language.text("Link Note"), systemImage: "doc.text") {
                     if let selectedID { connectNote(selectedID) }
@@ -656,9 +722,20 @@ struct MindMapCanvas: View {
             }
             .help("\(language.text("Zoom out")) · ⌘−")
             .accessibilityLabel(language.text("Zoom out"))
-            Text("\(Int((zoom * 100).rounded()))%")
-                .font(.caption.monospacedDigit())
-                .frame(width: 42)
+            Menu {
+                ForEach([25, 50, 75, 100, 125, 150, 200], id: \.self) { percent in
+                    Button("\(percent)%") {
+                        zoomAboutCenter(to: CGFloat(percent) / 100)
+                    }
+                }
+            } label: {
+                Text("\(Int((zoom * 100).rounded()))%")
+                    .font(.caption.monospacedDigit())
+                    .frame(minWidth: 44)
+            }
+            .menuIndicator(.hidden)
+            .help(language.text("Zoom level"))
+            .accessibilityIdentifier("pks-mind-map-zoom-level")
             Button {
                 _ = performShortcut(.zoomIn)
             } label: {
@@ -667,6 +744,17 @@ struct MindMapCanvas: View {
             }
             .help("\(language.text("Zoom in")) · ⌘+")
             .accessibilityLabel(language.text("Zoom in"))
+            Button {
+                centerSelectedNode()
+            } label: {
+                Image(systemName: "scope")
+                    .frame(width: 30, height: 30)
+            }
+            .disabled(selectedID == nil)
+            .help(language.text("Center Selected Node"))
+            .accessibilityLabel(language.text("Center Selected Node"))
+            .accessibilityIdentifier("pks-mind-map-center-selected")
+
             Button {
                 _ = performShortcut(.fit)
             } label: {
@@ -715,6 +803,76 @@ struct MindMapCanvas: View {
         .controlSize(.small)
         .padding(.horizontal, 14)
         .frame(height: 46)
+    }
+
+    private func nodeDetails(_ node: MindMapNode) -> some View {
+        let presentation = nodePresentations[node.id]
+            ?? MindMapOutline.presentation(for: node.title)
+        let notes = MindMapOutline.attachedBody(in: source, nodeID: node.id, nodes: nodes)
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(language.text("Node Details")).font(.headline)
+                Spacer()
+                Button {
+                    showingNodeDetails = false
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .help(language.text("Close"))
+                .accessibilityIdentifier("pks-mind-map-details-close")
+            }
+            Text(MindMapTitleEmphasis.display(presentation.title))
+                .font(.title3.weight(.medium))
+                .textSelection(.enabled)
+            Text("\(language.text("Level")) \(node.depth + 1)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 15) {
+                    if !notes.isEmpty {
+                        Text(language.text("Notes"))
+                            .font(.subheadline.weight(.semibold))
+                        Text(notes)
+                            .font(.callout)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    if !presentation.links.isEmpty {
+                        Text(language.text("Linked Sources"))
+                            .font(.subheadline.weight(.semibold))
+                        ForEach(Array(presentation.links.enumerated()), id: \.offset) { _, link in
+                            Button {
+                                openLink(link.target)
+                            } label: {
+                                Label(link.label, systemImage: "link")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .lineLimit(2)
+                            }
+                            .buttonStyle(.link)
+                            .help(link.target)
+                        }
+                    }
+                    if notes.isEmpty && presentation.links.isEmpty {
+                        Text(language.text("No attached notes or links"))
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Button {
+                revealSource(node.id)
+            } label: {
+                Label(language.text("Edit in Markdown"), systemImage: "square.and.pencil")
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("pks-mind-map-details-edit-source")
+        }
+        .padding(16)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .accessibilityIdentifier("pks-mind-map-details")
     }
 
     private var shortcutHelp: some View {
@@ -858,8 +1016,8 @@ struct MindMapCanvas: View {
             branchDeleteCandidateID = selectedID
         case .fit:
             NotificationCenter.default.post(name: .pksMindMapFit, object: nil)
-        case .zoomIn: zoom = clampedZoom(zoom + 0.15)
-        case .zoomOut: zoom = clampedZoom(zoom - 0.15)
+        case .zoomIn: zoomAboutCenter(to: clampedZoom(zoom * 1.15))
+        case .zoomOut: zoomAboutCenter(to: clampedZoom(zoom / 1.15))
         case .clearSelection: selectedID = nil
         }
         if editingNodeID == nil, command != .deleteBranch { requestCanvasFocus() }
@@ -1504,7 +1662,28 @@ struct MindMapCanvas: View {
     }
 
     private func clampedZoom(_ value: CGFloat) -> CGFloat {
-        min(1.80, max(0.45, value))
+        min(2.50, max(0.0001, value))
+    }
+
+    private func zoomAboutCenter(to nextZoom: CGFloat) {
+        viewportOffset = MindMapViewportGeometry.offsetPreservingAnchor(
+            viewportOffset,
+            from: zoom,
+            to: nextZoom,
+            anchor: CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2),
+            viewport: viewportSize
+        )
+        zoom = nextZoom
+    }
+
+    private func centerSelectedNode() {
+        guard let selectedID,
+              let position = mapLayout.placements.first(where: { $0.id == selectedID }) else { return }
+        withAnimation(.easeOut(duration: 0.18)) {
+            viewportOffset = MindMapViewportGeometry.centeredOffset(
+                for: position.center, mapSize: mapLayout.size, zoom: zoom
+            )
+        }
     }
 
     private func rebuildVisibleLayout() {
@@ -1523,9 +1702,10 @@ struct MindMapCanvas: View {
 
     private func fitToContent(viewport: CGSize) -> Bool {
         guard !mapLayout.placements.isEmpty else { return false }
-        let horizontal = max(0.1, (viewport.width - 36) / mapLayout.size.width)
-        let vertical = max(0.1, (viewport.height - 36) / mapLayout.size.height)
-        zoom = clampedZoom(min(horizontal, vertical, 1.25))
+        zoom = MindMapViewportGeometry.fittingZoom(
+            mapSize: mapLayout.size, viewport: viewport
+        )
+        viewportOffset = .zero
         return true
     }
 
