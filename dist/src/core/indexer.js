@@ -1,8 +1,8 @@
 // @ts-nocheck
-import { basename, resolve } from 'node:path';
+import { basename, extname, resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { walk } from '../sources/local.js';
-import { parseDocument } from '../parsers/index.js';
+import { parseDocument, supportedExtensions } from '../parsers/index.js';
 import { chunkDocument } from './chunking.js';
 import { sha256File, sha256Text } from '../util/fs.js';
 import { stableId, id } from './ids.js';
@@ -83,6 +83,15 @@ export class Indexer {
                     stats.skipped++;
                     continue;
                 }
+                if (!supportedExtensions.has(extname(e.path).toLowerCase())) {
+                    if (unchanged && existing?.index_status === 'metadata_only') {
+                        stats.skipped++;
+                        continue;
+                    }
+                    await this.indexMetadataOnlyFile(sourceId, sourceType, e.path, e.modifiedAt, e.createdAt, e.size);
+                    stats.indexed++;
+                    continue;
+                }
                 const hash = await sha256File(e.path);
                 if (existing?.content_hash === hash) {
                     this.db.db.prepare('UPDATE documents SET modified_at=?,size=?,deleted_at=NULL WHERE id=?').run(e.modifiedAt, e.size, existing.id);
@@ -114,6 +123,29 @@ export class Indexer {
         }
         this.db.db.prepare(`INSERT INTO sync_state(source_id,last_scan_at,stats_json,last_error) VALUES(?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET last_scan_at=excluded.last_scan_at,stats_json=excluded.stats_json,last_error=excluded.last_error`).run(sourceId, now, JSON.stringify(stats), scanFailed ? JSON.stringify(stats.errors[0]) : null);
         return stats;
+    }
+    async indexMetadataOnlyFile(sourceId, sourceType, path, modifiedAt, createdAt, size) {
+        const documentId = stableId('doc', path);
+        const now = new Date().toISOString();
+        await this.db.beginWrite();
+        try {
+            this.db.db.prepare(`INSERT INTO documents(id,source_id,source_type,uri,canonical_uri,title,mime_type,created_at,modified_at,content_hash,size,document_type,tags_json,index_status,last_indexed_at,metadata_json,deleted_at)
+    VALUES(?,?,?,?,?,?,?,?,?,NULL,?,'generic','[]','metadata_only',?,?,NULL)
+    ON CONFLICT(id) DO UPDATE SET source_id=excluded.source_id,source_type=excluded.source_type,title=excluded.title,mime_type=excluded.mime_type,modified_at=excluded.modified_at,content_hash=NULL,size=excluded.size,index_status='metadata_only',last_indexed_at=excluded.last_indexed_at,metadata_json=excluded.metadata_json,deleted_at=NULL`)
+                .run(documentId, sourceId, sourceType, path, path, basename(path), 'application/octet-stream', createdAt, modifiedAt, size, now, JSON.stringify({ availability: 'filename_only', reason: 'unsupported_content_type' }));
+            this.db.db.prepare('DELETE FROM chunks_fts WHERE document_id=?').run(documentId);
+            this.db.db.prepare('DELETE FROM chunks WHERE document_id=?').run(documentId);
+            this.db.db.prepare('DELETE FROM medical_observations WHERE source_document_id=? AND verified=0').run(documentId);
+            this.db.db.prepare('DELETE FROM structured_records WHERE source_document_id=? AND authority != ?').run(documentId, 'user_correction');
+            this.db.db.prepare('DELETE FROM document_entities WHERE document_id=?').run(documentId);
+            this.db.db.exec('COMMIT');
+        }
+        catch (e) {
+            this.db.db.exec('ROLLBACK');
+            throw e;
+        }
+        this.refreshPathTags(documentId, path);
+        return documentId;
     }
     async indexDeferredFile(sourceId, sourceType, path, modifiedAt, createdAt, size, error) { const documentId = stableId('doc', path); const now = new Date().toISOString(); const title = basename(path); const metadata = { availability: 'cloud_placeholder', readError: String(error?.message || error), errno: error?.errno ?? null, code: error?.code ?? null }; await this.db.beginWrite(); try {
         this.db.db.prepare(`INSERT INTO documents(id,source_id,source_type,uri,canonical_uri,title,mime_type,created_at,modified_at,content_hash,size,document_type,tags_json,index_status,last_indexed_at,metadata_json,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?,'[]','deferred',?,?,NULL) ON CONFLICT(id) DO UPDATE SET source_id=excluded.source_id,source_type=excluded.source_type,title=excluded.title,modified_at=excluded.modified_at,content_hash=NULL,size=excluded.size,index_status='deferred',last_indexed_at=excluded.last_indexed_at,metadata_json=excluded.metadata_json,deleted_at=NULL`).run(documentId, sourceId, sourceType, path, path, title, 'application/octet-stream', createdAt, modifiedAt, size, 'generic', now, JSON.stringify(metadata));

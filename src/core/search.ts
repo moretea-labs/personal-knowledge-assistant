@@ -111,7 +111,7 @@ export class SearchEngine {
       const score=exactAlias?1.0:titleExact?0.99:titleContains?0.96:aliasContains?0.95:pathContains?0.88:0.72;
       return {documentId:r.document_id,title:r.title,uri:r.uri,sourceType:r.source_type,documentType:r.document_type,modifiedAt:r.modified_at,indexStatus:r.index_status,
         snippet:r.index_status==='deferred'?'Cloud placeholder: filename/path known; PDF text not locally accessible.':
-                r.index_status==='metadata_only'?'PDF metadata only: no extractable native text.':r.uri,
+                r.index_status==='metadata_only'?(String(r.uri).toLowerCase().endsWith('.pdf')?'PDF metadata only: no extractable native text.':'File name only: content is not indexed.'):r.uri,
         score,reasons:[exactAlias||aliasContains?'verified_alias':r.index_status==='deferred'?'metadata_deferred':'metadata']} as SearchResult;
     }).filter(Boolean).sort((a:any,b:any)=>b.score-a.score || String(a.title).localeCompare(String(b.title))).slice(0,limit) as SearchResult[];
   }

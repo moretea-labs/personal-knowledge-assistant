@@ -1,7 +1,6 @@
 // @ts-nocheck
 import { readdir, stat } from 'node:fs/promises';
-import { extname, join, resolve } from 'node:path';
-import { supportedExtensions } from '../parsers/index.js';
+import { join, resolve } from 'node:path';
 const ignored = new Set(['.git', 'node_modules', '.Trash', '.cache', 'Library']);
 export async function* walk(root, excludeRoots = [], onScanError) {
     let ents;
@@ -26,7 +25,7 @@ export async function* walk(root, excludeRoots = [], onScanError) {
         if (e.isDirectory()) {
             yield* walk(p, normalizedExcludes, onScanError);
         }
-        else if (e.isFile() && supportedExtensions.has(extname(e.name).toLowerCase())) {
+        else if (e.isFile()) {
             try {
                 const s = await stat(p);
                 yield { path: p, size: s.size, modifiedAt: s.mtime.toISOString(), createdAt: s.birthtime.toISOString() };
