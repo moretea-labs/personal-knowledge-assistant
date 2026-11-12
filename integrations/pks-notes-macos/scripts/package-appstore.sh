@@ -62,9 +62,12 @@ then
   exit 5
 fi
 
-app="$root/.build/appstore/PKS Notes.app"
-pkg="$root/.build/appstore/PKSNotes-macOS.pkg"
-mkdir -p "$root/.build/appstore"
+# A checkout may live in iCloud Drive, whose File Provider can reattach
+# FinderInfo during signing. Allow a local, non-synced output directory.
+output_root="${PKS_NOTES_PACKAGE_DIR:-$root/.build/appstore}"
+app="$output_root/Leafspan.app"
+pkg="$output_root/Leafspan-macOS.pkg"
+mkdir -p "$output_root"
 if [[ -e "$app" || -e "$pkg" ]]; then
   echo "Existing packaging output detected; clean artifacts deliberately first." >&2
   exit 6

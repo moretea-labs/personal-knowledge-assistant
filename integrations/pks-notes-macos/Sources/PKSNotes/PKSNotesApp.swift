@@ -65,7 +65,7 @@ struct PKSNotesApp: App {
         .commands {
             // This single-window editor uses Cmd+N for a note, not another app window.
             CommandGroup(replacing: .newItem) {}
-            // PKS Notes edits plain Markdown. Remove AppKit rich-text formatting
+            // Leafspan edits plain Markdown. Remove AppKit rich-text formatting
             // equivalents (notably Cmd+B/Cmd+I) so one shortcut has one authority.
             CommandGroup(replacing: .textFormatting) {}
 
@@ -109,7 +109,7 @@ struct PKSNotesApp: App {
                 Button(language.text("Task")) { MarkdownNativeCommand.perform("task") }
                     .keyboardShortcut("9", modifiers: [.command, .shift])
             }
-            CommandMenu("PKS") {
+            CommandMenu("Library") {
                 Button(language.text("New Markdown Note")) {
                     NotificationCenter.default.post(name: NotesMenuEvent.newNote, object: nil)
                 }
@@ -130,11 +130,11 @@ struct PKSNotesApp: App {
                 Divider()
                 Button(language.text("Save Markdown")) { model.save() }
                     .keyboardShortcut("s", modifiers: .command)
-                Button(language.text("Find in PKS")) {
+                Button(language.text("Find in Library")) {
                     NotificationCenter.default.post(name: NotesMenuEvent.search, object: nil)
                 }
                 .keyboardShortcut("f", modifiers: .command)
-                Button(language.text("Run PKS Search")) { model.search() }
+                Button(language.text("Search Library")) { model.search() }
                     .keyboardShortcut(.return, modifiers: [.command, .shift])
                 Divider()
                 Button(language.text("Refresh Files")) { model.refresh() }
@@ -218,7 +218,7 @@ enum NotesGeometry {
     static let selectionCorner: CGFloat = 9
 
     static func workspaceTitle(_ root: URL?, language: AppLanguage) -> String {
-        guard let root else { return language.text("PKS Library") }
+        guard let root else { return language.text("Knowledge Library") }
         let name = root.lastPathComponent
         return name == "com~apple~CloudDocs" ? language.text("iCloud Drive") : name
     }
@@ -659,13 +659,13 @@ struct NotesWindow: View {
 
                                 if model.previewPDF == nil {
                                     Divider().padding(.vertical, 4)
-                                    relationshipSectionTitle(language.text("Related · PKS"))
+                                    relationshipSectionTitle(language.text("Related · Library"))
                                     if model.loadingRelated {
                                         relationshipEmpty(language.text("Finding related knowledge…"))
                                     } else if let error = model.relatedError {
                                         relationshipEmpty(language.text(error))
                                     } else if model.relatedHits.isEmpty {
-                                        relationshipEmpty(language.text("No related PKS results."))
+                                        relationshipEmpty(language.text("No related library results."))
                                     } else {
                                         ForEach(model.relatedHits) { hit in
                                             relationshipButton(
@@ -2168,7 +2168,7 @@ struct NotesWindow: View {
     @ViewBuilder
     private var searchResultRows: some View {
                 if !model.hits.isEmpty {
-                    Section(language.text("PKS results · across all sources")) {
+                    Section {
                         ForEach(model.groupedHits) { group in
                             let hit = group.primary
                             VStack(alignment: .leading, spacing: 6) {
@@ -2259,7 +2259,7 @@ struct NotesWindow: View {
                         }
                     }
                 } else {
-                    Text(language.text(model.searching ? "Searching PKS…" : "Search the existing PKS index."))
+                    Text(language.text(model.searching ? "Searching notes…" : model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Search notes and files" : "No matches"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -2268,13 +2268,13 @@ struct NotesWindow: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Nulis-style compact app identity and Quick Find, followed by real
-            // PKS navigation destinations. No fake starred/archive/trash features.
-            HStack(spacing: 10) {
+            // app navigation destinations. No fake starred/archive/trash features.
+            HStack(spacing: 6) {
                 Image(systemName: "square.stack.3d.up")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(colorScheme == .dark ? theme.linkColor : Color.primary)
                     .frame(width: 22)
-                Text("PKS Notes")
+                Text("Leafspan")
                     .font(.system(size: 14, weight: .semibold))
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -2316,7 +2316,7 @@ struct NotesWindow: View {
                 .help(language.text("New Markdown note (⌘N)"))
                 .accessibilityIdentifier("pks-new-note-button")
             }
-            .padding(.horizontal, 17)
+            .padding(.horizontal, 14)
             .frame(height: 48)
             .padding(.top, 1)
 
@@ -2325,7 +2325,7 @@ struct NotesWindow: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
-                TextField(language.text("Quick find in PKS…"), text: $model.query)
+                TextField(language.text("Search notes and files…"), text: $model.query)
                     .font(.system(size: 12))
                     .textFieldStyle(.plain)
                     .focused($searchFieldFocused)
@@ -2361,7 +2361,7 @@ struct NotesWindow: View {
                 navigationRow(.notes, symbol: "square.stack.3d.up", title: language.text("All Notes"))
                 navigationRow(.recent, symbol: "clock", title: language.text("Recent"))
                 navigationRow(.favorites, symbol: "star", title: language.text("Favorites"))
-                navigationRow(.search, symbol: "text.magnifyingglass", title: language.text("PKS Search"))
+                navigationRow(.search, symbol: "text.magnifyingglass", title: language.text("Search"))
             }
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
@@ -2421,8 +2421,10 @@ struct NotesWindow: View {
                 }
                 .padding(.horizontal, 22)
                 .frame(height: 28)
-            } else if model.searching || model.searchFailed {
+            } else if sidebarTab == .search {
                 Text(model.searchStatus)
+                    .help(model.searchStatus)
+                    .accessibilityIdentifier("pks-search-status")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -2552,6 +2554,12 @@ struct NotesWindow: View {
         }
         Button(language.text("Copy File Path"), systemImage: "doc.on.doc") {
             model.copySource(url.path)
+        }
+        if model.selected == url, model.isDirty {
+            Button(language.text("Save Draft Copy"), systemImage: "doc.badge.plus") {
+                model.saveDraftCopy()
+            }
+            .accessibilityIdentifier("pks-save-draft-copy")
         }
         if let root = model.root,
            ["md", "markdown"].contains(url.pathExtension.lowercased()),
@@ -2826,7 +2834,7 @@ struct NotesWindow: View {
                         .foregroundStyle(.secondary)
                     Text(language.text(model.root == nil
                          ? "Open your existing Markdown folder. Files stay where they are."
-                         : "Select a document in the sidebar, or search your PKS knowledge with ⌘F."))
+                         : "Select a document in the sidebar, or search your notes with ⌘F."))
                         .font(.subheadline)
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)
@@ -2845,6 +2853,11 @@ struct NotesWindow: View {
                     Image(systemName: "info.circle")
                     Text(message).font(.caption).lineLimit(2)
                     Spacer()
+                    if model.isDirty {
+                        Button(language.text("Save Draft Copy")) { model.saveDraftCopy() }
+                            .buttonStyle(.borderless)
+                            .accessibilityIdentifier("pks-recover-draft")
+                    }
                     Button(language.text("Dismiss")) { model.message = nil }
                         .buttonStyle(.borderless)
                 }
@@ -2875,7 +2888,7 @@ struct NotesWindow: View {
         .navigationTitle(model.previewPDF?.lastPathComponent
                          ?? model.selected?.deletingPathExtension().lastPathComponent
                          ?? model.previewSource?.title
-                         ?? language.text("PKS Notes"))
+                         ?? language.text("Leafspan"))
     }
 
     @ViewBuilder

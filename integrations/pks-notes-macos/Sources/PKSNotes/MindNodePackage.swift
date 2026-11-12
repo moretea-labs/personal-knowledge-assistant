@@ -3,7 +3,7 @@ import Foundation
 /// Read-only, version-bounded importer for MindNode binary-plist packages.
 /// Real documents from the current MindNode 2026.7.1 library use schema
 /// version 9; older library documents use the compatible version 7 tree.
-/// Never write to the input package: Markdown remains PKS Notes' only writer.
+/// Never write to the input package: Markdown remains Leafspan's only writer.
 enum MindNodePackage {
     enum Failure: LocalizedError {
         case unsupported

@@ -118,9 +118,9 @@ struct ProSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label(language.text("PKS Notes Pro"), systemImage: "point.3.connected.trianglepath.dotted")
+            Label(language.text("Leafspan Pro"), systemImage: "point.3.connected.trianglepath.dotted")
                 .font(.title2.weight(.semibold))
-            Text(language.text("Your Markdown and PDF files always remain yours. No PKS account, subscription or server."))
+            Text(language.text("Your Markdown and PDF files always remain yours. No account, subscription or server."))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Divider()

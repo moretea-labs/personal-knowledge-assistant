@@ -29,7 +29,7 @@ final class RealICloudFileProviderAcceptanceTests: XCTestCase {
         }
 
         let root = vault.appendingPathComponent(
-            "PKS Notes Forge QA \(UUID().uuidString)",
+            "Leafspan Forge QA \(UUID().uuidString)",
             isDirectory: true
         )
         XCTAssertFalse(fileManager.fileExists(atPath: root.path))
@@ -174,7 +174,7 @@ final class RealICloudFileProviderAcceptanceTests: XCTestCase {
         let previousWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
         let previousNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
         let root = fileManager.temporaryDirectory.appendingPathComponent(
-            "PKS Notes Last Opened QA \\(UUID().uuidString)",
+            "Leafspan Last Opened QA \\(UUID().uuidString)",
             isDirectory: true
         )
         try fileManager.createDirectory(at: root, withIntermediateDirectories: false)
@@ -213,7 +213,7 @@ final class RealICloudFileProviderAcceptanceTests: XCTestCase {
         let previousWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
         let previousNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
         let root = fileManager.temporaryDirectory.appendingPathComponent(
-            "PKS Notes Folder Relocation QA \\(UUID().uuidString)",
+            "Leafspan Folder Relocation QA \\(UUID().uuidString)",
             isDirectory: true
         )
         let source = root.appendingPathComponent("Bundle", isDirectory: true)

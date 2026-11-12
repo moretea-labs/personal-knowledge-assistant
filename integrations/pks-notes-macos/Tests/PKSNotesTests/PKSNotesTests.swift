@@ -7,6 +7,69 @@ import XCTest
 
 final class PKSNotesTests: XCTestCase {
     @MainActor
+    func testConflictedDraftCanBeRecoveredWithoutOverwritingExternalEdit() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "PKSNotesWorkspace")
+        defer {
+            if let previous { defaults.set(previous, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = root.appendingPathComponent("研究.md")
+        try "baseline".write(to: original, atomically: true, encoding: .utf8)
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(original)
+        await waitForNote(model, original)
+        model.draft = "My unsaved research draft 📝"
+        try "External editor version".write(to: original, atomically: true, encoding: .utf8)
+        model.save()
+        XCTAssertTrue(model.isDirty)
+        let recovered = try XCTUnwrap(model.saveDraftCopy())
+        XCTAssertEqual(try String(contentsOf: recovered, encoding: .utf8), model.draft)
+        XCTAssertEqual(try String(contentsOf: original, encoding: .utf8), "External editor version")
+        XCTAssertEqual(model.selected, original)
+        XCTAssertTrue(model.isDirty, "Recovery never silently discards the active draft")
+        let another = try XCTUnwrap(model.saveDraftCopy())
+        XCTAssertNotEqual(another, recovered)
+        XCTAssertEqual(try String(contentsOf: recovered, encoding: .utf8), "My unsaved research draft 📝")
+    }
+
+    @MainActor
+    func testSymlinkReplacementStopsAutosaveAndPreservesDraftWithVisibleError() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "PKSNotesWorkspace")
+        defer {
+            if let previous { defaults.set(previous, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = root.appendingPathComponent("Note.md")
+        let outside = root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".md")
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try "baseline".write(to: original, atomically: true, encoding: .utf8)
+        try "External file".write(to: outside, atomically: true, encoding: .utf8)
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(original)
+        await waitForNote(model, original)
+        model.draft = "Preserve this draft"
+        try FileManager.default.removeItem(at: original)
+        try FileManager.default.createSymbolicLink(at: original, withDestinationURL: outside)
+        model.save()
+        XCTAssertFalse(model.autoSavePending)
+        XCTAssertTrue(model.isDirty)
+        XCTAssertNotNil(model.message)
+        XCTAssertEqual(try String(contentsOf: outside, encoding: .utf8), "External file")
+        let recovered = try XCTUnwrap(model.saveDraftCopy())
+        XCTAssertEqual(try String(contentsOf: recovered, encoding: .utf8), "Preserve this draft")
+    }
+
+    @MainActor
     private func waitForNote(_ model: NotesModel, _ url: URL) async {
         for _ in 0..<150 {
             if model.selected == url && !model.loadingNote { return }
@@ -27,8 +90,8 @@ final class PKSNotesTests: XCTestCase {
             NotesGeometry.workspaceTitle(URL(fileURLWithPath: "/tmp/学习笔记管理"), language: .english),
             "学习笔记管理"
         )
-        XCTAssertEqual(NotesGeometry.workspaceTitle(nil, language: .english), "PKS Library")
-        XCTAssertEqual(NotesGeometry.workspaceTitle(nil, language: .simplifiedChinese), "PKS 资料库")
+        XCTAssertEqual(NotesGeometry.workspaceTitle(nil, language: .english), "Knowledge Library")
+        XCTAssertEqual(NotesGeometry.workspaceTitle(nil, language: .simplifiedChinese), "知识资料库")
     }
 
     func testBackgroundMarkdownPreviewParsingAndSearchHeadingNavigation() async {
@@ -124,7 +187,7 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertTrue(model.isDirty)
         XCTAssertEqual(model.draft, "# Local pending")
         XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "# External revision")
-        XCTAssertTrue(model.message?.contains(AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")) == true)
+        XCTAssertTrue(model.message?.contains(AppLanguage.current.text("The file changed outside Leafspan. Reopen it before saving to avoid overwriting edits.")) == true)
     }
 
     func testPDFDocumentLoadingCompletesForLocalPDF() async throws {
@@ -248,7 +311,7 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertFalse(model.isDirty)
         XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "# Safe local edit")
         XCTAssertFalse(model.message?.contains(
-            AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
+            AppLanguage.current.text("The file changed outside Leafspan. Reopen it before saving to avoid overwriting edits.")
         ) == true)
     }
 
@@ -1801,7 +1864,7 @@ final class PKSNotesTests: XCTestCase {
         model.save()
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "# Changed externally")
         XCTAssertTrue(model.isDirty)
-        XCTAssertTrue(model.message?.contains(AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")) == true)
+        XCTAssertTrue(model.message?.contains(AppLanguage.current.text("The file changed outside Leafspan. Reopen it before saving to avoid overwriting edits.")) == true)
     }
 
     func testRelativeMarkdownLinkAndAttachmentResolveInsideWorkspace() throws {
@@ -3114,7 +3177,7 @@ extension PKSNotesTests {
         defer { try? fm.removeItem(at: root) }
 
         let first = root.appendingPathComponent("第一篇.md")
-        let expected = "# 第一篇\nHello, PKS Notes.\n"
+        let expected = "# 第一篇\nHello, Leafspan.\n"
         try expected.write(to: first, atomically: true, encoding: .utf8)
         XCTAssertFalse(WorkspaceFiles.isDataless(first))
 

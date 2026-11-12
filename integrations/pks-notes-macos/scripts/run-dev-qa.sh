@@ -10,12 +10,12 @@ elif [[ $# -ne 0 ]]; then
 fi
 
 source_root="$(cd "$(dirname "$0")/.." && pwd)"
-app="$HOME/Applications/PKS Notes QA Fixture.app"
-fixture="$HOME/Library/Application Support/PKS Notes QA Fixture/Fixture Vault"
+app="$HOME/Applications/Leafspan QA Fixture.app"
+fixture="$HOME/Library/Application Support/Leafspan QA Fixture/Fixture Vault"
 binary="$source_root/.build/debug/PKSNotes"
 qa_executable="PKSNotesQAFixture"
 qa_bundle_id="com.moretea.pks.notes.qa.fixture"
-qa_display_name="PKS Notes QA Fixture"
+qa_display_name="Leafspan QA Fixture"
 icon="$source_root/Resources/AppIcon.icns"
 
 cd "$source_root"
@@ -27,7 +27,7 @@ mkdir -p "$fixture" "$HOME/Applications"
 
 staging="$(mktemp -d /tmp/pks-notes-qa.XXXXXX)"
 trap 'rm -rf "$staging"' EXIT
-bundle="$staging/PKS Notes QA.app"
+bundle="$staging/Leafspan QA.app"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 cp "$icon" "$bundle/Contents/Resources/AppIcon.icns"
 cp "$binary" "$bundle/Contents/MacOS/$qa_executable"
@@ -42,7 +42,7 @@ codesign --verify --deep --strict "$bundle"
 
 # Update only the bundle with our exact QA identity; never touch the release
 # app or another developer app that happens to use the same display name.
-previous="$HOME/Applications/.PKS-Notes-QA-Fixture-previous.app"
+previous="$HOME/Applications/.Leafspan-QA-Fixture-previous.app"
 if [[ -e "$app" ]]; then
     identity="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist" 2>/dev/null || true)"
     if [[ "$identity" != "$qa_bundle_id" || -e "$previous" ]]; then
@@ -122,7 +122,7 @@ func makePage(_ text: String) -> PDFPage? {
 guard let outputPath = ProcessInfo.processInfo.environment["PKS_QA_PDF_OUTPUT"],
       let firstPage = makePage("PKS PDF Fixture - Page 1\n\nImportant fact for source anchor."),
       let secondPage = makePage("PKS PDF Fixture - Page 2\n\nSecond page navigation fixture.") else {
-    fputs("Unable to generate PKS Notes PDF fixture pages.\n", stderr)
+    fputs("Unable to generate Leafspan PDF fixture pages.\n", stderr)
     exit(1)
 }
 let document = PDFDocument()
@@ -134,7 +134,7 @@ guard document.write(to: output),
       readBack.pageCount == 2,
       (readBack.string ?? "").contains("Important fact for source anchor"),
       (readBack.string ?? "").contains("Second page navigation fixture") else {
-    fputs("Generated PKS Notes PDF fixture failed read-back verification.\n", stderr)
+    fputs("Generated Leafspan PDF fixture failed read-back verification.\n", stderr)
     exit(1)
 }
 
@@ -157,7 +157,7 @@ func fingerprint(for text: String) -> String? {
 }
 
 guard let secondPage = readBack.page(at: 1) else {
-    fputs("Generated PKS Notes PDF fixture is missing page 2.\n", stderr)
+    fputs("Generated Leafspan PDF fixture is missing page 2.\n", stderr)
     exit(1)
 }
 let pageBounds = secondPage.bounds(for: .cropBox)
@@ -171,14 +171,14 @@ guard let exactSelection = secondPage.selection(for: exactSelectionRect),
       let selectedText = exactSelection.string?.trimmingCharacters(in: .whitespacesAndNewlines),
       selectedText == "Second page navigation fixture.",
       fingerprint(for: selectedText) == "c4ba16bb07821a13" else {
-    fputs("Generated PKS Notes PDF fixture no longer matches the exact-selection Markdown anchor.\n", stderr)
+    fputs("Generated Leafspan PDF fixture no longer matches the exact-selection Markdown anchor.\n", stderr)
     exit(1)
 }
 
 let markdownPath = output.deletingLastPathComponent().appendingPathComponent("Map QA.md")
 guard let markdown = try? String(contentsOf: markdownPath, encoding: .utf8),
       markdown.contains("PDF-QA.pdf#page=2&rects=0.00817,0.94727,0.27472,0.01515&fp=c4ba16bb07821a13") else {
-    fputs("PKS Notes Markdown fixture is missing its exact PDF source anchor.\n", stderr)
+    fputs("Leafspan Markdown fixture is missing its exact PDF source anchor.\n", stderr)
     exit(1)
 }
 print("Prepared searchable two-page PDF fixture with verified exact-selection anchor: \(output.lastPathComponent)")

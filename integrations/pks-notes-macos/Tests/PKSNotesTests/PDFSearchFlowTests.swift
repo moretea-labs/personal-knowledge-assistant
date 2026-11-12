@@ -110,7 +110,7 @@ final class PDFSearchFlowTests: XCTestCase {
     }
 
     func testPDFSelectedTextAnchorReopensExactEvidence() throws {
-        let document = try makeDocument(text: "An important unique anchor phrase for PKS Notes.")
+        let document = try makeDocument(text: "An important unique anchor phrase for Leafspan.")
         let selection = try XCTUnwrap(
             document.findString("unique anchor phrase", withOptions: .caseInsensitive).first
         )

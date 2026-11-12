@@ -35,7 +35,7 @@ struct SearchHit: Decodable, Identifiable {
             return file.path.contains("/Mobile Documents/") ? "iCloud Drive" : "Local file"
         }
         if webURL != nil { return "Web page" }
-        return sourceType?.capitalized ?? "PKS source"
+        return sourceType?.capitalized ?? "Library source"
     }
 
     var sourceLocation: String {
@@ -933,13 +933,13 @@ final class NotesModel: ObservableObject {
             hits = []
             searching = false
             searchFailed = false
-            searchStatus = "PKS search · 127.0.0.1:3217"
+            searchStatus = AppLanguage.current.text("Search notes and files")
         }
     }
     @Published private(set) var hits: [SearchHit] = []
     @Published private(set) var searching = false
     @Published var message: String?
-    @Published private(set) var searchStatus = "PKS search · 127.0.0.1:3217"
+    @Published private(set) var searchStatus = AppLanguage.current.text("Search notes and files")
     @Published private(set) var searchFailed = false
     @Published private(set) var backlinks: [NoteBacklink] = []
     @Published private(set) var loadingBacklinks = false
@@ -1112,6 +1112,12 @@ final class NotesModel: ObservableObject {
         if root == resolved { return true }
         guard confirmLeavingNote(decision: navigationDecision) else { return false }
 
+        query = ""
+        searchTask?.cancel()
+        searchTask = nil
+        hits = []
+        searching = false
+        searchFailed = false
         previewTask?.cancel()
         cancelNoteLoad()
         cancelFilePrefetch()
@@ -1915,7 +1921,7 @@ final class NotesModel: ObservableObject {
             } catch {
                 guard !Task.isCancelled, let self, self.selected == note else { return }
                 self.relatedHits = []
-                self.relatedError = "PKS related search unavailable."
+                self.relatedError = "Related search unavailable."
                 self.loadingRelated = false
             }
         }
@@ -2017,14 +2023,17 @@ final class NotesModel: ObservableObject {
     }
 
     func save() {
-        guard !loadingNote, isDirty, let root, let selected,
-              WorkspaceFiles.contains(selected, in: root) else { return }
+        guard !loadingNote, isDirty, let root, let selected else { return }
         defer { autoSavePending = false }
+        guard WorkspaceFiles.contains(selected, in: root) else {
+            message = AppLanguage.current.text("The file changed outside Leafspan. Reopen it before saving to avoid overwriting edits.")
+            return
+        }
         do {
             // POSIX ctime/inode/size/mtime together detect ordinary writes and atomic
             // replacement without rereading the whole Markdown file on every autosave.
             guard let actualStamp = WorkspaceFiles.fileStamp(selected) else {
-                message = AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
+                message = AppLanguage.current.text("The file changed outside Leafspan. Reopen it before saving to avoid overwriting edits.")
                 return
             }
             if actualStamp != savedFileStamp {
@@ -2033,7 +2042,7 @@ final class NotesModel: ObservableObject {
                 // before classifying the stamp drift as an external edit.
                 guard let diskContent = try? String(contentsOf: selected, encoding: .utf8),
                       WorkspaceFiles.editorText(diskContent) == baseline else {
-                    message = AppLanguage.current.text("The file changed outside PKS Notes. Reopen it before saving to avoid overwriting edits.")
+                    message = AppLanguage.current.text("The file changed outside Leafspan. Reopen it before saving to avoid overwriting edits.")
                     return
                 }
                 savedFileStamp = actualStamp
@@ -2051,6 +2060,21 @@ final class NotesModel: ObservableObject {
         } catch {
             message = "\(AppLanguage.current.text("Save failed")): \(error.localizedDescription)"
         }
+    }
+
+    /// Preserve a conflicted draft using the existing exclusive note writer.
+    /// Never overwrite the external edit or discard/navigate away from the draft.
+    @discardableResult
+    func saveDraftCopy() -> URL? {
+        guard !loadingNote, isDirty, let root, let selected else { return nil }
+        let parent = selected.deletingLastPathComponent()
+        let folder = parent == root || WorkspaceFiles.contains(parent, in: root) ? parent : root
+        let title = selected.deletingPathExtension().lastPathComponent + " (Recovered)"
+        guard let name = WorkspaceFiles.nextAvailableNoteName(basedOn: title, in: folder),
+              let created = newNote(named: name, in: folder, initialContent: draft,
+                                    activateAfterCreation: false) else { return nil }
+        message = AppLanguage.current.text("Draft saved as a separate note") + ": " + created.lastPathComponent
+        return created
     }
 
     /// Appends a portable PDF page reference without replacing the target note.
@@ -2283,52 +2307,90 @@ final class NotesModel: ObservableObject {
     }
 
     func search(using session: URLSession = .shared) {
-        // The latest submission is the sole owner of search presentation.
         searchTask?.cancel()
         searchTask = nil
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let workspace = root
+        let currentNote = selected
+        let currentDraft = selected == nil ? nil : draft
         hits = []
         searchFailed = false
         guard !text.isEmpty else {
             searching = false
-            searchStatus = "PKS search · 127.0.0.1:3217"
+            searchStatus = AppLanguage.current.text("Search notes and files")
             return
         }
         searching = true
-        searchStatus = AppLanguage.current.text("Searching PKS…")
+        searchStatus = AppLanguage.current.text("Searching notes…")
+        // An explicit search also discovers files added by Finder/iCloud since
+        // the previous query. Reuse the shared scan, not a second cached index.
+        if workspace != nil { invalidateGlobalFileIndex() }
         searchTask = Task { [weak self] in
             guard let self else { return }
-            do {
-                var parts = URLComponents(string: "http://127.0.0.1:3217/api/search")!
-                parts.queryItems = [URLQueryItem(name: "q", value: text),
-                                    URLQueryItem(name: "limit", value: "30")]
-                var request = URLRequest(url: parts.url!)
-                request.timeoutInterval = 8
-                let (data, response) = try await session.data(for: request)
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                    throw URLError(.badServerResponse)
+            // Optional cross-source retrieval never delays local publication.
+            async let remote = Self.fetchSearch(text, using: session)
+            var local = WorkspaceSearch.Result()
+            if let workspace, await self.ensureGlobalFileIndex() {
+                guard !Task.isCancelled, self.root == workspace else { return }
+                let entries = self.globalQuickOpenEntries
+                let scan = Task.detached(priority: .userInitiated) {
+                    WorkspaceSearch.search(entries: entries, root: workspace, query: text,
+                                           draftURL: currentNote, draft: currentDraft)
                 }
-                let results = try JSONDecoder().decode([SearchHit].self, from: data)
-                guard !Task.isCancelled,
-                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
-                self.hits = results
-                self.searchStatus = String(
-                    format: "%d %@ · %d %@ · PKS",
-                    self.hits.count, AppLanguage.current.text("matches"),
-                    self.groupedHits.count, AppLanguage.current.text("documents")
-                )
-            } catch {
-                guard !Task.isCancelled,
-                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
-                self.searchFailed = true
-                self.searchStatus = AppLanguage.current.text("PKS offline · no fallback index")
-                self.message = "\(AppLanguage.current.text("PKS search failed")): \(error.localizedDescription)"
+                local = await withTaskCancellationHandler {
+                    await scan.value
+                } onCancel: {
+                    scan.cancel()
+                }
             }
-            guard !Task.isCancelled,
+            guard !Task.isCancelled, self.root == workspace,
                   self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+            self.hits = local.hits
+            self.searchStatus = self.localSearchStatus(local, providerAvailable: nil)
+            do {
+                let results = try await remote
+                guard !Task.isCancelled, self.root == workspace,
+                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+                self.hits = WorkspaceSearch.merging(local: local.hits, remote: results)
+                self.searchStatus = self.localSearchStatus(local, providerAvailable: true)
+            } catch {
+                guard !Task.isCancelled, self.root == workspace,
+                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+                // A missing optional service must preserve standalone results.
+                self.searchFailed = workspace == nil
+                self.searchStatus = workspace == nil
+                    ? AppLanguage.current.text("Choose a folder to search. Library search is unavailable.")
+                    : self.localSearchStatus(local, providerAvailable: false)
+            }
+            guard !Task.isCancelled else { return }
             self.searching = false
             self.searchTask = nil
         }
+    }
+
+    private func localSearchStatus(_ local: WorkspaceSearch.Result, providerAvailable: Bool?) -> String {
+        let language = AppLanguage.current
+        let source = language.text(providerAvailable == true ? (root == nil ? "Knowledge Library" : "Workspace + Library") : "Workspace")
+        var status = "\(groupedHits.count) \(language.text("documents")) · \(source)"
+        if providerAvailable == false { status += " · " + language.text("Library search unavailable") }
+        if local.coverage.limited { status += " · " + language.text("Partial results") }
+        if local.coverage.skippedFiles > 0 {
+            status += " · \(local.coverage.skippedFiles) " + language.text("bodies not searched")
+        }
+        return status
+    }
+
+    nonisolated private static func fetchSearch(_ text: String, using session: URLSession) async throws -> [SearchHit] {
+        var parts = URLComponents(string: "http://127.0.0.1:3217/api/search")!
+        parts.queryItems = [URLQueryItem(name: "q", value: text),
+                            URLQueryItem(name: "limit", value: "30")]
+        var request = URLRequest(url: parts.url!)
+        request.timeoutInterval = 8
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode([SearchHit].self, from: data)
     }
 
     private func requestMarkdownAnchor(_ fragment: String, note: URL) {
@@ -3103,7 +3165,7 @@ final class NotesModel: ObservableObject {
                 // The user opened a different note or preview while the request was in flight.
             } catch {
                 guard !Task.isCancelled else { return }
-                message = "\(AppLanguage.current.text("PKS preview failed")): \(error.localizedDescription)"
+                message = "\(AppLanguage.current.text("Library preview failed")): \(error.localizedDescription)"
             }
         }
     }
