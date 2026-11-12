@@ -2,6 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
+python3 "$root/scripts/verify-app-icon.py"
 : "${PKS_NOTES_APP_SIGN_IDENTITY:?Set Mac App Distribution signing identity}"
 : "${PKS_NOTES_INSTALLER_SIGN_IDENTITY:?Set Mac Installer Distribution signing identity}"
 : "${PKS_NOTES_PROVISION_PROFILE:?Set Mac App Store provisioning profile path}"

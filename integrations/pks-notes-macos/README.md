@@ -1,5 +1,7 @@
 # Leafspan for macOS
 
+The selected app icon is the ivory note with a muted apricot folded border. Its master and exports are pinned by `Resources/AppIcon.sha256`; installation, packaging and CI reject accidental replacements. Run `python3 scripts/verify-app-icon.py` to check it. See [icon authority and verification](verification/README.md).
+
 A native SwiftUI Markdown workspace with optional related-knowledge search. It does not require a web account.
 
 ## Authority and boundaries
@@ -64,7 +66,7 @@ For native GUI acceptance, use only the installed `~/Applications/Leafspan.app` 
 
 The canonical folder is `~/Library/Mobile Documents/com~apple~CloudDocs/学习笔记管理`. No source files are imported, relocated or copied. iCloud Drive handles synchronization. Do not bypass the native folder picker by writing the folder path to app preferences: that does not grant macOS permissions.
 
-The app bundle copies `Resources/AppIcon.icns` into `Contents/Resources` and declares `CFBundleIconFile=AppIcon`; the icon generator uses AppKit only (no external icon dependency).
+The app bundle copies `Resources/AppIcon.icns` into `Contents/Resources` and declares `CFBundleIconFile=AppIcon`; the icon generator uses native AppKit/ImageIO to derive every size from `Resources/LeafspanIcon-master.png`. The 2026-11-12 design combines an ivory tile and white note page with a muted apricot folded border and three graphite writing strokes, retaining a calm, light palette. See [icon verification](verification/README.md).
 
 ## Verification
 

@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 source_root="$(cd "$(dirname "$0")/.." && pwd)"
+python3 "$source_root/scripts/verify-app-icon.py"
 binary="$source_root/.build/release/PKSNotes"
 icon="$source_root/Resources/AppIcon.icns"
 if [[ ! -f "$icon" ]]; then
