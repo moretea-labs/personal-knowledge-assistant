@@ -78,6 +78,13 @@ struct PKSNotesApp: App {
                     NotificationCenter.default.post(name: NotesMenuEvent.paste, object: nil)
                 }
                 .keyboardShortcut("v", modifiers: .command)
+                // Replacing the pasteboard group also removes the system Select All item.
+                // Route to the first responder so search, Quick Open, rename and editor
+                // text inputs retain native selection behavior (without changing focus).
+                Button(language.text("Select All")) {
+                    NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("a", modifiers: .command)
             }
             CommandMenu("Markdown") {
                 Button(language.text("Bold")) {
