@@ -5,9 +5,13 @@ enum ProAccess {
     static let productID = "com.moretea.pks.notes.pro"
     enum Feature { case mindMap, relationships }
     static var isLocalQA: Bool {
-        #if DEBUG
-        // Separate QA identity AND explicit argument. The entire path is
-        // absent from Release. Never simulate a verified StoreKit purchase.
+        #if LEAFSPAN_LOCAL_REVIEW
+        // Explicit, separately compiled local review build of the single
+        // installed app. The ordinary Release build never defines this flag.
+        // This is feature access for QA, NOT a verified StoreKit entitlement.
+        Bundle.main.bundleIdentifier == "com.moretea.pks.notes"
+        #elseif DEBUG
+        // Isolated fixture identity and explicit argument for DEBUG tests.
         Bundle.main.bundleIdentifier == "com.moretea.pks.notes.qa.fixture"
             && ProcessInfo.processInfo.arguments.contains("--pks-qa-pro")
         #else

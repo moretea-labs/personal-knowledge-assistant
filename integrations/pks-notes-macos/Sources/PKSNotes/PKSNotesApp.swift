@@ -691,7 +691,7 @@ struct NotesWindow: View {
                         Button(language.text("Copy Source Link"), systemImage: "link") { model.copySource(link.absoluteString) }
                         Divider()
                     }
-                    if !purchases.unlocked {
+                    if !ProAccess.allows(.mindMap, unlocked: purchases.unlocked) {
                         Button(language.text("Unlock Pro…"), systemImage: "checkmark.seal") {
                             showingProUpsell = true
                         }
