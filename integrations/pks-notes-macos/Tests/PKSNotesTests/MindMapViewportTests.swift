@@ -13,6 +13,19 @@ final class MindMapViewportTests: XCTestCase {
         XCTAssertEqual(4600 - offset.height / 1.4, node.y, accuracy: 0.001)
     }
 
+    func testInitialRootViewUsesActualSizeAndLeavesRoomForChildren() {
+        let viewport = CGSize(width: 1000, height: 680)
+        let map = CGSize(width: 8400, height: 50000)
+        let root = CGPoint(x: 150, y: 25000)
+        let offset = MindMapViewportGeometry.initialRootOffset(
+            root: root, mapSize: map, viewport: viewport
+        )
+        let screenX = viewport.width / 2 + offset.width + root.x - map.width / 2
+        let screenY = viewport.height / 2 + offset.height + root.y - map.height / 2
+        XCTAssertEqual(screenX, 320, accuracy: 0.001)
+        XCTAssertEqual(screenY, 340, accuracy: 0.001)
+    }
+
     func testPinchKeepsContentPointUnderAnchor() {
         let screen = CGSize(width: 900, height: 640)
         let anchor = CGPoint(x: 710, y: 130)

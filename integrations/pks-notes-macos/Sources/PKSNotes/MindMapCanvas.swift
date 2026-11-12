@@ -262,6 +262,7 @@ struct MindMapCanvas: View {
     @GestureState private var canvasDrag: CGSize = .zero
     @State private var showingNodeDetails = true
     @State private var didInitializeViewport = false
+    @State private var mapContentVersion = 0
     @State private var dropTargetID: Int?
     @State private var gestureBaseZoom: CGFloat?
     @State private var nodes: [MindMapNode] = []
@@ -281,6 +282,48 @@ struct MindMapCanvas: View {
 
     private var layoutDensity: MindMapLayoutDensity {
         MindMapLayoutDensity(rawValue: layoutDensityID) ?? .standard
+    }
+
+    /// The expensive node and connector tree does not change when the user pans
+    /// or magnifies the viewport. Keep it out of those per-frame view updates.
+    private struct MapContentKey: Equatable {
+        let revision: UInt64
+        let layoutVersion: Int
+        let selectedID: Int?
+        let editingNodeID: Int?
+        let renameTitle: String
+        let dropTargetID: Int?
+        let styleID: String
+        let densityID: String
+        let scheme: ColorScheme
+        let language: AppLanguage
+    }
+
+    private struct MapContentSnapshot: View, Equatable {
+        let owner: MindMapCanvas
+        let layout: MindMapLayoutSnapshot
+        let key: MapContentKey
+
+        static func == (lhs: Self, rhs: Self) -> Bool { lhs.key == rhs.key }
+
+        var body: some View {
+            owner.spatialCanvas(layout)
+        }
+    }
+
+    private var mapContentKey: MapContentKey {
+        .init(
+            revision: revision,
+            layoutVersion: mapContentVersion,
+            selectedID: selectedID,
+            editingNodeID: editingNodeID,
+            renameTitle: renameTitle,
+            dropTargetID: dropTargetID,
+            styleID: mapStyleID,
+            densityID: layoutDensityID,
+            scheme: colorScheme,
+            language: language
+        )
     }
 
     private struct ActionAvailabilityKey: Hashable {
@@ -333,7 +376,10 @@ struct MindMapCanvas: View {
                                 .accessibilityIdentifier("pks-mind-map-create")
                             }
                         } else {
-                            spatialCanvas(mapLayout)
+                            MapContentSnapshot(
+                                owner: self, layout: mapLayout, key: mapContentKey
+                            )
+                            .equatable()
                                 .scaleEffect(zoom)
                                 .position(
                                     x: viewport.size.width / 2 + viewportOffset.width + canvasDrag.width,
@@ -378,7 +424,7 @@ struct MindMapCanvas: View {
                     .onAppear {
                         viewportSize = viewport.size
                         if projectionReady && !didInitializeViewport {
-                            didInitializeViewport = fitToContent(viewport: viewport.size)
+                            didInitializeViewport = focusOnRoot(viewport: viewport.size)
                         }
                     }
                     .onChange(of: viewport.size) { _, size in
@@ -392,7 +438,7 @@ struct MindMapCanvas: View {
                     }
                     .onChange(of: projectionReady) { _, ready in
                         if ready && !didInitializeViewport {
-                            didInitializeViewport = fitToContent(viewport: viewport.size)
+                            didInitializeViewport = focusOnRoot(viewport: viewport.size)
                         }
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .pksMindMapFit)) { _ in
@@ -1698,6 +1744,19 @@ struct MindMapCanvas: View {
         }
         visible = filtered
         mapLayout = MindMapSpatialLayout.layout(filtered, density: layoutDensity, style: mapStyle)
+        mapContentVersion &+= 1
+    }
+
+    /// Opening a large map should show the topic and the first nearby
+    /// branches, not a tiny overview. Fit-to-window remains an explicit action.
+    private func focusOnRoot(viewport: CGSize) -> Bool {
+        guard let root = mapLayout.placements.first(where: { $0.parentID == nil }),
+              viewport.width > 0, viewport.height > 0 else { return false }
+        zoom = 1
+        viewportOffset = MindMapViewportGeometry.initialRootOffset(
+            root: root.center, mapSize: mapLayout.size, viewport: viewport
+        )
+        return true
     }
 
     private func fitToContent(viewport: CGSize) -> Bool {

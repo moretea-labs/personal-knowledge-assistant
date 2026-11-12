@@ -13,6 +13,16 @@ enum MindMapViewportGeometry {
         )))
     }
 
+    /// At 100%, place the root left of center so nearby child columns are
+    /// visible immediately, without shrinking the entire mind map.
+    static func initialRootOffset(root: CGPoint, mapSize: CGSize, viewport: CGSize) -> CGSize {
+        let centered = centeredOffset(for: root, mapSize: mapSize, zoom: 1)
+        return CGSize(
+            width: centered.width - viewport.width * 0.18,
+            height: centered.height
+        )
+    }
+
     static func centeredOffset(for node: CGPoint, mapSize: CGSize, zoom: CGFloat) -> CGSize {
         CGSize(
             width: (mapSize.width / 2 - node.x) * zoom,
