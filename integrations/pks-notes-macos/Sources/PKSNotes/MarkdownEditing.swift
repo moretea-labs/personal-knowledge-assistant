@@ -62,9 +62,10 @@ enum MarkdownEditing {
             return wrap(text, range: range, prefix: marker, suffix: marker)
         case .link:
             let selected = ns.substring(with: range)
-            let replacement = selected.isEmpty ? "[title](url)" : "[\(selected)](url)"
+            let label = escapedLinkLabel(selected)
+            let replacement = selected.isEmpty ? "[title](url)" : "[\(label)](url)"
             let updated = ns.replacingCharacters(in: range, with: replacement)
-            let urlLocation = range.location + (selected.isEmpty ? 8 : selected.utf16.count + 3)
+            let urlLocation = range.location + (selected.isEmpty ? 8 : label.utf16.count + 3)
             return .init(text: updated, selection: NSRange(location: urlLocation, length: 3))
         case .heading(let level):
             return prefixLines(text, range: range, prefix: String(repeating: "#", count: min(6, max(1, level))) + " ")
@@ -105,6 +106,16 @@ enum MarkdownEditing {
         let updated = ns.replacingCharacters(in: range, with: value)
         let cursor = location + (value as NSString).length
         return .init(text: updated, selection: NSRange(location: cursor, length: 0))
+    }
+
+    private static func escapedLinkLabel(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\\", with: "&#92;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "[", with: "&#91;")
+            .replacingOccurrences(of: "]", with: "&#93;")
     }
 
     private static func wrap(_ text: String, range: NSRange, prefix: String, suffix: String) -> MarkdownEditResult {

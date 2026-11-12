@@ -3403,4 +3403,47 @@ extension PKSNotesTests {
             pdf.standardizedFileURL
         )
     }
+
+    func testMarkdownLinkCommandEscapesSpecialCharactersInSelectedLabel() throws {
+        let source = #"before Research [v2] & <notes> \end after"#
+        let selected = #"Research [v2] & <notes> \end"#
+        let range = (source as NSString).range(of: selected)
+        let result = MarkdownEditing.apply(.link, to: source, selection: range)
+
+        XCTAssertEqual(
+            result.text,
+            #"before [Research &#91;v2&#93; &amp; &lt;notes&gt; &#92;end](url) after"#
+        )
+        XCTAssertEqual((result.text as NSString).substring(with: result.selection), "url")
+
+        let occurrences = MindMapOutline.linkOccurrences(in: result.text)
+        XCTAssertEqual(occurrences.count, 1)
+        XCTAssertEqual(occurrences.first?.link.target, "url")
+
+        let replacement = try XCTUnwrap(MarkdownEditing.minimalChange(from: source, to: result.text))
+        XCTAssertEqual(
+            (source as NSString).replacingCharacters(in: replacement.range, with: replacement.text),
+            result.text
+        )
+    }
+
+    func testMarkdownBoldPreservesUTF16SelectionForCJKAndEmoji() {
+        let source = "中文😀 note"
+        let range = (source as NSString).range(of: "😀 note")
+        let result = MarkdownEditing.apply(.bold, to: source, selection: range)
+
+        XCTAssertEqual(result.text, "中文**😀 note**")
+        XCTAssertEqual((result.text as NSString).substring(with: result.selection), "😀 note")
+    }
+
+    func testMarkdownTaskCommandPrefixesEverySelectedLine() {
+        let source = "one\ntwo\n"
+        let result = MarkdownEditing.apply(
+            .task,
+            to: source,
+            selection: NSRange(location: 0, length: (source as NSString).length)
+        )
+
+        XCTAssertEqual(result.text, "- [ ] one\n- [ ] two\n")
+    }
 }
