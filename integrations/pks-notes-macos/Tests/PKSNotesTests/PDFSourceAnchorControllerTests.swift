@@ -198,9 +198,11 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
                 for: url,
                 page: sourcePage,
                 root: url.deletingLastPathComponent(),
+                commentary: "My observation",
                 selectedText: selectedText
             )
         )
+        XCTAssertTrue(snippet.contains("My observation"))
         XCTAssertTrue(snippet.contains("#page=1"))
         XCTAssertTrue(snippet.contains("> First page evidence"))
         XCTAssertTrue(snippet.contains("> Second page evidence"))
