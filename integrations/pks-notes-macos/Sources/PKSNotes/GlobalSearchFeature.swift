@@ -423,9 +423,12 @@ private struct GlobalSearchPalette: View {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         ForEach(Array(results.items.enumerated()), id: \.element.id) { index, item in
                             HStack(spacing: 12) {
-                                Image(systemName: item.kind == .application ? "app" : item.kind == .folder ? "folder" : "doc")
-                                    .frame(width: 22)
-                                    .foregroundStyle(.secondary)
+                                Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
+                                    .resizable()
+                                    .interpolation(.high)
+                                    .scaledToFit()
+                                    .frame(width: 24, height: 24)
+                                    .accessibilityHidden(true)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(item.title).lineLimit(1).font(.system(size: 14, weight: .medium))
                                     Text(item.subtitle).lineLimit(1).font(.system(size: 11))
