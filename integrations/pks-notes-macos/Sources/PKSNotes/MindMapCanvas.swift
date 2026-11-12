@@ -678,6 +678,7 @@ struct MindMapCanvas: View {
             .accessibilityIdentifier("pks-mind-map-fit")
 
             Menu {
+                Button(language.text("Import XMind File…")) { importXMind() }
                 Button(language.text("Import MindNode Package…")) { importMindNode() }
                 Button(language.text("Export MindNode Using Template…")) { exportMindNode() }
                     .disabled(nodes.isEmpty)
@@ -1350,6 +1351,25 @@ struct MindMapCanvas: View {
                     try MindNodePackage.exportOutline(source, usingTemplate: template, to: destination)
                 }
                 interchangeError = language.text("New MindNode package exported. The original template and Markdown were not changed.")
+            }
+        } catch {
+            interchangeError = error.localizedDescription
+        }
+    }
+
+    private func importXMind() {
+        let panel = NSOpenPanel()
+        panel.title = language.text("Import XMind File")
+        panel.message = language.text("Import XMind topic hierarchy into a new Markdown mind map. The original .xmind file is unchanged; styles, images, notes and connections are not converted.")
+        panel.allowedContentTypes = [UTType(filenameExtension: "xmind") ?? .zip]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let markdown = try withSecurityScopedAccess(to: url) {
+                try XMindPackage.importOutline(from: url)
+            }
+            if importOutline(markdown, url.deletingPathExtension().lastPathComponent) {
+                interchangeError = language.text("XMind topic hierarchy imported. Styles, images, notes, tasks and cross-connections remain in the original file.")
             }
         } catch {
             interchangeError = error.localizedDescription

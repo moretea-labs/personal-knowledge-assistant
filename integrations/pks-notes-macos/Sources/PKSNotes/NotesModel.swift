@@ -56,10 +56,14 @@ struct NoteItem: Identifiable, Hashable {
 
     var id: String { url.path }
     var isFolder: Bool { children != nil }
+    var isMindMapPackage: Bool { !isFolder && ["mindnode", "xmind"].contains(url.pathExtension.lowercased()) }
     var isMarkdown: Bool { !isFolder && ["md", "markdown"].contains(url.pathExtension.lowercased()) }
     var isPDF: Bool { !isFolder && url.pathExtension.lowercased() == "pdf" }
     var name: String { isFolder ? url.lastPathComponent : isMarkdown ? url.deletingPathExtension().lastPathComponent : url.lastPathComponent }
-    var iconName: String { isFolder ? "folder" : isPDF ? "doc.richtext" : isMarkdown ? "doc.text" : "doc" }
+    var iconName: String {
+        isFolder ? "folder" : isPDF ? "doc.richtext" : isMarkdown ? "doc.text"
+            : isMindMapPackage ? "point.3.connected.trianglepath.dotted" : "doc"
+    }
 
     static func == (lhs: NoteItem, rhs: NoteItem) -> Bool { lhs.url == rhs.url }
     func hash(into hasher: inout Hasher) { hasher.combine(url) }
@@ -223,11 +227,18 @@ enum WorkspaceFiles {
         return result
     }
 
+    static func isOpaqueDocumentPackage(_ url: URL) -> Bool {
+        url.pathExtension.lowercased() == "mindnode"
+    }
+
     static func tree(in root: URL, recursive: Bool = true) -> [NoteItem] {
         directoryEntries(in: root).compactMap { entry -> NoteItem? in
             guard !scanCancelled else { return nil }
             switch entry.kind {
             case .directory:
+                if isOpaqueDocumentPackage(entry.url) {
+                    return NoteItem(url: entry.url, children: nil)
+                }
                 let children = recursive ? tree(in: entry.url, recursive: true) : []
                 return NoteItem(url: entry.url, children: children)
             case .regular:
@@ -249,7 +260,11 @@ enum WorkspaceFiles {
                 guard !scanCancelled else { return }
                 switch entry.kind {
                 case .directory:
-                    pending.append(entry.url)
+                    if isOpaqueDocumentPackage(entry.url) {
+                        visit(entry.url)
+                    } else {
+                        pending.append(entry.url)
+                    }
                 case .regular:
                     visit(entry.url)
                 }
@@ -993,6 +1008,10 @@ final class NotesModel: ObservableObject {
     private var knowledgeLinkTask: Task<Void, Never>?
     private var markdownAnchorSequence: UInt64 = 0
     private var fileRefreshGeneration: UInt64 = 0
+    private var workspaceMonitor: WorkspaceChangeMonitor?
+    private var externalRefreshTask: Task<Void, Never>?
+    private var externalNoteTask: Task<Void, Never>?
+    private var pendingExternalPaths: Set<String> = []
 
     var isDirty: Bool { selected != nil && draft != baseline }
     var title: String { externalTitle ?? previewPDF?.lastPathComponent ?? selected?.lastPathComponent ?? "Select a note" }
@@ -1119,7 +1138,17 @@ final class NotesModel: ObservableObject {
         // A detached scan may still finish after cancellation. Swapping the
         // cache object isolates any late writes to the old workspace instance.
         backlinkParseCache = WorkspaceBacklinkParseCache()
+        // Stop observing the old workspace before publishing the new one.
+        workspaceMonitor = nil
+        externalRefreshTask?.cancel()
+        externalNoteTask?.cancel()
+        pendingExternalPaths.removeAll()
         root = resolved
+        workspaceMonitor = WorkspaceChangeMonitor(root: resolved) { [weak self] paths in
+            Task { @MainActor [weak self] in
+                self?.noteExternalPaths(paths, in: resolved)
+            }
+        }
         query = ""
         message = nil
         UserDefaults.standard.set(resolved.path, forKey: "PKSNotesWorkspace")
@@ -1224,6 +1253,76 @@ final class NotesModel: ObservableObject {
         loadingFiles = false
         fileRefreshTask = nil
         startPendingFolderLoad()
+    }
+
+    /// FSEvents is an invalidation hint, never an alternate file inventory.
+    /// Coalesce bursts and refresh only materialized directories. A changed open
+    /// note is reloaded only if the user has no unsaved edits.
+    func noteExternalPaths(_ paths: [String], in observedRoot: URL) {
+        guard let root, root == observedRoot else { return }
+        let base = root.standardizedFileURL.path
+        pendingExternalPaths.formUnion(paths.filter {
+            $0 == base || $0.hasPrefix(base + "/")
+        })
+        guard !pendingExternalPaths.isEmpty else { return }
+        externalRefreshTask?.cancel()
+        externalRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(280))
+            guard !Task.isCancelled, let self, self.root == observedRoot else { return }
+            let changed = self.pendingExternalPaths
+            self.pendingExternalPaths.removeAll()
+            self.externalRefreshTask = nil
+            var parents: Set<URL> = []
+            for path in changed {
+                let url = URL(fileURLWithPath: path).standardizedFileURL
+                parents.insert(url.deletingLastPathComponent())
+                // Directory events may include only their own path.
+                parents.insert(url)
+            }
+            self.scheduleFilesystemMutationRefresh(parentFolders: Array(parents))
+            self.refreshExternallyChangedNote()
+        }
+    }
+
+    private func refreshExternallyChangedNote() {
+        guard let root, let selected, !loadingNote else { return }
+        let currentStamp = WorkspaceFiles.fileStamp(selected)
+        guard currentStamp != savedFileStamp else { return }
+        guard currentStamp != nil, WorkspaceFiles.contains(selected, in: root) else {
+            message = AppLanguage.current.text("The file changed outside Leafspan. Reopen it before saving to avoid overwriting edits.")
+            return
+        }
+        guard !isDirty else {
+            message = AppLanguage.current.text("The file changed outside Leafspan. Reopen it before saving to avoid overwriting edits.")
+            return
+        }
+
+        let expectedRevision = draftRevision
+        externalNoteTask?.cancel()
+        externalNoteTask = Task.detached(priority: .utility) { [weak self] in
+            guard let loaded = try? await WorkspaceFiles.readUTF8ForOpening(selected),
+                  !Task.isCancelled else { return }
+            await self?.applyExternalNote(
+                loaded.content, stamp: loaded.stamp,
+                note: selected, root: root, expectedRevision: expectedRevision
+            )
+        }
+    }
+
+    private func applyExternalNote(
+        _ text: String, stamp: WorkspaceFileStamp, note: URL,
+        root expectedRoot: URL, expectedRevision: UInt64
+    ) {
+        guard root == expectedRoot, selected == note, !loadingNote,
+              !isDirty, draftRevision == expectedRevision,
+              WorkspaceFiles.fileStamp(note) == stamp else { return }
+        let refreshed = WorkspaceFiles.editorText(text)
+        baseline = refreshed
+        draft = refreshed
+        savedFileStamp = stamp
+        cacheNote(note, content: refreshed, stamp: stamp)
+        activeMatch = nil
+        externalNoteTask = nil
     }
 
     /// A local filesystem mutation only invalidates the global derived index and
@@ -1582,7 +1681,9 @@ final class NotesModel: ObservableObject {
         }
         var info = Darwin.stat()
         guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0,
-              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG)
+              || ((info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR)
+                  && WorkspaceFiles.isOpaqueDocumentPackage(url)) else {
             message = AppLanguage.current.text("The original file is no longer available."); return
         }
 

@@ -723,6 +723,7 @@ struct NativePDFPreview: View {
 
     @State private var pageText = "1"
     @State private var searchText = ""
+    @FocusState private var pdfSearchFocused: Bool
     @State private var copiedPage: Int?
 
     var body: some View {
@@ -774,6 +775,9 @@ struct NativePDFPreview: View {
         }
         .onAppear {
             pageText = String(controller.currentPageIndex + 1)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.findCurrentFile)) { _ in
+            pdfSearchFocused = true
         }
         .onChange(of: url) { _, _ in
             // Loading belongs to NotesWindow. Reset only this reader's
@@ -928,6 +932,7 @@ struct NativePDFPreview: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                 TextField(language.text("Find in PDF"), text: $searchText)
+                    .focused($pdfSearchFocused)
                     .textFieldStyle(.plain)
                     .frame(minWidth: 120, idealWidth: 180, maxWidth: 220)
                     .onSubmit { controller.search(searchText) }

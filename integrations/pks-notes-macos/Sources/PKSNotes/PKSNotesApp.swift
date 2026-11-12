@@ -139,10 +139,14 @@ struct PKSNotesApp: App {
                 Divider()
                 Button(language.text("Save Markdown")) { model.save() }
                     .keyboardShortcut("s", modifiers: .command)
-                Button(language.text("Find in Notes")) {
-                    NotificationCenter.default.post(name: NotesMenuEvent.search, object: nil)
+                Button(language.text("Find in Current File")) {
+                    NotificationCenter.default.post(name: NotesMenuEvent.findCurrentFile, object: nil)
                 }
                 .keyboardShortcut("f", modifiers: .command)
+                Button(language.text("Search Workspace")) {
+                    NotificationCenter.default.post(name: NotesMenuEvent.search, object: nil)
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
                 Button(language.text("Search")) { model.search() }
                     .keyboardShortcut(.return, modifiers: [.command, .shift])
                 Divider()
@@ -316,9 +320,10 @@ enum MarkdownNativeCommand {
     }
 }
 
-private enum NotesMenuEvent {
+enum NotesMenuEvent {
     static let quickOpen = Notification.Name("PKSNotesMenuQuickOpen")
     static let newNote = Notification.Name("PKSNotesMenuNewNote")
+    static let findCurrentFile = Notification.Name("PKSNotesFindCurrentFile")
     static let search = Notification.Name("PKSNotesMenuSearch")
     static let toggleEdit = Notification.Name("PKSNotesToggleEditPreview")
     static let paste = Notification.Name("PKSNotesPaste")
@@ -652,6 +657,19 @@ struct NotesWindow: View {
                         .accessibilityIdentifier("pks-autosave-progress")
                 }
 
+                // Keep the active document locator one click away even when
+                // the sidebar is showing search/recent items or is collapsed.
+                Button {
+                    revealCurrentFile()
+                } label: {
+                    toolbarSymbol("scope")
+                }
+                .buttonStyle(.plain)
+                .disabled(currentWorkspaceFile == nil)
+                .help(language.text("Reveal Current File"))
+                .accessibilityLabel(language.text("Reveal Current File"))
+                .accessibilityIdentifier("pks-reveal-current-file-button")
+
                 Menu {
                     Button(language.text("Quick Open Note…"), systemImage: "doc.text.magnifyingglass") {
                         openQuickPicker()
@@ -660,7 +678,7 @@ struct NotesWindow: View {
                         revealCurrentFile()
                     }
                     .disabled(currentWorkspaceFile == nil)
-                    .accessibilityIdentifier("pks-reveal-current-file-button")
+                    .accessibilityIdentifier("pks-reveal-current-file-menu")
                     Button(language.text("New Mind Map"), systemImage: "point.3.connected.trianglepath.dotted") {
                         beginNewMindMap()
                     }
@@ -708,6 +726,9 @@ struct NotesWindow: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.revealCurrentFile)) { _ in
             revealCurrentFile()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.findCurrentFile)) { _ in
+            findInCurrentFile()
         }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.search)) { _ in
             focusKnowledgeSearch()
@@ -1006,6 +1027,30 @@ struct NotesWindow: View {
         searchFieldFocused = true
     }
 
+    private func findInCurrentFile() {
+        // PDF owns its own native PDFKit match navigator and handles this event.
+        if model.previewPDF != nil { return }
+        guard model.selected != nil, model.externalBody == nil else {
+            focusKnowledgeSearch()
+            return
+        }
+        if showingMindMap { showingMindMap = false }
+        if mode == .read { mode = .edit }
+        Task { @MainActor in
+            editorFocused = true
+            // A mode change may mount TextEditor on the next render pass.
+            await Task.yield()
+            let window = NSApp.keyWindow ?? NSApp.mainWindow
+            if let textView = markdownTextView(in: window?.contentView) {
+                textView.usesFindBar = true
+                window?.makeFirstResponder(textView)
+                let action = NSMenuItem()
+                action.tag = Int(NSTextFinder.Action.showFindInterface.rawValue)
+                textView.performFindPanelAction(action)
+            }
+        }
+    }
+
     private var currentWorkspaceFile: URL? {
         guard let root = model.root else { return nil }
         return [model.selected, model.previewPDF, model.previewSource?.localFileURL]
@@ -1028,6 +1073,26 @@ struct NotesWindow: View {
         Task { @MainActor in
             await Task.yield()
             treeRevealRequest = file.path
+        }
+    }
+
+    private func importAsEditableMindMap(_ url: URL) {
+        guard let root = model.root, WorkspaceFiles.contains(url, in: root) else { return }
+        let ext = url.pathExtension.lowercased()
+        guard ["mindnode", "xmind"].contains(ext) else { return }
+        do {
+            let markdown = try ext == "mindnode"
+                ? MindNodePackage.importOutline(from: url)
+                : XMindPackage.importOutline(from: url)
+            let sourceName = url.deletingPathExtension().lastPathComponent
+            guard let created = model.newNote(
+                named: sourceName, in: url.deletingLastPathComponent(),
+                initialContent: markdown
+            ) else { return }
+            pendingMindMapOpen = created
+            model.message = language.text("Imported editable hierarchy; the original file retains images, styles, notes, tasks and connections.")
+        } catch {
+            model.message = error.localizedDescription
         }
     }
 
@@ -2311,7 +2376,7 @@ struct NotesWindow: View {
                 } else if model.searching {
                     ProgressView().controlSize(.mini)
                 } else {
-                    Text("⌘F")
+                    Text("⌘⇧F")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.tertiary)
                 }
@@ -2523,6 +2588,12 @@ struct NotesWindow: View {
 
     @ViewBuilder
     private func fileActions(_ url: URL) -> some View {
+        if ["mindnode", "xmind"].contains(url.pathExtension.lowercased()) {
+            Button(language.text("Import as Editable Mind Map"),
+                   systemImage: "point.3.connected.trianglepath.dotted") {
+                importAsEditableMindMap(url)
+            }
+        }
         Button(language.text("Show in Finder"), systemImage: "folder") {
             model.revealInFinder(url)
         }
@@ -2551,7 +2622,8 @@ struct NotesWindow: View {
         }
         if model.canManage(url) {
             Divider()
-            if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+            if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                && !WorkspaceFiles.isOpaqueDocumentPackage(url) {
                 Button(language.text("New Folder…"), systemImage: "folder.badge.plus") {
                     beginNewFolder(in: url)
                 }
