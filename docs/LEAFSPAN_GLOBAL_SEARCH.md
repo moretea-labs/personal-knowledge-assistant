@@ -40,8 +40,13 @@ index is created by the macOS app.
 
 - Applications: native filesystem catalog of standard app installation
   directories and LaunchServices (read-only, no app index persisted).
-- Filenames/folders: system Spotlight metadata (read-only). Its coverage
-  depends on the macOS Spotlight index and system privacy settings.
+- Filenames/folders and system-indexed document content: Spotlight metadata
+  (read-only). Searches reuse the OS index; queries of three or more characters
+  match either filename or kMDItemTextContent. Exact/prefix filenames outrank
+  body-only matches. Content matches are explicitly labeled rather than
+  fabricating excerpts (Spotlight does not expose indexed full text for the app
+  to read). Very short queries remain filename-only to reduce noise.
+  Coverage depends on the Spotlight index and system privacy settings.
   The query uses the LocalComputer scope rather than IndexedLocalComputer:
   on macOS, the latter can omit iCloud Drive files that native Spotlight
   otherwise returns. A result may provide its local path but no metadata URL;

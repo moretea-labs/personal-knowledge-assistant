@@ -56,24 +56,30 @@ struct GlobalSearchItem: Identifiable, Sendable {
     // Existing PKS provenance for in-workspace Markdown/PDF navigation.
     let sourceHit: SearchHit?
     let isRelated: Bool
+    let spotlightContentMatch: Bool
+    let spotlightRelevance: Double
 
     static func application(_ url: URL, title: String) -> GlobalSearchItem {
         .init(id: "app:" + url.path, kind: .application, title: title,
               subtitle: url.deletingLastPathComponent().path, url: url,
-              snippet: nil, sourceHit: nil, isRelated: false)
+              snippet: nil, sourceHit: nil, isRelated: false,
+              spotlightContentMatch: false, spotlightRelevance: 0)
     }
 
     static func file(_ hit: SearchHit, url: URL, isRelated: Bool = false) -> GlobalSearchItem {
         .init(id: "file:" + url.path, kind: .file, title: hit.title,
               subtitle: url.deletingLastPathComponent().path, url: url,
-              snippet: hit.snippet, sourceHit: hit, isRelated: isRelated)
+              snippet: hit.snippet, sourceHit: hit, isRelated: isRelated,
+              spotlightContentMatch: false, spotlightRelevance: 0)
     }
 
-    static func spotlight(_ url: URL, title: String, isFolder: Bool) -> GlobalSearchItem {
+    static func spotlight(_ url: URL, title: String, isFolder: Bool,
+                          contentMatch: Bool = false, relevance: Double = 0) -> GlobalSearchItem {
         .init(id: (isFolder ? "folder:" : "file:") + url.path,
               kind: isFolder ? .folder : .file, title: title,
               subtitle: url.deletingLastPathComponent().path, url: url,
-              snippet: nil, sourceHit: nil, isRelated: false)
+              snippet: nil, sourceHit: nil, isRelated: false,
+              spotlightContentMatch: contentMatch, spotlightRelevance: relevance)
     }
 }
 
@@ -178,8 +184,8 @@ enum GlobalSearchRanker {
             let b = weight(right)
             if a != b { return a < b }
             if a >= 6 {
-                let leftScore = left.sourceHit?.score ?? 0
-                let rightScore = right.sourceHit?.score ?? 0
+                let leftScore = left.sourceHit?.score ?? left.spotlightRelevance
+                let rightScore = right.sourceHit?.score ?? right.spotlightRelevance
                 if leftScore != rightScore { return leftScore > rightScore }
             }
             if left.title.count != right.title.count {
@@ -532,7 +538,12 @@ private struct GlobalSearchPalette: View {
                                     Text(item.title).lineLimit(1).font(.system(size: 14, weight: .medium))
                                     Text(item.subtitle).lineLimit(1).font(.system(size: 11))
                                         .foregroundStyle(.secondary)
-                                    if let snippet = item.snippet, !snippet.isEmpty, snippet != item.subtitle {
+                                    if item.spotlightContentMatch {
+                                        Text(AppLanguage.current.resolved == .simplifiedChinese
+                                             ? "正文匹配" : "Content match")
+                                            .lineLimit(1).font(.system(size: 11))
+                                            .foregroundStyle(.secondary)
+                                    } else if let snippet = item.snippet, !snippet.isEmpty, snippet != item.subtitle {
                                         Text(snippet).lineLimit(1).font(.system(size: 11))
                                             .foregroundStyle(.secondary)
                                     }

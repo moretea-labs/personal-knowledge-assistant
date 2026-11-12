@@ -17,8 +17,7 @@ final class GlobalSpotlightLookup {
         // IndexedLocalComputer omits some iCloud Drive files even when Finder
         // and Spotlight CLI can locate them. LocalComputer includes the home directory.
         metadata.searchScopes = [NSMetadataQueryLocalComputerScope]
-        metadata.predicate = NSPredicate(format: "%K CONTAINS[cd] %@",
-                                         NSMetadataItemFSNameKey, term)
+        metadata.predicate = Self.searchPredicate(for: term)
         metadata.sortDescriptors = [NSSortDescriptor(key: NSMetadataItemFSNameKey, ascending: true)]
         query = metadata
         let token = UUID()
@@ -31,7 +30,10 @@ final class GlobalSpotlightLookup {
                 guard let self, self.searchToken == token,
                       let metadata = self.query else { return }
                 metadata.disableUpdates()
-                let hits: [GlobalSearchItem] = metadata.results.prefix(250).compactMap { value in
+                // A broad content query can return many matches. Inspect a
+                // bounded projection, then prefer filename hits over body hits.
+                // The old 250-row prefix truncated useful matches prematurely.
+                let hits: [GlobalSearchItem] = metadata.results.prefix(5000).compactMap { value in
                     guard let result = value as? NSMetadataItem,
                           let url = Self.fileURL(
                               metadataURL: result.value(forAttribute: NSMetadataItemURLKey) as? URL,
@@ -41,14 +43,34 @@ final class GlobalSpotlightLookup {
                     let name = result.value(forAttribute: NSMetadataItemFSNameKey) as? String
                         ?? url.lastPathComponent
                     let type = result.value(forAttribute: NSMetadataItemContentTypeKey) as? String
+                    let contentOnly = !name.localizedStandardContains(term)
+                    let relevance = (result.value(
+                        forAttribute: NSMetadataQueryResultContentRelevanceAttribute
+                    ) as? NSNumber)?.doubleValue ?? 0
                     return GlobalSearchItem.spotlight(url, title: name,
-                                                      isFolder: type == "public.folder")
+                                                      isFolder: type == "public.folder",
+                                                      contentMatch: contentOnly,
+                                                      relevance: relevance)
                 }
                 self.cancel()
                 completion(GlobalSpotlightLookup.rank(hits, for: term))
             }
         }
         if !metadata.start() { cancel() }
+    }
+
+    // Reuse macOS Spotlight's existing content index; no new disk crawl or
+    // document ingestion. Very short queries stay filename-only to avoid
+    // broad, low-signal full-text searches.
+    nonisolated static func searchPredicate(for term: String) -> NSPredicate {
+        if term.count < 3 {
+            return NSPredicate(format: "%K CONTAINS[cd] %@",
+                               NSMetadataItemFSNameKey, term)
+        }
+        return NSPredicate(
+            format: "(%K CONTAINS[cd] %@) OR (%K CONTAINS[cd] %@)",
+            NSMetadataItemFSNameKey, term, "kMDItemTextContent", term
+        )
     }
 
     // NSMetadataItemURLKey can be absent for iCloud Drive and local results;

@@ -49,6 +49,53 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertEqual(items.count, 3)
     }
 
+    func testSystemSpotlightCoversFilenamesAndIndexedDocumentContent() {
+        let full = GlobalSpotlightLookup.searchPredicate(for: "OpenClaw")
+        XCTAssertTrue(full.evaluate(with: [
+            NSMetadataItemFSNameKey: "OpenClaw-guide.pdf",
+            "kMDItemTextContent": ""
+        ]))
+        XCTAssertTrue(full.evaluate(with: [
+            NSMetadataItemFSNameKey: "learning.md",
+            "kMDItemTextContent": "Notes on OpenClaw commands"
+        ]))
+        XCTAssertFalse(full.evaluate(with: [
+            NSMetadataItemFSNameKey: "budget.pdf",
+            "kMDItemTextContent": "unrelated project"
+        ]))
+        let short = GlobalSpotlightLookup.searchPredicate(for: "OA")
+        XCTAssertFalse(short.evaluate(with: [
+            NSMetadataItemFSNameKey: "learning.md",
+            "kMDItemTextContent": "OA only in body"
+        ]))
+    }
+
+    func testDirectNameMatchesOutrankGlobalSpotlightBodyMatches() {
+        let direct = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Documents/OpenClaw-guide.md"),
+            title: "OpenClaw-guide.md", isFolder: false
+        )
+        let body = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Documents/commands.md"),
+            title: "commands.md", isFolder: false,
+            contentMatch: true, relevance: 0.85
+        )
+        let weakerBody = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Documents/misc.md"),
+            title: "misc.md", isFolder: false,
+            contentMatch: true, relevance: 0.3
+        )
+        let found = GlobalSearchRanker.merge(
+            apps: [], documents: [], spotlight: [weakerBody, direct, body],
+            query: "OpenClaw"
+        )
+        XCTAssertEqual(found.map(\.title),
+                       ["OpenClaw-guide.md", "commands.md", "misc.md"])
+        XCTAssertFalse(found[0].spotlightContentMatch)
+        XCTAssertTrue(found[1].spotlightContentMatch)
+        XCTAssertEqual(found[1].spotlightRelevance, 0.85)
+    }
+
     func testSpotlightRecoversICloudFilePathWithoutMetadataURL() {
         // A Spotlight result may have kMDItemPath but no kMDItemURL.
         let path = "/Users/example/Library/Mobile Documents/com~apple~CloudDocs/吉他谱/夜的钢琴曲五.pdf"
