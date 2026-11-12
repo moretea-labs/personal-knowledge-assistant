@@ -60,6 +60,7 @@ enum MindNodePackage {
         struct ImportedTopic {
             let title: String
             let noteParagraphs: [String]
+            let titleLinks: [(label: String, target: String)]
             let imageMarker: String?
             let children: [ImportedTopic]
         }
@@ -112,6 +113,7 @@ enum MindNodePackage {
                     return [ImportedTopic(
                         title: title,
                         noteParagraphs: note.map(noteParagraphs) ?? [],
+                        titleLinks: titleLinks(html),
                         imageMarker: try attachedImage(node),
                         children: visibleChildren
                     )]
@@ -142,11 +144,17 @@ enum MindNodePackage {
         func emitImage(_ marker: String?, indent: String) {
             if let marker { lines.append(indent + "![MindNode image](" + marker + ")") }
         }
+        func emitLinks(_ links: [(label: String, target: String)], indent: String) {
+            for link in links {
+                lines.append(indent + "[\(link.label)](\(link.target))")
+            }
+        }
         func emitChildren(_ children: [ImportedTopic], depth: Int) {
             for child in children {
                 let indent = String(repeating: "  ", count: depth)
                 lines.append(indent + "- " + child.title)
                 emitNote(child.noteParagraphs, indent: indent + "  ")
+                emitLinks(child.titleLinks, indent: indent + "  ")
                 emitImage(child.imageMarker, indent: indent + "  ")
                 emitChildren(child.children, depth: depth + 1)
             }
@@ -155,6 +163,7 @@ enum MindNodePackage {
         if roots.count == 1, topics.count == 1 {
             lines.append("# " + topics[0].title)
             emitNote(topics[0].noteParagraphs, indent: "")
+            emitLinks(topics[0].titleLinks, indent: "")
             emitImage(topics[0].imageMarker, indent: "")
             emitChildren(topics[0].children, depth: 0)
         } else {
@@ -314,6 +323,51 @@ enum MindNodePackage {
         return root
     }
 
+    /// Preserve source URLs attached to rich-text node titles. A link is emitted
+    /// as body Markdown beside its visible title; the existing MindMapOutline
+    /// link extractor then makes it available from that same node.
+    /// Unsafe schemes remain plain title text and are not activated.
+    private static func titleLinks(_ html: String) -> [(label: String, target: String)] {
+        let pattern = #"(?is)<a\b([^>]*)>(.*?)</a\s*>"#
+        let hrefPattern = #"(?i)\bhref\s*=\s*(['"])(.*?)\1"#
+        guard let anchors = try? NSRegularExpression(pattern: pattern),
+              let hrefs = try? NSRegularExpression(pattern: hrefPattern) else { return [] }
+        let source = html as NSString
+        return anchors.matches(in: html, range: NSRange(location: 0, length: source.length))
+            .compactMap { match -> (label: String, target: String)? in
+                guard match.range(at: 1).location != NSNotFound,
+                      match.range(at: 2).location != NSNotFound else { return nil }
+                let attrs = source.substring(with: match.range(at: 1))
+                let attrsSource = attrs as NSString
+                guard let href = hrefs.firstMatch(
+                    in: attrs, range: NSRange(location: 0, length: attrsSource.length)
+                ), href.range(at: 2).location != NSNotFound else { return nil }
+                let originalURL = decodeHTMLEntities(attrsSource.substring(with: href.range(at: 2)))
+                guard let parsed = URL(string: originalURL),
+                      ["http", "https"].contains(parsed.scheme?.lowercased() ?? ""),
+                      parsed.host != nil else { return nil }
+                let label = plainTitle(source.substring(with: match.range(at: 2)))
+                guard !label.isEmpty else { return nil }
+                return (
+                    label.replacingOccurrences(of: "\\", with: "\\\\")
+                         .replacingOccurrences(of: "[", with: "\\[")
+                         .replacingOccurrences(of: "]", with: "\\]"),
+                    originalURL.replacingOccurrences(of: "(", with: "%28")
+                               .replacingOccurrences(of: ")", with: "%29")
+                )
+            }
+    }
+
+    private static func decodeHTMLEntities(_ string: String) -> String {
+        let entities = [
+            ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""),
+            ("&apos;", "'"), ("&#39;", "'"), ("&nbsp;", " "), ("&amp;", "&")
+        ]
+        return entities.reduce(string) { value, pair in
+            value.replacingOccurrences(of: pair.0, with: pair.1)
+        }
+    }
+
     /// MindNode notes are HTML paragraphs, commonly with Cocoa font spans.
     /// Keep paragraph boundaries and all readable text rather than discarding
     /// the note. Formatting remains in the untouched source package.
@@ -336,13 +390,7 @@ enum MindNodePackage {
         let stripped = linebreaks.replacingOccurrences(
             of: "<[^>]*>", with: "", options: .regularExpression
         )
-        let entities = [
-            ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""),
-            ("&apos;", "'"), ("&#39;", "'"), ("&nbsp;", " "), ("&amp;", "&")
-        ]
-        let decoded = entities.reduce(stripped) { value, entity in
-            value.replacingOccurrences(of: entity.0, with: entity.1)
-        }
+        let decoded = decodeHTMLEntities(stripped)
         return decoded.components(separatedBy: .newlines)
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)

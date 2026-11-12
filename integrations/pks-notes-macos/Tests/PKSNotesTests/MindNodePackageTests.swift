@@ -133,6 +133,38 @@ final class MindNodePackageTests: XCTestCase {
         XCTAssertEqual(nodes.map(\.depth), [0, 1, 2])
     }
 
+    func testPreservesRichTitleHyperlinksOnTheirOriginalNodes() throws {
+        let tree: [String: Any] = [
+            "title": ["text": "<p>Root</p>"],
+            "subnodes": [
+                [
+                    "title": ["text": "<p><a style='color: blue' href='https://example.org/diagram?a=1&amp;b=2'>图片链接</a></p>"],
+                    "subnodes": []
+                ],
+                [
+                    "title": ["text": "<p><a href='javascript:alert(1)'>Unsafe</a></p>"],
+                    "subnodes": []
+                ]
+            ]
+        ]
+        let (base, package) = try fixture(node: tree)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let imported = try MindNodePackage.importOutline(from: package)
+        XCTAssertEqual(MindMapOutline.nodes(in: imported).map(\.title),
+                       ["Root", "图片链接", "Unsafe"])
+        let links = MindMapOutline.linkOccurrences(in: imported)
+        XCTAssertEqual(links.count, 1, "Unsafe hrefs must not become clickable links.")
+        XCTAssertEqual(links[0].link.label, "图片链接")
+        XCTAssertEqual(links[0].link.target, "https://example.org/diagram?a=1&b=2")
+        let presentations = MindMapOutline.presentations(in: imported,
+                                                     nodes: MindMapOutline.nodes(in: imported))
+        let linkedNode = try XCTUnwrap(MindMapOutline.nodes(in: imported).first {
+            $0.title == "图片链接"
+        })
+        XCTAssertEqual(presentations[linkedNode.id]?.links.map(\.target),
+                       ["https://example.org/diagram?a=1&b=2"])
+    }
+
     /// Opt-in, read-only regression against the user's actual MindNode corpus.
     /// The current Markdown projection must retain every visible note as body
     /// text without ever writing to the original document packages.
@@ -158,6 +190,7 @@ final class MindNodePackageTests: XCTestCase {
         var topics = 0
         var notes = 0
         var images = 0
+        var links = 0
         for package in packages {
             let original = try Data(contentsOf: package.appendingPathComponent("contents.xml"))
             let source = try XCTUnwrap(PropertyListSerialization.propertyList(
@@ -166,7 +199,14 @@ final class MindNodePackageTests: XCTestCase {
             let canvas = try XCTUnwrap(source["canvas"] as? [String: Any])
             let maps = try XCTUnwrap(canvas["mindMaps"] as? [[String: Any]])
             var sourceNotes = 0
+            var sourceLinks = 0
             func countNotes(_ node: [String: Any]) {
+                if let title = (node["title"] as? [String: Any])?["text"] as? String {
+                    let regex = try? NSRegularExpression(pattern: #"(?i)<a\b[^>]+href\s*="#)
+                    sourceLinks += regex?.numberOfMatches(
+                        in: title, range: NSRange(location: 0, length: (title as NSString).length)
+                    ) ?? 0
+                }
                 if (node["note"] as? [String: Any])?["text"] is String { sourceNotes += 1 }
                 for child in (node["subnodes"] as? [[String: Any]]) ?? [] {
                     countNotes(child)
@@ -186,6 +226,10 @@ final class MindNodePackageTests: XCTestCase {
             ), "Failed to migrate \(package.lastPathComponent): \(model.message ?? "unknown error")")
             let editable = try String(contentsOf: created, encoding: .utf8)
             XCTAssertFalse(editable.contains("__LEAFSPAN_MINDNODE_IMAGE_"))
+            let extractedLinks = MindMapOutline.linkOccurrences(in: editable)
+                .filter { $0.link.target.hasPrefix("https://") || $0.link.target.hasPrefix("http://") }
+            XCTAssertEqual(extractedLinks.count, sourceLinks, package.lastPathComponent)
+            links += extractedLinks.count
             XCTAssertEqual(MindMapOutline.nodes(in: editable).count,
                            MindMapOutline.nodes(in: markdown).count)
             for image in imported.images {
@@ -206,7 +250,7 @@ final class MindNodePackageTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(
             at: destination, includingPropertiesForKeys: nil
         ).filter { $0.pathExtension == "md" }.count, files)
-        print("REAL_MINDNODE_MIGRATION files=\(files) topics=\(topics) note_nodes=\(notes) image_assets=\(images) staged_to_temporary_workspace=true")
+        print("REAL_MINDNODE_MIGRATION files=\(files) topics=\(topics) note_nodes=\(notes) image_assets=\(images) retained_title_links=\(links) staged_to_temporary_workspace=true")
     }
 
     func testRejectsUnsupportedVersionAndMalformedNodeTree() throws {
