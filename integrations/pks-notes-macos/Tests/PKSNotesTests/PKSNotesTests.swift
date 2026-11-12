@@ -3446,4 +3446,31 @@ extension PKSNotesTests {
 
         XCTAssertEqual(result.text, "- [ ] one\n- [ ] two\n")
     }
+
+    @MainActor
+    func testMarkdownToolbarEditUsesOneStepAppKitUndo() async throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),
+            styleMask: [],
+            backing: .buffered,
+            defer: true
+        )
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 240))
+        textView.allowsUndo = true
+        window.contentView = textView
+        window.makeFirstResponder(textView)
+        textView.string = "Hello"
+        textView.setSelectedRange(NSRange(location: 0, length: 5))
+        textView.undoManager?.removeAllActions()
+
+        XCTAssertTrue(MarkdownNativeCommand.perform("bold", in: textView))
+        XCTAssertEqual(textView.string, "**Hello**")
+        await Task.yield()
+        XCTAssertEqual((textView.string as NSString).substring(with: textView.selectedRange()), "Hello")
+
+        let undoManager = try XCTUnwrap(textView.undoManager)
+        XCTAssertTrue(undoManager.canUndo)
+        undoManager.undo()
+        XCTAssertEqual(textView.string, "Hello")
+    }
 }
