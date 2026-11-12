@@ -1,6 +1,6 @@
 // @ts-nocheck
 import test from 'node:test';import assert from 'node:assert/strict';import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';import { tmpdir } from 'node:os';import { join } from 'node:path';import { PKSService } from '../src/core/service.js';import type { PKSConfig } from '../src/types.js';
-async function setup(){const root=await mkdtemp(join(tmpdir(),'pks-'));const docs=join(root,'docs');const managed=join(root,'managed');const data=join(root,'data');await mkdir(docs,{recursive:true});const cfg:PKSConfig={dataDir:data,managedStore:managed,port:0,host:'127.0.0.1',sourceRoots:[{id:'docs',type:'local',name:'Docs',root:docs},{id:'managed',type:'managed',name:'Managed',root:managed}],semantic:{provider:'hash',dimensions:128}};return{root,docs,managed,svc:await new PKSService(cfg).open()};}
+async function setup(){const root=await mkdtemp(join(tmpdir(),'pks-'));const docs=join(root,'docs');const managed=join(root,'managed');const data=join(root,'data');await mkdir(docs,{recursive:true});await mkdir(managed,{recursive:true});const cfg:PKSConfig={dataDir:data,managedStore:managed,port:0,host:'127.0.0.1',sourceRoots:[{id:'docs',type:'local',name:'Docs',root:docs},{id:'managed',type:'managed',name:'Managed',root:managed}],semantic:{provider:'hash',dimensions:128}};return{root,docs,managed,svc:await new PKSService(cfg).open()};}
 test('indexes, searches, structures health and preserves provenance',async()=>{const x=await setup();await writeFile(join(x.docs,'lab-2026-07-10.md'),'# Lab\n肌酐 112 μmol/L\n胱抑素C 1.57 mg/L\n');await x.svc.sync();const r=await x.svc.search('肌酐');assert.ok(r.length);assert.match(r[0].uri,/lab-2026-07-10/);const rows=x.svc.db.db.prepare('select * from medical_observations order by observation_type').all() as any[];assert.equal(rows.length,2);assert.ok(rows.every(r=>r.source_document_id));assert.ok(rows.every(r=>r.observed_at==='2026-07-10')); x.svc.db.close();});
 test('writes canonical markdown and can undo',async()=>{const x=await setup();await x.svc.sync();const m=await x.svc.writer.create({domain:'movies',title:'Dune',content:'Great world building.',structuredData:{type:'movie_watch',rating:4,watched_at:'2026-08-10',genres:['science fiction','drama']}});assert.match(await readFile(m.uri,'utf8'),/rating: 4/);const rs=await x.svc.search('Dune');assert.ok(rs.length);const mem=x.svc.memory.build('movies');assert.equal(mem.profile.count,1);await x.svc.writer.undo(m.mutationId);assert.equal((await x.svc.search('Dune')).length,0);assert.equal(x.svc.memory.get('movies').profile.count,0);x.svc.db.close();});
 test('semantic hash search catches related Chinese character patterns',async()=>{const x=await setup();await writeFile(join(x.docs,'guitar.md'),'# 稳定性练习\n切换和弦时手提前离开，导致尾音 sustain 不足。');await x.svc.sync();const rs=await x.svc.search('和弦切换尾音太短');assert.ok(rs.length);assert.match(rs[0].title,/guitar/);x.svc.db.close();});
@@ -144,5 +144,379 @@ test('ordinary recent/latest search terms do not get routed to health-only struc
   assert.ok(latest.some((r:any)=>r.uri===p));
   const explicitStructured=await x.svc.search('最新英语学习',{mode:'structured'});
   assert.deepEqual(explicitStructured,[]);
+  x.svc.db.close();
+});
+
+
+test('related suggestions require content evidence, exclude self and suppress generic collisions',async()=>{
+  const x=await setup();
+  const source=join(x.docs,'guitar-practice.md');
+  const relevant=join(x.docs,'chord-finger-exercises.md');
+  const noise=join(x.docs,'guitar-shopping.md');
+  const unrelated=join(x.docs,'finance.md');
+  await writeFile(source,'# Guitar practice\nChord switching and finger positioning exercises for smooth transitions.');
+  await writeFile(relevant,'# Chord switching technique\nGuitar finger positioning exercises improve chord switching precision.');
+  await writeFile(noise,'# Guitar price comparison\nGuitar accessories and retail store prices.');
+  await writeFile(unrelated,'# Financial planning\nMonthly budget and banking transaction analysis.');
+  await x.svc.sync();
+
+  const query='Guitar chord switching finger positioning exercises';
+  const results=await x.svc.search(query,{mode:'related',excludeUri:source,limit:8});
+  assert.ok(results.some((r:any)=>r.uri===relevant),'strong overlapping evidence must survive');
+  assert.ok(!results.some((r:any)=>r.uri===source),'the current file is not a recommendation');
+  assert.ok(!results.some((r:any)=>r.uri===noise),'one shared topic word is insufficient');
+  assert.ok(!results.some((r:any)=>r.uri===unrelated),'unrelated content must be omitted');
+  assert.ok(results.every((r:any)=>r.reasons.includes('related_content')));
+  assert.equal(new Set(results.map((r:any)=>r.documentId)).size,results.length);
+
+  assert.deepEqual(await x.svc.search('notes about the page',{mode:'related'}),[],
+    'generic note UI terms alone must not generate suggestions');
+  x.svc.db.close();
+});
+
+test('related Chinese evidence distinguishes a specific topic from generic learning notes',async()=>{
+  const x=await setup();
+  const relevant=join(x.docs,'renal-diet.md');
+  const noise=join(x.docs,'english-study.md');
+  await writeFile(relevant,'# 慢性肾病饮食控制\n注意蛋白质摄入与钾磷管理，记录饮食控制方案。');
+  await writeFile(noise,'# 学习笔记\n英语听力学习与阅读记录。');
+  await x.svc.sync();
+  const results=await x.svc.search('慢性肾病饮食控制蛋白质摄入',{mode:'related',limit:8});
+  assert.ok(results.some((r:any)=>r.uri===relevant),'CJK content overlap must be usable');
+  assert.ok(!results.some((r:any)=>r.uri===noise),'generic shared Chinese text is not evidence');
+  x.svc.db.close();
+});
+
+
+test('indexing does not hold SQLite write transactions while awaiting embeddings',async()=>{
+  const { DatabaseSync }=await import('node:sqlite');
+  const { Indexer }=await import('../src/core/indexer.js');
+  const { stat }=await import('node:fs/promises');
+  const x=await setup();
+  const source=join(x.docs,'delayed-embedding.md');
+  await writeFile(source,'# Test\nStudy concepts with enough text to create an indexed chunk.');
+  const st=await stat(source);
+  for(const mode of ['local','virtual']){
+    let started!:()=>void;
+    let release!:()=>void;
+    const begun=new Promise<void>(resolve=>{started=resolve;});
+    const gate=new Promise<void>(resolve=>{release=resolve;});
+    const embedder={id:'test-slow-embedding',dimensions:3,async embed(){started();await gate;return [1,0,0];}};
+    const indexer=new Indexer(x.svc.db,x.svc.cfg,embedder);
+    const pending=mode==='local'
+      ?indexer.indexFile('docs','local',source,st.mtime.toISOString(),st.birthtime.toISOString(),st.size)
+      :indexer.indexVirtualDocument('notion','notion','notion://slow-test','Slow indexing','Study concepts for indexing.',new Date().toISOString(),'slow-hash');
+    await begun;
+    const another=new DatabaseSync(join(x.svc.cfg.dataDir,'knowledge.db'));
+    another.exec('PRAGMA busy_timeout=0');
+    let concurrentError:unknown=null;
+    try{
+      another.prepare('INSERT INTO corrections(id,target_id,field,new_value,created_at) VALUES(?,?,?,?,?)')
+        .run('concurrent-'+mode,'fixture','scan_probe','ok',new Date().toISOString());
+    }catch(error){concurrentError=error;}
+    finally{release();await pending;another.close();}
+    assert.equal(concurrentError,null,mode+' indexing must not hold write lock during remote embedding');
+  }
+  x.svc.db.close();
+});
+
+test('unavailable source root does not delete previously indexed documents',async()=>{
+  const { rename }=await import('node:fs/promises');
+  const x=await setup();
+  const path=join(x.docs,'existing-note.md');
+  await writeFile(path,'# Canonical study note\nSource file content remains the authority.');
+  await x.svc.sync();
+  const before=x.svc.db.db.prepare('SELECT index_status FROM documents WHERE uri=? AND deleted_at IS NULL').get(path) as any;
+  assert.equal(before?.index_status,'indexed');
+  const offline=x.docs+'-temporarily-offline';
+  await rename(x.docs,offline);
+  try{
+    const scan=await x.svc.sync();
+    const after=x.svc.db.db.prepare('SELECT index_status,deleted_at FROM documents WHERE uri=?').get(path) as any;
+    assert.equal(after?.deleted_at,null,'temporary source unavailability must not erase the catalog');
+    assert.equal(after?.index_status,'indexed');
+    assert.ok(scan.errors.some((error:any)=>error.path===x.docs),'incomplete scan must be visible');
+    const failure=x.svc.db.db.prepare('SELECT last_error FROM sync_state WHERE source_id=?').get('docs') as any;
+    assert.match(failure?.last_error||'',/temporarily-offline|docs|ENOENT/,'incomplete scan must retain a diagnosable source error');
+  }finally{await rename(offline,x.docs);}
+  await x.svc.sync();
+  assert.ok(x.svc.db.db.prepare('SELECT id FROM documents WHERE uri=? AND deleted_at IS NULL').get(path));
+  assert.equal((x.svc.db.db.prepare('SELECT last_error FROM sync_state WHERE source_id=?').get('docs') as any)?.last_error,null,'successful scan clears the source error');
+  x.svc.db.close();
+});
+
+
+test('memory excludes health and media evidence from documents removed in complete scans',async()=>{
+  const { unlink }=await import('node:fs/promises');
+  const x=await setup();
+  const source=join(x.docs,'lab-2026-07-10.md');
+  await writeFile(source,'# Labs\n肌酐 112 μmol/L\n胱抑素C 1.57 mg/L\n');
+  const movie=join(x.docs,'movie.md');
+  await writeFile(movie,'---\ntype: movie\ntitle: Cinema Evidence\nrating: 4\n---\n# Cinema Evidence');
+  await x.svc.sync();
+  assert.equal(x.svc.memory.get('movies').profile.count,1);
+  const before=x.svc.memory.get('health');
+  assert.ok(before.profile.observations.length>0,'original evidence should contribute to memory');
+  await unlink(source);
+  await x.svc.sync();
+  const document=x.svc.db.db.prepare('SELECT deleted_at FROM documents WHERE uri=?').get(source) as any;
+  assert.ok(document?.deleted_at,'complete scan should tombstone removed source');
+  const after=x.svc.memory.get('health');
+  assert.deepEqual(after.profile.observations,[],'deleted source must not remain in derived memory');
+  assert.deepEqual(after.evidence,[],'deleted source must not persist as memory evidence');
+  await unlink(movie);
+  await x.svc.sync();
+  assert.equal(x.svc.memory.get('movies').profile.count,0,'removed media source must not remain in memory');
+  x.svc.db.close();
+});
+
+
+test('explicit search modes do not silently blend catalog, FTS and semantic evidence',async()=>{
+  const x=await setup();
+  const pdf=join(x.docs,'Exclusive-Catalog-PDF.pdf');
+  const note=join(x.docs,'lexical-lesson.md');
+  await writeFile(pdf,'synthetic PDF with no native text');
+  await writeFile(note,'# Lexical relevance\nLexical relevance distinguishes related concepts from unrelated vocabulary.');
+  await x.svc.sync();
+  assert.ok((await x.svc.search('Exclusive-Catalog-PDF.pdf',{mode:'auto'}))
+    .some((hit:any)=>hit.uri===pdf),'auto file locator should still use metadata');
+  assert.ok(!(await x.svc.search('Exclusive-Catalog-PDF.pdf',{mode:'fts'}))
+    .some((hit:any)=>hit.uri===pdf),'FTS must not promote metadata-only PDFs');
+  assert.ok(!(await x.svc.search('Exclusive-Catalog-PDF.pdf',{mode:'semantic'}))
+    .some((hit:any)=>hit.uri===pdf),'semantic must not promote metadata-only PDFs');
+  const exact=await x.svc.search('lexical',{mode:'fts'});
+  assert.ok(exact.length>0);
+  assert.ok(exact.every((hit:any)=>hit.reasons.every((reason:string)=>reason==='full_text')));
+  const conceptual=await x.svc.search('lexical relevance',{mode:'semantic'});
+  assert.ok(conceptual.length>0);
+  assert.ok(conceptual.every((hit:any)=>hit.reasons.every((reason:string)=>reason==='semantic_hash')));
+  x.svc.db.close();
+});
+
+
+test('concurrent managed note creation preserves all original content without overwrites',async()=>{
+  const x=await setup();
+  const results=await Promise.allSettled(Array.from({length:8},(_,i)=>
+    x.svc.writer.create({title:'Concurrent Study Note',domain:'Inbox',content:'Unique payload '+i})));
+  const errors=results.filter((item:any)=>item.status==='rejected');
+  assert.deepEqual(errors,[],'each concurrent new note must have its own canonical destination');
+  const uris=results.map((item:any)=>item.value.uri);
+  assert.equal(new Set(uris).size,8,'all created files must use distinct paths');
+  const stored=await Promise.all(uris.map(uri=>readFile(uri,'utf8')));
+  for(let i=0;i<8;i++)assert.ok(stored[i].includes('Unique payload '+i),'a newer create must never overwrite an earlier note');
+  x.svc.db.close();
+});
+
+
+test('managed writer rejects symlink paths that escape the canonical store',async()=>{
+  const { symlink, unlink, stat: fileStat }=await import('node:fs/promises');
+  const x=await setup();
+  const outside=join(x.root,'outside');await mkdir(outside,{recursive:true});
+  const linkedFolder=join(x.managed,'outside-folder');
+  await symlink(outside,linkedFolder,'dir');
+  await assert.rejects(
+    x.svc.writer.create({destination:linkedFolder,title:'escaped-note',content:'must remain inside'}),
+    /managedStore|symbolic|symlink|outside/i
+  );
+  await assert.rejects(fileStat(join(outside,'escaped-note.md')),{code:'ENOENT'});
+  const outsideNote=join(outside,'existing.md');await writeFile(outsideNote,'original outside content');
+  const linkedNote=join(x.managed,'linked-note.md');
+  await symlink(outsideNote,linkedNote,'file');
+  await assert.rejects(
+    x.svc.writer.update({uri:linkedNote,replace:'unauthorized replacement'}),
+    /managedStore|symbolic|symlink|outside/i
+  );
+  assert.equal(await readFile(outsideNote,'utf8'),'original outside content');
+  const legitimate=await x.svc.writer.create({title:'safe-note',content:'original inside'});
+  await x.svc.writer.update({uri:legitimate.uri,replace:'updated inside'});
+  assert.match(await readFile(legitimate.uri,'utf8'),/updated inside/);
+
+  const outsideUndo=join(outside,'undo-target.md');await writeFile(outsideUndo,'outside remains untouched');
+  const undoCreate=await x.svc.writer.create({title:'undo-symlink-create',content:'created inside'});
+  await unlink(undoCreate.uri);await symlink(outsideUndo,undoCreate.uri,'file');
+  await assert.rejects(x.svc.writer.undo(undoCreate.mutationId),/symbolic|symlink|managedStore/i);
+  assert.equal(await readFile(outsideUndo,'utf8'),'outside remains untouched');
+
+  const undoUpdate=await x.svc.writer.create({title:'undo-symlink-update',content:'before update'});
+  const updateMutation=await x.svc.writer.update({uri:undoUpdate.uri,append:'\\nupdated'});
+  await unlink(undoUpdate.uri);await symlink(outsideUndo,undoUpdate.uri,'file');
+  await assert.rejects(x.svc.writer.undo(updateMutation.mutationId),/symbolic|symlink|managedStore/i);
+  assert.equal(await readFile(outsideUndo,'utf8'),'outside remains untouched');
+  x.svc.db.close();
+});
+
+test('managed writer serializes concurrent appends and rejects stale update undo',async()=>{
+  const x=await setup();
+  const created=await x.svc.writer.create({title:'Concurrent Update Note',content:'original'});
+  const [first,second]=await Promise.all([
+    x.svc.writer.update({uri:created.uri,append:'\\nfirst concurrent append'}),
+    x.svc.writer.update({uri:created.uri,append:'\\nsecond concurrent append'})
+  ]);
+  const combined=await readFile(created.uri,'utf8');
+  assert.ok(combined.includes('first concurrent append')&&combined.includes('second concurrent append'),'concurrent append operations must not lose either update');
+  await assert.rejects(x.svc.writer.undo(first.mutationId),/newer managed note mutation/i,'an older update cannot overwrite a later update');
+  await x.svc.writer.undo(second.mutationId);
+  const afterSecond=await readFile(created.uri,'utf8');
+  assert.ok(afterSecond.includes('first concurrent append'));
+  assert.ok(!afterSecond.includes('second concurrent append'));
+  await x.svc.writer.undo(first.mutationId);
+  const restored=await readFile(created.uri,'utf8');
+  assert.match(restored,/original/);
+  assert.ok(!restored.includes('concurrent append'));
+  x.svc.db.close();
+});
+
+
+test('undoing creation never removes a note changed after that creation',async()=>{
+  const x=await setup();
+  const created=await x.svc.writer.create({title:'Retained study note',content:'original'});
+  const updated=await x.svc.writer.update({uri:created.uri,append:' Important new material'});
+  await assert.rejects(
+    x.svc.writer.undo(created.mutationId),/newer managed note mutation/i,
+    'undoing an older create must not delete subsequent note edits'
+  );
+  assert.match(await readFile(created.uri,'utf8'),/Important new material/);
+  await x.svc.writer.undo(updated.mutationId);
+  await x.svc.writer.undo(created.mutationId);
+  await assert.rejects(readFile(created.uri,'utf8'),{code:'ENOENT'});
+  x.svc.db.close();
+});
+
+
+test('independent PKS connections preserve concurrent appends and index the final file',async()=>{
+  const x=await setup();
+  const second=await new PKSService(x.svc.cfg).open();
+  try {
+    const created=await x.svc.writer.create({title:'Shared managed note',content:'original'});
+    const { sha256File }=await import('../src/util/fs.js');
+    for(let round=0;round<3;round++){
+      const left=' [left-'+round+']';
+      const right=' [right-'+round+']';
+      const outcomes=await Promise.allSettled([
+        x.svc.writer.update({uri:created.uri,append:left}),
+        second.writer.update({uri:created.uri,append:right})
+      ]);
+      assert.deepEqual(outcomes.map(r=>r.status),['fulfilled','fulfilled']);
+      const content=await readFile(created.uri,'utf8');
+      assert.ok(content.includes(left)&&content.includes(right),'a second PKS process must not silently overwrite an accepted append');
+      const indexed=x.svc.db.db.prepare('SELECT content_hash FROM documents WHERE uri=?').get(created.uri) as any;
+      assert.equal(indexed.content_hash,await sha256File(created.uri),'the canonical index must match the final managed file');
+    }
+  } finally { second.db.close();x.svc.db.close(); }
+});
+
+
+test('late embeddings cannot publish an obsolete managed-file index',async()=>{
+  const x=await setup();
+  const second=await new PKSService(x.svc.cfg).open();
+  let resume!:()=>void,notify!:()=>void,timer:any;
+  const gate=new Promise<void>(resolve=>{resume=resolve;});
+  const reached=new Promise<void>(resolve=>{notify=resolve;});
+  try {
+    const created=await x.svc.writer.create({title:'Delayed index writer',content:'original'});
+    const originalEmbed=x.svc.embeddings.embed.bind(x.svc.embeddings);
+    let intercepted=false;
+    x.svc.embeddings.embed=async(text:string)=>{
+      if(!intercepted&&text.includes('slow older revision')){
+        intercepted=true;notify();await gate;
+      }
+      return originalEmbed(text);
+    };
+    const older=x.svc.writer.update({uri:created.uri,append:' slow older revision'});
+    await Promise.race([
+      reached,
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('first embedding was not reached')),2500);})
+    ]);
+    clearTimeout(timer);
+    await second.writer.update({uri:created.uri,append:' newer canonical revision'});
+    resume();
+    await older;
+    const content=await readFile(created.uri,'utf8');
+    assert.match(content,/slow older revision/);
+    assert.match(content,/newer canonical revision/);
+    const { sha256File }=await import('../src/util/fs.js');
+    const indexed=x.svc.db.db.prepare('SELECT content_hash FROM documents WHERE uri=?').get(created.uri) as any;
+    assert.equal(indexed.content_hash,await sha256File(created.uri),'stale embedding must not overwrite the latest canonical index');
+  } finally { clearTimeout(timer);resume();second.db.close();x.svc.db.close(); }
+});
+
+
+test('a delayed source scan cannot publish an obsolete managed-file snapshot',async()=>{
+  const x=await setup();
+  const second=await new PKSService(x.svc.cfg).open();
+  let resume!:()=>void,notify!:()=>void,timer:any;
+  const gate=new Promise<void>(resolve=>{resume=resolve;});
+  const reached=new Promise<void>(resolve=>{notify=resolve;});
+  try {
+    const created=await x.svc.writer.create({title:'Delayed source scan',content:'original'});
+    await writeFile(created.uri,(await readFile(created.uri,'utf8'))+' stale scan revision');
+    const { stat }=await import('node:fs/promises');
+    const { sha256File }=await import('../src/util/fs.js');
+    const snapshot=await stat(created.uri);
+    const snapshotHash=await sha256File(created.uri);
+    const originalEmbed=x.svc.embeddings.embed.bind(x.svc.embeddings);
+    let intercepted=false;
+    x.svc.embeddings.embed=async(text:string)=>{
+      if(!intercepted&&text.includes('stale scan revision')){
+        intercepted=true;notify();await gate;
+      }
+      return originalEmbed(text);
+    };
+    const staleIndex=x.svc.indexer.indexFile('managed','managed',created.uri,snapshot.mtime.toISOString(),snapshot.birthtime.toISOString(),snapshot.size,snapshotHash);
+    await Promise.race([
+      reached,
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('stale scan embedding was not reached')),2500);})
+    ]);
+    clearTimeout(timer);
+    await second.writer.update({uri:created.uri,append:' newer writer revision'});
+    resume();
+    assert.equal(await staleIndex,null,'changed source snapshots must be discarded rather than committed');
+    const content=await readFile(created.uri,'utf8');
+    assert.match(content,/stale scan revision/);
+    assert.match(content,/newer writer revision/);
+    const indexed=x.svc.db.db.prepare('SELECT content_hash FROM documents WHERE uri=?').get(created.uri) as any;
+    assert.equal(indexed.content_hash,await sha256File(created.uri),'the catalog hash must match the latest canonical file');
+    const chunks=x.svc.db.db.prepare('SELECT c.text FROM chunks c JOIN documents d ON d.id=c.document_id WHERE d.uri=?').all(created.uri).map((row:any)=>row.text).join('\\n');
+    assert.match(chunks,/newer writer revision/,'the published chunks must contain the latest file revision');
+  } finally { clearTimeout(timer);resume();second.db.close();x.svc.db.close(); }
+});
+
+
+test('managed undo requires the newest active mutation even when content is identical',async()=>{
+  const x=await setup();
+  const created=await x.svc.writer.create({title:'Identical Revision Note',content:'original'});
+  const first=await x.svc.writer.update({uri:created.uri,replace:'same content'});
+  const second=await x.svc.writer.update({uri:created.uri,replace:'same content'});
+  await assert.rejects(x.svc.writer.undo(first.mutationId),/newer managed note mutation/i);
+  assert.equal(await readFile(created.uri,'utf8'),'same content');
+  await x.svc.writer.undo(second.mutationId);
+  await x.svc.writer.undo(first.mutationId);
+  assert.match(await readFile(created.uri,'utf8'),/original/);
+  await x.svc.writer.undo(created.mutationId);
+  await assert.rejects(readFile(created.uri,'utf8'),{code:'ENOENT'});
+  x.svc.db.close();
+});
+
+
+test('related Chinese plant-care suggestions use full note evidence and suppress nearby-topic collisions',async()=>{
+  const x=await setup();
+  const source=join(x.docs,'多肉浇水记录.md');
+  const watering=join(x.docs,'多肉浇水间隔.md');
+  const soil=join(x.docs,'盆栽土壤与光照.md');
+  const variety=join(x.docs,'多肉品种记录.md');
+  const unrelated=join(x.docs,'家庭日程安排.md');
+  const body='记录多肉植物浇水时间、土壤湿度、盆土干燥程度、光照、通风以及季节调整情况。';
+  await writeFile(source,'# 多肉浇水记录\n'+body);
+  await writeFile(watering,'# 多肉浇水间隔\n多肉植物需要控水，记录每次浇水量、土壤湿度和浇水间隔。');
+  await writeFile(soil,'# 盆栽土壤与光照\n多肉植物土壤配比、光照、通风和控水记录。');
+  await writeFile(variety,'# 多肉品种记录\n记录多肉植物品种、花期和叶片颜色。');
+  await writeFile(unrelated,'# 家庭日程安排\n家庭成员日程、每周计划和待办事项。');
+  await x.svc.sync();
+  const query='多肉浇水记录 '+body;
+  const results=await x.svc.search(query,{mode:'related',excludeUri:source,limit:8});
+  assert.ok(results.some((hit:any)=>hit.uri===watering),'watering interval note should be recommended');
+  assert.ok(results.some((hit:any)=>hit.uri===soil),'soil and light-care note should be recommended');
+  assert.ok(!results.some((hit:any)=>hit.uri===variety),'shared plant vocabulary without care evidence is insufficient');
+  assert.ok(!results.some((hit:any)=>hit.uri===unrelated),'generic family scheduling must be suppressed');
   x.svc.db.close();
 });

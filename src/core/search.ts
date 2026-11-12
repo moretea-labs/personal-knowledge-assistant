@@ -10,11 +10,14 @@ export class SearchEngine {
   private semanticCache: { key:string; revision:string; rows:any[] } | null = null;
   constructor(private db:KnowledgeDB, private embeddings:EmbeddingProvider) {}
 
-  async search(query:string, opts:{mode?:SearchMode;domain?:string;source?:string;documentType?:string;dateFrom?:string;dateTo?:string;limit?:number}={}):Promise<SearchResult[]> {
+  async search(query:string, opts:{mode?:SearchMode;domain?:string;source?:string;documentType?:string;dateFrom?:string;dateTo?:string;limit?:number;excludeUri?:string}={}):Promise<SearchResult[]> {
     const limit = Math.min(Math.max(opts.limit || 12, 1), 50);
+    if (opts.mode === 'related') return this.related(query, limit, opts);
+    if (opts.mode === 'metadata') return this.metadata(query, limit, opts);
+    if (opts.mode === 'fts') return this.fts(query, limit, opts);
+    if (opts.mode === 'semantic') return this.semantic(query, limit, opts);
     if (opts.mode === 'structured' || looksStructured(query)) return this.structured(query, limit);
     const metadata = this.metadata(query, Math.max(limit * 2, 20), opts);
-    if (opts.mode === 'metadata') return metadata.slice(0, limit);
     // Locating a file is a catalog lookup, never an approximate content search.
     if ((opts.mode === undefined || opts.mode === 'auto') && isLocatorQuery(query)) return metadata.slice(0, limit);
     const fts = this.fts(query, Math.max(limit * 3, 20), opts);
@@ -43,6 +46,29 @@ export class SearchEngine {
       map.set(`document:${r.documentId}`, r);
     }
     return [...map.values()].sort((a,b)=>b.score-a.score).slice(0, limit);
+  }
+
+  /** Related notes require multiple concrete content signals. Hash-vector proximity
+   * alone (or one shared filename word) is not evidence of a relationship. */
+  private async related(query:string,limit:number,opts:any):Promise<SearchResult[]> {
+    const keywords=relatedKeywords(query);
+    if(keywords.length<2)return[];
+    const candidates=[...this.fts(keywords.slice(0,12).join(' '),Math.max(40,limit*6),opts),
+      ...await this.semantic(query,Math.max(40,limit*6),opts)];
+    const ranked=new Map<string,SearchResult>();
+    for(const hit of candidates){
+      if(opts.excludeUri&&hit.uri===opts.excludeUri)continue;
+      const evidence=String(hit.title+' '+(hit.snippet||'')).normalize('NFKC').toLocaleLowerCase();
+      const matches=keywords.filter(word=>evidence.includes(word)).length;
+      const coverage=matches/keywords.length;
+      // Two independent signals and substantial coverage, not a fixed top-N filler.
+      if(matches<2||coverage<0.24)continue;
+      const similarity=hit.reasons.includes('semantic_hash')?hit.score/0.82:0;
+      const score=coverage*0.8+similarity*0.2;
+      const prior=ranked.get(hit.documentId);
+      if(!prior||score>prior.score)ranked.set(hit.documentId,{...hit,score,reasons:['related_content',...hit.reasons]});
+    }
+    return [...ranked.values()].sort((a,b)=>b.score-a.score||a.title.localeCompare(b.title)).slice(0,limit);
   }
 
   private where(opts:any) {
@@ -149,6 +175,25 @@ export class SearchEngine {
     const rows=this.db.db.prepare(`SELECT m.*,d.title,d.uri,d.source_type FROM medical_observations m JOIN documents d ON d.id=m.source_document_id WHERE m.observation_type=? AND d.deleted_at IS NULL ORDER BY m.observed_at DESC LIMIT ?`).all(type,limit) as any[];
     return rows.map((r,i)=>({documentId:r.source_document_id,title:r.title,uri:r.uri,sourceType:r.source_type,documentType:'health_report',modifiedAt:r.observed_at,snippet:`${r.observation_type}: ${r.value}${r.unit?' '+r.unit:''} (${r.observed_at||'date unknown'})`,score:1-i*0.02,reasons:['structured_health']}));
   }
+}
+
+// Use concrete language-bearing terms, never generic UI vocabulary, to confirm
+// related-note evidence. Chinese bigrams retain overlap without relying on FTS's
+// word segmentation; this is a derived ranking rule, not another search index.
+function relatedKeywords(query:string):string[]{
+  const ignore=new Set(['notes','note','markdown','about','with','from','this','that','your','the','and','for','are','was','into','page','笔记','内容','相关','关于','我们','这个','以及']);
+  const words=query.normalize('NFKC').toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu)||[];
+  const result:string[]=[];
+  const seen=new Set<string>();
+  const add=(word:string)=>{if(!ignore.has(word)&&!seen.has(word)){seen.add(word);result.push(word);}};
+  for(const word of words){
+    if(/[\p{Script=Han}]/u.test(word)){
+      const chars=Array.from(word);
+      for(let i=0;i+1<chars.length;i++)add(chars[i]+chars[i+1]);
+    }else if(word.length>=4){add(word);}
+    if(result.length>=24)break;
+  }
+  return result.slice(0,24);
 }
 
 // Recency/ordering words alone do not imply a health-structured query.

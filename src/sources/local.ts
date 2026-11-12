@@ -7,9 +7,9 @@ export interface LocalEntry { path:string; size:number; modifiedAt:string; creat
 
 const ignored = new Set(['.git', 'node_modules', '.Trash', '.cache', 'Library']);
 
-export async function* walk(root:string, excludeRoots:string[]=[]):AsyncGenerator<LocalEntry> {
+export async function* walk(root:string, excludeRoots:string[]=[], onScanError?:(path:string,error:unknown)=>void):AsyncGenerator<LocalEntry> {
   let ents;
-  try { ents = await readdir(root, { withFileTypes:true }); } catch { return; }
+  try { ents = await readdir(root, { withFileTypes:true }); } catch (error) { onScanError?.(root,error); return; }
   const normalizedExcludes = excludeRoots.map(x => resolve(x));
   for (const e of ents) {
     // Source indexes user documents, not app/config metadata. Explicit source excludes cover sensitive non-hidden folders.
@@ -19,13 +19,15 @@ export async function* walk(root:string, excludeRoots:string[]=[]):AsyncGenerato
     if (normalizedExcludes.some(x => abs === x || abs.startsWith(x + '/'))) continue;
     if (e.isSymbolicLink()) continue;
     if (e.isDirectory()) {
-      yield* walk(p, normalizedExcludes);
+      yield* walk(p, normalizedExcludes, onScanError);
     } else if (e.isFile() && supportedExtensions.has(extname(e.name).toLowerCase())) {
       try {
         const s = await stat(p);
         yield { path:p, size:s.size, modifiedAt:s.mtime.toISOString(), createdAt:s.birthtime.toISOString() };
-      } catch {
-        // A directory scan should continue even if one entry disappears or becomes unavailable.
+      } catch (error) {
+        // A vanishing file is a normal deletion. An unreadable one makes
+        // the scan incomplete and must not authorize catalog-wide pruning.
+        if ((error as {code?:string}).code !== 'ENOENT') onScanError?.(p,error);
       }
     }
   }
