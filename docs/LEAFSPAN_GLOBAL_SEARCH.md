@@ -42,6 +42,12 @@ index is created by the macOS app.
   directories and LaunchServices (read-only, no app index persisted).
 - Filenames/folders: system Spotlight metadata (read-only). Its coverage
   depends on the macOS Spotlight index and system privacy settings.
+  The query uses the LocalComputer scope rather than IndexedLocalComputer:
+  on macOS, the latter can omit iCloud Drive files that native Spotlight
+  otherwise returns. A result may provide its local path but no metadata URL;
+  the path is used to construct a file URL for search/open actions. Merely
+  resolving a path does not grant access to its file contents in App Sandbox.
+
 - Document body, chunks, relevance and optional embeddings: **PKS**; the
   current macOS client asks the existing local service on 127.0.0.1:3217.
   If it is offline, applications and Spotlight filenames still work; the

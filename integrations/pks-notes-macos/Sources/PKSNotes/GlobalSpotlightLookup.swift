@@ -14,7 +14,9 @@ final class GlobalSpotlightLookup {
         guard term.count >= 2 else { return }
 
         let metadata = NSMetadataQuery()
-        metadata.searchScopes = [NSMetadataQueryIndexedLocalComputerScope]
+        // IndexedLocalComputer omits some iCloud Drive files even when Finder
+        // and Spotlight CLI can locate them. LocalComputer includes the home directory.
+        metadata.searchScopes = [NSMetadataQueryLocalComputerScope]
         metadata.predicate = NSPredicate(format: "%K CONTAINS[cd] %@",
                                          NSMetadataItemFSNameKey, term)
         metadata.sortDescriptors = [NSSortDescriptor(key: NSMetadataItemFSNameKey, ascending: true)]
@@ -31,8 +33,10 @@ final class GlobalSpotlightLookup {
                 metadata.disableUpdates()
                 let hits: [GlobalSearchItem] = metadata.results.prefix(250).compactMap { value in
                     guard let result = value as? NSMetadataItem,
-                          let url = result.value(forAttribute: NSMetadataItemURLKey) as? URL,
-                          url.isFileURL,
+                          let url = Self.fileURL(
+                              metadataURL: result.value(forAttribute: NSMetadataItemURLKey) as? URL,
+                              metadataPath: result.value(forAttribute: NSMetadataItemPathKey) as? String
+                          ),
                           url.pathExtension.lowercased() != "app" else { return nil }
                     let name = result.value(forAttribute: NSMetadataItemFSNameKey) as? String
                         ?? url.lastPathComponent
@@ -45,6 +49,15 @@ final class GlobalSpotlightLookup {
             }
         }
         if !metadata.start() { cancel() }
+    }
+
+    // NSMetadataItemURLKey can be absent for iCloud Drive and local results;
+    // NSMetadataItemPathKey still identifies the document. Returning a URL
+    // does not grant sandbox access to the file's contents.
+    nonisolated static func fileURL(metadataURL: URL?, metadataPath: String?) -> URL? {
+        if let metadataURL, metadataURL.isFileURL { return metadataURL }
+        guard let metadataPath, metadataPath.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: metadataPath)
     }
 
     func cancel() {

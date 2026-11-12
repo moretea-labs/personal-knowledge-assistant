@@ -49,6 +49,24 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertEqual(items.count, 3)
     }
 
+    func testSpotlightRecoversICloudFilePathWithoutMetadataURL() {
+        // A Spotlight result may have kMDItemPath but no kMDItemURL.
+        let path = "/Users/example/Library/Mobile Documents/com~apple~CloudDocs/吉他谱/夜的钢琴曲五.pdf"
+        let recovered = GlobalSpotlightLookup.fileURL(metadataURL: nil, metadataPath: path)
+        XCTAssertEqual(recovered?.path, path)
+        XCTAssertEqual(recovered?.lastPathComponent, "夜的钢琴曲五.pdf")
+        XCTAssertTrue(recovered?.isFileURL == true)
+        if let recovered {
+            let entry = GlobalSearchItem.spotlight(recovered, title: "夜的钢琴曲五.pdf", isFolder: false)
+            XCTAssertEqual(GlobalSpotlightLookup.rank([entry], for: "夜的钢琴曲").first?.url, recovered)
+        }
+        XCTAssertNil(GlobalSpotlightLookup.fileURL(metadataURL: nil, metadataPath: nil))
+        XCTAssertNil(GlobalSpotlightLookup.fileURL(metadataURL: nil, metadataPath: "relative/path.pdf"))
+        XCTAssertNil(GlobalSpotlightLookup.fileURL(
+            metadataURL: URL(string: "https://example.com/unavailable.pdf"), metadataPath: nil
+        ))
+    }
+
     func testSpotlightRankingAndFolderClassification() {
         let folder = GlobalSearchItem.spotlight(
             URL(fileURLWithPath: "/Users/test/Documents/Study", isDirectory: true),
