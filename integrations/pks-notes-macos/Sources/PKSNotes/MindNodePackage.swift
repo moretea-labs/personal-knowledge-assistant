@@ -12,6 +12,7 @@ enum MindNodePackage {
         case tooDeep
         case notOutline
         case destinationExists
+        case unsupportedAttachment
 
         var errorDescription: String? {
             switch self {
@@ -21,11 +22,31 @@ enum MindNodePackage {
             case .tooDeep: "This MindNode outline is nested too deeply (maximum 64 levels)."
             case .notOutline: "Native MindNode export requires one root and only Markdown heading/list nodes. Use OPML to exchange a larger note."
             case .destinationExists: "The destination already exists; choose a new filename to avoid overwriting existing mind maps."
+            case .unsupportedAttachment: "MindNode attachment is unavailable or not a supported PNG image. The import was not written."
             }
         }
     }
 
+    struct ImportedImage {
+        let marker: String
+        let stem: String
+        let png: Data
+    }
+
+    struct ImportedDocument {
+        let markdown: String
+        let images: [ImportedImage]
+    }
+
     static func importOutline(from url: URL) throws -> String {
+        try readDocument(from: url, includeImages: false).markdown
+    }
+
+    static func importDocument(from url: URL) throws -> ImportedDocument {
+        try readDocument(from: url, includeImages: true)
+    }
+
+    private static func readDocument(from url: URL, includeImages: Bool) throws -> ImportedDocument {
         let document = try readSupportedPackage(from: url)
         guard let canvas = document["canvas"] as? [String: Any],
               let maps = canvas["mindMaps"] as? [[String: Any]],
@@ -38,10 +59,36 @@ enum MindNodePackage {
 
         struct ImportedTopic {
             let title: String
+            let noteParagraphs: [String]
+            let imageMarker: String?
             let children: [ImportedTopic]
         }
 
+        var images: [ImportedImage] = []
         var seen = 0
+        func attachedImage(_ node: [String: Any]) throws -> String? {
+            guard includeImages, let attachment = node["attachment"] else { return nil }
+            guard let info = attachment as? [String: Any],
+                  let filename = info["fileName"] as? String,
+                  filename.range(of: #"^[a-zA-Z0-9_-]+\.png$"#, options: .regularExpression) != nil,
+                  images.count < 32 else { throw Failure.unsupportedAttachment }
+            let source = url.appendingPathComponent("resources", isDirectory: true)
+                .appendingPathComponent(filename)
+            let attributes = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            guard attributes.isRegularFile == true, attributes.isSymbolicLink != true,
+                  let size = attributes.fileSize, size > 0, size <= 5 * 1024 * 1024 else {
+                throw Failure.unsupportedAttachment
+            }
+            let png = try Data(contentsOf: source)
+            guard png.count == size,
+                  png.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) else {
+                throw Failure.unsupportedAttachment
+            }
+            let marker = "__LEAFSPAN_MINDNODE_IMAGE_\(UUID().uuidString)__"
+            let stem = "mindnode-" + String(filename.dropLast(4))
+            images.append(ImportedImage(marker: marker, stem: stem, png: png))
+            return marker
+        }
         func visibleTopics(_ node: [String: Any], depth: Int) throws -> [ImportedTopic] {
             seen += 1
             guard seen <= 10_000, depth < 64 else { throw Failure.tooLarge }
@@ -61,13 +108,21 @@ enum MindNodePackage {
                 let title = plainTitle(html)
                 if !title.isEmpty {
                     guard title.count <= 10_000 else { throw Failure.malformed }
-                    return [ImportedTopic(title: title, children: visibleChildren)]
+                    let note = (node["note"] as? [String: Any])?["text"] as? String
+                    return [ImportedTopic(
+                        title: title,
+                        noteParagraphs: note.map(noteParagraphs) ?? [],
+                        imageMarker: try attachedImage(node),
+                        children: visibleChildren
+                    )]
                 }
             }
 
-            // MindNode permits untitled layout/grouping nodes. They carry no
-            // Markdown content, so promote visible descendants rather than
-            // inventing placeholder text or rejecting a valid historical map.
+            // Untitled layout nodes do not become Markdown topics. Never
+            // silently drop an attachment or note carried by such a node.
+            guard node["note"] == nil, node["attachment"] == nil else {
+                throw Failure.malformed
+            }
             return visibleChildren
         }
 
@@ -75,21 +130,39 @@ enum MindNodePackage {
         guard !topics.isEmpty else { throw Failure.malformed }
 
         var lines: [String] = []
+        func emitNote(_ paragraphs: [String], indent: String) {
+            guard !paragraphs.isEmpty else { return }
+            for paragraph in paragraphs {
+                // Blockquotes preserve the note as editable Markdown body text.
+                // Nested notes are indented within their list item, so moving
+                // that branch also moves its note without creating fake nodes.
+                lines.append(indent + (paragraph.isEmpty ? ">" : "> " + paragraph))
+            }
+        }
+        func emitImage(_ marker: String?, indent: String) {
+            if let marker { lines.append(indent + "![MindNode image](" + marker + ")") }
+        }
         func emitChildren(_ children: [ImportedTopic], depth: Int) {
             for child in children {
-                lines.append(String(repeating: "  ", count: depth) + "- " + child.title)
+                let indent = String(repeating: "  ", count: depth)
+                lines.append(indent + "- " + child.title)
+                emitNote(child.noteParagraphs, indent: indent + "  ")
+                emitImage(child.imageMarker, indent: indent + "  ")
                 emitChildren(child.children, depth: depth + 1)
             }
         }
 
         if roots.count == 1, topics.count == 1 {
             lines.append("# " + topics[0].title)
+            emitNote(topics[0].noteParagraphs, indent: "")
+            emitImage(topics[0].imageMarker, indent: "")
             emitChildren(topics[0].children, depth: 0)
         } else {
             lines.append("# Mind Maps")
             emitChildren(topics, depth: 0)
         }
-        return lines.joined(separator: "\n") + "\n"
+        return ImportedDocument(markdown: lines.joined(separator: "\n") + "\n",
+                                images: images)
     }
 
     private static func readSupportedPackage(from url: URL) throws -> [String: Any] {
@@ -241,8 +314,20 @@ enum MindNodePackage {
         return root
     }
 
-    /// MindNode stores node titles as small HTML fragments; decode plain
-    /// text only. Notes, images, tasks, positions, and style are not imported.
+    /// MindNode notes are HTML paragraphs, commonly with Cocoa font spans.
+    /// Keep paragraph boundaries and all readable text rather than discarding
+    /// the note. Formatting remains in the untouched source package.
+    private static func noteParagraphs(_ html: String) -> [String] {
+        let parts = html.replacingOccurrences(
+            of: #"(?i)</p\s*>"#, with: "\n", options: .regularExpression
+        ).components(separatedBy: "\n")
+        let decoded = parts.map(plainTitle)
+        if decoded.allSatisfy(\.isEmpty) { return [] }
+        return decoded.last?.isEmpty == true ? Array(decoded.dropLast()) : decoded
+    }
+
+    /// MindNode stores small HTML fragments in titles and note paragraphs.
+    /// Decode display text only; the native package retains rich styling.
     private static func plainTitle(_ html: String) -> String {
         let linebreaks = html.replacingOccurrences(
             of: #"(?i)<\s*(br\s*/?|/p|/div|/li)\s*>"#,

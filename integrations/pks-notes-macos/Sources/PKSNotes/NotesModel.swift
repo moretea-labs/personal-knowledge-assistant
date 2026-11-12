@@ -2281,6 +2281,7 @@ final class NotesModel: ObservableObject {
     func newNote(named name: String? = nil, in parentFolder: URL? = nil,
                  navigationDecision: UnsavedNoteDecision? = nil,
                  initialContent: String? = nil,
+                 importedImages: [MindNodePackage.ImportedImage] = [],
                  preservePDFPreview: Bool = false,
                  activateAfterCreation: Bool = true) -> URL? {
         guard let root else {
@@ -2323,8 +2324,22 @@ final class NotesModel: ObservableObject {
             message = AppLanguage.current.text("Cannot create note. The filename may already exist."); return nil
         }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        var createdImages: [(url: URL, data: Data)] = []
         do {
-            let content = initialContent ?? (name == nil ? "" : "# \(url.deletingPathExtension().lastPathComponent)\n\n")
+            var content = initialContent ?? (name == nil ? "" : "# \(url.deletingPathExtension().lastPathComponent)\n\n")
+            // Imported images are written by the same canonical note writer
+            // already used for pasted images. Resolve unique paths before
+            // committing the note body; never overwrite a preexisting asset.
+            for image in importedImages {
+                guard content.contains(image.marker),
+                      let relative = WorkspaceFiles.storePastedPNG(
+                          image.png, for: url, in: root, stem: image.stem
+                      ) else { throw CocoaError(.fileWriteUnknown) }
+                createdImages.append((
+                    folder.appendingPathComponent(relative).standardizedFileURL, image.png
+                ))
+                content = content.replacingOccurrences(of: image.marker, with: relative)
+            }
             try handle.write(contentsOf: Data(content.utf8))
             try handle.close()
             scheduleFilesystemMutationRefresh(parentFolders: [folder])
@@ -2334,6 +2349,12 @@ final class NotesModel: ObservableObject {
             return url
         } catch {
             try? handle.close()
+            // Delete only imported files we created and only if unchanged.
+            for image in createdImages {
+                if (try? Data(contentsOf: image.url)) == image.data {
+                    try? FileManager.default.removeItem(at: image.url)
+                }
+            }
             try? FileManager.default.removeItem(at: url)
             message = "\(AppLanguage.current.text("Cannot create note")): \(error.localizedDescription)"
             return nil

@@ -40,6 +40,26 @@ final class XMindPackageTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), before, "Import must not mutate the .xmind archive.")
     }
 
+    func testImportsJSONNoteBodyWithoutCreatingNewTopics() throws {
+        let content = #"""
+        [{
+          "rootTopic":{
+            "title":"Map",
+            "notes":{"plain":{"content":"Root note\nSecond line"}},
+            "children":{"attached":[{
+              "title":"Child",
+              "notes":{"plain":{"content":"Child note"}}
+            }]}
+          }
+        }]
+        """#
+        let (base, file) = try archive(content, entry: "content.json")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let markdown = try XMindPackage.importOutline(from: file)
+        XCTAssertEqual(markdown, "# Map\n> Root note\n> Second line\n- Child\n  > Child note\n")
+        XCTAssertEqual(MindMapOutline.nodes(in: markdown).count, 2)
+    }
+
     func testImportsLegacyXMLHierarchy() throws {
         let content = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -58,6 +78,19 @@ final class XMindPackageTests: XCTestCase {
                        "# Legacy Root\n- Alpha\n- Beta\n")
     }
 
+    func testImportsLegacyXMLPlainNotes() throws {
+        let content = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <xmap-content xmlns="urn:xmind:xmap:xmlns:content:2.0"><sheet>
+          <topic><title>Legacy Root</title><notes><plain>Note &amp; detail</plain></notes></topic>
+        </sheet></xmap-content>
+        """
+        let (base, file) = try archive(content, entry: "content.xml")
+        defer { try? FileManager.default.removeItem(at: base) }
+        XCTAssertEqual(try XMindPackage.importOutline(from: file),
+                       "# Legacy Root\n> Note & detail\n")
+    }
+
     func testMultipleSheetsPreserveAllRoots() throws {
         let content = """
         [
@@ -69,6 +102,21 @@ final class XMindPackageTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         XCTAssertEqual(try XMindPackage.importOutline(from: file),
                        "# Mind Maps\n- First\n  - A\n- Second\n  - B\n")
+    }
+
+    func testRejectsCorruptZIPEntryCRCWithoutExtractingFiles() throws {
+        let (base, file) = try archive(
+            #"[{"rootTopic":{"title":"Untrusted"}}]"#, entry: "content.json"
+        )
+        defer { try? FileManager.default.removeItem(at: base) }
+        var bytes = try Data(contentsOf: file)
+        let signature = Data([0x50, 0x4b, 0x01, 0x02])
+        let header = try XCTUnwrap(bytes.range(of: signature))
+        let checksumStart = header.lowerBound + 16
+        bytes.replaceSubrange(checksumStart..<(checksumStart + 4),
+                              with: [0, 0, 0, 0])
+        try bytes.write(to: file, options: .atomic)
+        XCTAssertThrowsError(try XMindPackage.importOutline(from: file))
     }
 
     func testInvalidJSONDoesNotSilentlyDiscardMap() throws {

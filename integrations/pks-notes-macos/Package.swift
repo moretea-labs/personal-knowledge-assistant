@@ -12,7 +12,8 @@ let package = Package(
         .executableTarget(
             name: "PKSNotes",
             dependencies: [.product(name: "MarkdownUI", package: "swift-markdown-ui")],
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [.linkedLibrary("z")]
         ),
         .testTarget(name: "PKSNotesTests", dependencies: ["PKSNotes"], resources: [.process("Resources")])
     ]

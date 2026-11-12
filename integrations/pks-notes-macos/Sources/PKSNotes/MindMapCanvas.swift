@@ -244,7 +244,7 @@ struct MindMapCanvas: View {
     let connectSection: (Int) -> Void
     let createLinkedNote: (Int) -> Void
     let revealSource: (Int) -> Void
-    let importOutline: (String, String) -> Bool
+    let importOutline: (String, String, [MindNodePackage.ImportedImage]) -> Bool
     @State private var renameTitle = ""
     @State private var editingNodeID: Int?
     @State private var editingCreatedNodeID: Int?
@@ -1360,7 +1360,7 @@ struct MindMapCanvas: View {
     private func importXMind() {
         let panel = NSOpenPanel()
         panel.title = language.text("Import XMind File")
-        panel.message = language.text("Import XMind topic hierarchy into a new Markdown mind map. The original .xmind file is unchanged; styles, images, notes and connections are not converted.")
+        panel.message = language.text("Import XMind topics and plain-text notes into an editable Markdown map. The original .xmind file remains unchanged; images, styling, tasks and connections are not converted.")
         panel.allowedContentTypes = [UTType(filenameExtension: "xmind") ?? .zip]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -1368,8 +1368,8 @@ struct MindMapCanvas: View {
             let markdown = try withSecurityScopedAccess(to: url) {
                 try XMindPackage.importOutline(from: url)
             }
-            if importOutline(markdown, url.deletingPathExtension().lastPathComponent) {
-                interchangeError = language.text("XMind topic hierarchy imported. Styles, images, notes, tasks and cross-connections remain in the original file.")
+            if importOutline(markdown, url.deletingPathExtension().lastPathComponent, []) {
+                interchangeError = language.text("XMind topics and plain-text notes imported. Images, styling, tasks and cross-connections remain in the original file.")
             }
         } catch {
             interchangeError = error.localizedDescription
@@ -1379,18 +1379,18 @@ struct MindMapCanvas: View {
     private func importMindNode() {
         let panel = NSOpenPanel()
         panel.title = language.text("Import MindNode Package")
-        panel.message = language.text("Select a .mindnode package. Only the node hierarchy is imported; original files are not modified.")
+        panel.message = language.text("Select a .mindnode package. Nodes, textual notes and supported PNG images are imported into a new note; the original stays unchanged.")
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             // Keep the open-panel grant only for the read; the source package is never written.
-            let markdown = try withSecurityScopedAccess(to: url) {
-                try MindNodePackage.importOutline(from: url)
+            let imported = try withSecurityScopedAccess(to: url) {
+                try MindNodePackage.importDocument(from: url)
             }
-            if importOutline(markdown, url.deletingPathExtension().lastPathComponent) {
-                interchangeError = language.text("MindNode hierarchy imported into a new Markdown note. Themes, images, notes, tasks and cross-connections are not imported.")
+            if importOutline(imported.markdown, url.deletingPathExtension().lastPathComponent, imported.images) {
+                interchangeError = language.text("MindNode topics and notes imported into editable Markdown. Supported PNG images are copied; original layout, styling, tasks and cross-connections remain in the source.")
             }
         } catch {
             interchangeError = error.localizedDescription
@@ -1408,7 +1408,7 @@ struct MindMapCanvas: View {
                 try Data(contentsOf: url)
             }
             let text = try MindMapInterchange.importOPML(data)
-            _ = importOutline(text, url.deletingPathExtension().lastPathComponent)
+            _ = importOutline(text, url.deletingPathExtension().lastPathComponent, [])
         } catch {
             interchangeError = error.localizedDescription
         }

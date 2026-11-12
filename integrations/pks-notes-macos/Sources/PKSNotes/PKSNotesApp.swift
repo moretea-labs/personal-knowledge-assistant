@@ -1081,16 +1081,23 @@ struct NotesWindow: View {
         let ext = url.pathExtension.lowercased()
         guard ["mindnode", "xmind"].contains(ext) else { return }
         do {
-            let markdown = try ext == "mindnode"
-                ? MindNodePackage.importOutline(from: url)
-                : XMindPackage.importOutline(from: url)
+            let markdown: String
+            let images: [MindNodePackage.ImportedImage]
+            if ext == "mindnode" {
+                let imported = try MindNodePackage.importDocument(from: url)
+                markdown = imported.markdown
+                images = imported.images
+            } else {
+                markdown = try XMindPackage.importOutline(from: url)
+                images = []
+            }
             let sourceName = url.deletingPathExtension().lastPathComponent
             guard let created = model.newNote(
                 named: sourceName, in: url.deletingLastPathComponent(),
-                initialContent: markdown
+                initialContent: markdown, importedImages: images
             ) else { return }
             pendingMindMapOpen = created
-            model.message = language.text("Imported editable hierarchy; the original file retains images, styles, notes, tasks and connections.")
+            model.message = language.text("Imported editable content without altering the original map. Unsupported native formatting and connections remain in the source.")
         } catch {
             model.message = error.localizedDescription
         }
@@ -3268,9 +3275,10 @@ struct NotesWindow: View {
             connectSection: { nodeID in beginMindMapLink(nodeID: nodeID, section: true) },
             createLinkedNote: { nodeID in createLinkedNoteFromMindMap(nodeID: nodeID) },
             revealSource: { line in revealMarkdownLine(line) },
-            importOutline: { markdown, name in
+            importOutline: { markdown, name, images in
                 // Import into a new note rather than overwriting the active note.
-                guard model.newNote(named: name, initialContent: markdown) != nil else {
+                guard model.newNote(named: name, initialContent: markdown,
+                                    importedImages: images) != nil else {
                     return false
                 }
                 showingMindMap = true

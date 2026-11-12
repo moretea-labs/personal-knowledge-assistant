@@ -63,6 +63,152 @@ final class MindNodePackageTests: XCTestCase {
                        "# Mind Maps\n- First visible topic\n- Second visible topic\n")
     }
 
+    @MainActor
+    func testImportsPNGAttachmentIntoEditableMarkdownWithoutOriginalDependency() throws {
+        let (base, package) = try fixture(node: [
+            "title": ["text": "<p>Root</p>"],
+            "subnodes": [
+                [
+                    "title": ["text": "<p>Diagram</p>"],
+                    "subnodes": [],
+                    "attachment": ["fileName": "TEST-IMG.png", "size": "{1, 1}", "type": 2]
+                ]
+            ]
+        ])
+        defer { try? FileManager.default.removeItem(at: base) }
+        let resources = package.appendingPathComponent("resources", isDirectory: true)
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: false)
+        let bytes = try XCTUnwrap(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aTTQAAAAASUVORK5CYII="
+        ))
+        try bytes.write(to: resources.appendingPathComponent("TEST-IMG.png"))
+        let original = try Data(contentsOf: package.appendingPathComponent("contents.xml"))
+
+        let imported = try MindNodePackage.importDocument(from: package)
+        XCTAssertEqual(imported.images.count, 1)
+        let asset = try XCTUnwrap(imported.images.first)
+        XCTAssertTrue(imported.markdown.contains("![MindNode image](\(asset.marker))"))
+        XCTAssertEqual(MindMapOutline.nodes(in: imported.markdown).map(\.title), ["Root", "Diagram"])
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(base))
+        let created = try XCTUnwrap(model.newNote(
+            named: "Editable Diagram", in: base,
+            initialContent: imported.markdown, importedImages: imported.images
+        ), model.message ?? "")
+        let markdown = try String(contentsOf: created, encoding: .utf8)
+        XCTAssertFalse(markdown.contains(asset.marker))
+        XCTAssertTrue(markdown.contains("![MindNode image](attachments/mindnode-TEST-IMG.png)"))
+        XCTAssertEqual(
+            try Data(contentsOf: base.appendingPathComponent("attachments/mindnode-TEST-IMG.png")),
+            bytes
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: package.appendingPathComponent("contents.xml")),
+            original
+        )
+    }
+
+    func testImportsRichHTMLNotesWithParagraphsOnRootAndNestedNodes() throws {
+        let tree: [String: Any] = [
+            "title": ["text": "<p>Main</p>"],
+            "note": ["text": "<p><span style='font-size:12px'>&gt; First &amp; second</span></p><p>Second paragraph</p>"],
+            "subnodes": [
+                [
+                    "title": ["text": "<p>Child</p>"],
+                    "note": ["text": "<p>Nested note</p>"],
+                    "subnodes": [
+                        ["title": ["text": "<p>Grandchild</p>"], "subnodes": []]
+                    ]
+                ]
+            ]
+        ]
+        let (base, package) = try fixture(node: tree)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let markdown = try MindNodePackage.importOutline(from: package)
+        XCTAssertEqual(markdown,
+                       "# Main\n> > First & second\n> Second paragraph\n- Child\n  > Nested note\n  - Grandchild\n")
+        let nodes = MindMapOutline.nodes(in: markdown)
+        XCTAssertEqual(nodes.map(\.title), ["Main", "Child", "Grandchild"])
+        XCTAssertEqual(nodes.map(\.depth), [0, 1, 2])
+    }
+
+    /// Opt-in, read-only regression against the user's actual MindNode corpus.
+    /// The current Markdown projection must retain every visible note as body
+    /// text without ever writing to the original document packages.
+    @MainActor
+    func testRealMindNodeLibraryMigratesNoteText() throws {
+        guard let path = ProcessInfo.processInfo.environment["LEAFSPAN_REAL_MINDNODE_DIR"] else {
+            throw XCTSkip("Set LEAFSPAN_REAL_MINDNODE_DIR to run this read-only migration audit.")
+        }
+        let root = URL(fileURLWithPath: path, isDirectory: true)
+        let packages = try FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension.lowercased() == "mindnode" }
+        XCTAssertFalse(packages.isEmpty)
+        // Validate the full conversion using a disposable local workspace.
+        // Never create or mutate a file inside the user's iCloud source vault.
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LeafspanMigration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: destination) }
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(destination))
+        var files = 0
+        var topics = 0
+        var notes = 0
+        var images = 0
+        for package in packages {
+            let original = try Data(contentsOf: package.appendingPathComponent("contents.xml"))
+            let source = try XCTUnwrap(PropertyListSerialization.propertyList(
+                from: original, format: nil
+            ) as? [String: Any])
+            let canvas = try XCTUnwrap(source["canvas"] as? [String: Any])
+            let maps = try XCTUnwrap(canvas["mindMaps"] as? [[String: Any]])
+            var sourceNotes = 0
+            func countNotes(_ node: [String: Any]) {
+                if (node["note"] as? [String: Any])?["text"] is String { sourceNotes += 1 }
+                for child in (node["subnodes"] as? [[String: Any]]) ?? [] {
+                    countNotes(child)
+                }
+            }
+            for map in maps {
+                countNotes(try XCTUnwrap(map["mainNode"] as? [String: Any]))
+            }
+            let imported = try MindNodePackage.importDocument(from: package)
+            images += imported.images.count
+            let markdown = imported.markdown
+            let created = try XCTUnwrap(model.newNote(
+                named: package.deletingPathExtension().lastPathComponent,
+                in: destination,
+                initialContent: markdown, importedImages: imported.images,
+                activateAfterCreation: false
+            ), "Failed to migrate \(package.lastPathComponent): \(model.message ?? "unknown error")")
+            let editable = try String(contentsOf: created, encoding: .utf8)
+            XCTAssertFalse(editable.contains("__LEAFSPAN_MINDNODE_IMAGE_"))
+            XCTAssertEqual(MindMapOutline.nodes(in: editable).count,
+                           MindMapOutline.nodes(in: markdown).count)
+            for image in imported.images {
+                let path = destination.appendingPathComponent("attachments")
+                    .appendingPathComponent(image.stem + ".png")
+                XCTAssertEqual(try Data(contentsOf: path), image.png)
+                XCTAssertTrue(editable.contains("attachments/\(image.stem).png"))
+            }
+            let paragraphs = editable.components(separatedBy: .newlines).filter {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix("> ")
+            }
+            XCTAssertGreaterThanOrEqual(paragraphs.count, sourceNotes, package.lastPathComponent)
+            XCTAssertEqual(try Data(contentsOf: package.appendingPathComponent("contents.xml")), original)
+            topics += MindMapOutline.nodes(in: markdown).count
+            notes += sourceNotes
+            files += 1
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(
+            at: destination, includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension == "md" }.count, files)
+        print("REAL_MINDNODE_MIGRATION files=\(files) topics=\(topics) note_nodes=\(notes) image_assets=\(images) staged_to_temporary_workspace=true")
+    }
+
     func testRejectsUnsupportedVersionAndMalformedNodeTree() throws {
         let (oldBase, old) = try fixture(version: 8)
         defer { try? FileManager.default.removeItem(at: oldBase) }
