@@ -7,12 +7,15 @@ import SwiftUI
 // only presents results and discovers installed application bundles.
 enum GlobalSearchPreferences {
     static let enabledKey = "LeafspanGlobalSearchEnabled"
+    static let indexedFoldersEnabledKey = "LeafspanPKSIndexedFoldersEnabled"
     static let shortcutKey = "LeafspanGlobalSearchShortcut"
 }
 
 enum GlobalSearchShortcut: String, CaseIterable, Identifiable {
-    case optionSpace
     case controlOptionP
+    case optionSpace
+
+    static let defaultChoice: GlobalSearchShortcut = .controlOptionP
 
     var id: String { rawValue }
     var label: String {
@@ -230,6 +233,12 @@ final class GlobalSearchResults: ObservableObject {
                 self.spotlightHits = hits
                 self.publish()
             }
+            // App/Spotlight results stay available independently of PKS.
+            guard UserDefaults.standard.bool(forKey: GlobalSearchPreferences.indexedFoldersEnabledKey) else {
+                self.loading = false
+                self.searchTask = nil
+                return
+            }
             do {
                 var url = URLComponents(string: "http://127.0.0.1:3217/api/search")!
                 url.queryItems = [
@@ -320,7 +329,7 @@ final class GlobalSearchController: NSObject, ObservableObject {
             }
         }
         let choice = GlobalSearchShortcut(rawValue: UserDefaults.standard.string(
-            forKey: GlobalSearchPreferences.shortcutKey) ?? "") ?? .optionSpace
+            forKey: GlobalSearchPreferences.shortcutKey) ?? "") ?? .defaultChoice
         let identifier = EventHotKeyID(signature: OSType(0x4C465347), id: 1)
         let status = RegisterEventHotKey(choice.keyCode, choice.modifiers,
                                          identifier, GetApplicationEventTarget(), 0, &hotKey)
@@ -500,14 +509,16 @@ private struct GlobalSearchPalette: View {
 
 struct GlobalSearchSettingsView: View {
     @AppStorage(GlobalSearchPreferences.enabledKey) private var enabled = false
-    @AppStorage(GlobalSearchPreferences.shortcutKey) private var shortcut = GlobalSearchShortcut.optionSpace.rawValue
+    @AppStorage(GlobalSearchPreferences.indexedFoldersEnabledKey) private var indexedFoldersEnabled = false
+    @AppStorage(GlobalSearchPreferences.shortcutKey) private var shortcut = GlobalSearchShortcut.defaultChoice.rawValue
     @ObservedObject private var controller = GlobalSearchController.shared
 
     private var chinese: Bool { AppLanguage.current.resolved == .simplifiedChinese }
 
     var body: some View {
         Form {
-            Toggle(chinese ? "启用全局搜索" : "Enable Global Search", isOn: $enabled)
+            Toggle(chinese ? "搜索 PKS 已索引文件夹" : "Search PKS indexed folders", isOn: $indexedFoldersEnabled)
+            Toggle(chinese ? "启用全局快捷键" : "Enable global shortcut", isOn: $enabled)
             Picker(chinese ? "全局快捷键" : "Global shortcut", selection: $shortcut) {
                 ForEach(GlobalSearchShortcut.allCases) { choice in
                     Text(choice.label).tag(choice.rawValue)
@@ -518,8 +529,8 @@ struct GlobalSearchSettingsView: View {
                 Text(controller.shortcutStatus)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button(chinese ? "打开全局搜索" : "Open Global Search") { controller.present() }
             }
+            Button(chinese ? "打开全局搜索" : "Open Global Search") { controller.present() }
         }
         .formStyle(.grouped)
         .padding(.top, 12)

@@ -83,3 +83,15 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertNil(hit.localFileURL)
     }
 }
+
+extension GlobalSearchFeatureTests {
+    func testGlobalShortcutAndPKSIndexedFolderSearchAreIndependentOptIns() {
+        XCTAssertNotEqual(GlobalSearchPreferences.enabledKey,
+                          GlobalSearchPreferences.indexedFoldersEnabledKey)
+        XCTAssertEqual(GlobalSearchShortcut.defaultChoice, .controlOptionP)
+        XCTAssertEqual(GlobalSearchShortcut.defaultChoice.keyCode, UInt32(kVK_ANSI_P))
+        XCTAssertEqual(GlobalSearchShortcut.defaultChoice.modifiers, UInt32(controlKey | optionKey))
+        XCTAssertNotEqual(GlobalSearchShortcut.optionSpace.modifiers,
+                          GlobalSearchShortcut.defaultChoice.modifiers)
+    }
+}
