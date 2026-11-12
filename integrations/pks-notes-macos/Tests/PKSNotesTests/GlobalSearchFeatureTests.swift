@@ -61,6 +61,19 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertEqual(match.first?.kind, .folder)
     }
 
+    func testPKSFileRetainsHitForLeafspanNavigation() {
+        let url = URL(fileURLWithPath: "/Users/test/Documents/Study.md")
+        let hit = SearchHit(
+            documentId: "doc-123", chunkId: "chunk-456", title: "Study.md",
+            uri: url.path, sourceType: "local",
+            snippet: "matching paragraph", score: 0.98, headingPath: "Section One"
+        )
+        let item = GlobalSearchItem.file(hit, url: url)
+        XCTAssertEqual(item.sourceHit?.documentId, "doc-123")
+        XCTAssertEqual(item.sourceHit?.chunkId, "chunk-456")
+        XCTAssertNil(GlobalSearchItem.spotlight(url, title: "Study.md", isFolder: false).sourceHit)
+    }
+
     func testLocalFileSourceDoesNotInterpretOpaqueURI() {
         let hit = SearchHit(
             documentId: "opaque", chunkId: nil, title: "Notion page",

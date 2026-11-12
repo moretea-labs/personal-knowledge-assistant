@@ -50,22 +50,26 @@ struct GlobalSearchItem: Identifiable, Sendable {
     let subtitle: String
     let url: URL
     let snippet: String?
+    // Existing PKS provenance for in-workspace Markdown/PDF navigation.
+    let sourceHit: SearchHit?
 
     static func application(_ url: URL, title: String) -> GlobalSearchItem {
         .init(id: "app:" + url.path, kind: .application, title: title,
-              subtitle: url.deletingLastPathComponent().path, url: url, snippet: nil)
+              subtitle: url.deletingLastPathComponent().path, url: url,
+              snippet: nil, sourceHit: nil)
     }
 
     static func file(_ hit: SearchHit, url: URL) -> GlobalSearchItem {
         .init(id: "file:" + url.path, kind: .file, title: hit.title,
               subtitle: url.deletingLastPathComponent().path, url: url,
-              snippet: hit.snippet)
+              snippet: hit.snippet, sourceHit: hit)
     }
 
     static func spotlight(_ url: URL, title: String, isFolder: Bool) -> GlobalSearchItem {
         .init(id: (isFolder ? "folder:" : "file:") + url.path,
               kind: isFolder ? .folder : .file, title: title,
-              subtitle: url.deletingLastPathComponent().path, url: url, snippet: nil)
+              subtitle: url.deletingLastPathComponent().path, url: url,
+              snippet: nil, sourceHit: nil)
     }
 }
 
@@ -382,7 +386,18 @@ final class GlobalSearchController: NSObject, ObservableObject {
         case .application:
             NSWorkspace.shared.openApplication(at: item.url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
         case .file, .folder:
-            NSWorkspace.shared.open(item.url)
+            if let hit = item.sourceHit,
+               let model = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel {
+                // Reuse the sole note-navigation authority, including dirty-draft
+                // confirmation and exact Markdown match handling.
+                NSApp.activate(ignoringOtherApps: true)
+                NSApp.windows.first(where: {
+                    $0.isVisible && !($0 is NSPanel)
+                })?.makeKeyAndOrderFront(nil)
+                model.openResult(hit)
+            } else {
+                NSWorkspace.shared.open(item.url)
+            }
         }
     }
 

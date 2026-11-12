@@ -12,9 +12,12 @@ Type an application name to launch it. For files, Spotlight supplies the
 existing macOS filename/folder index; the existing PKS local search API
 supplies document content and relevance when reachable. Search results are
 deduplicated by local URL and ordered to prioritize exact/prefix filename
-matches over content-only hits. Arrow keys move the selection; Return
-opens it; Escape closes the window. Context actions include Finder reveal
-and copy path. No new persistent file index is created by the macOS app.
+matches over content-only hits. PKS results retain their original evidence
+record and reuse Leafspan's existing note navigation and unsaved-draft safety
+when a note is within the current workspace. Other files open through macOS.
+Arrow keys move the selection; Return opens it; Escape closes the window.
+Context actions include Finder reveal and copy path. No new persistent file
+index is created by the macOS app.
 
 ## Source ownership and availability
 
