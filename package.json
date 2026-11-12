@@ -11,7 +11,8 @@
     "test": "node --test dist/tests/*.test.js",
     "demo": "node dist/tests/demo.js",
     "benchmark": "node dist/tests/benchmark.js",
-    "benchmark:search": "node scripts/benchmark-search.mjs"
+    "benchmark:search": "node scripts/benchmark-search.mjs",
+    "benchmark:metadata": "node scripts/benchmark-metadata.mjs"
   },
   "engines": {
     "node": ">=22.5.0"

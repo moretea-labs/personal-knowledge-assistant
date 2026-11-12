@@ -552,3 +552,67 @@ test('searches arbitrary filenames in additional opted-in roots without reading 
   assert.equal((await x.svc.search('trip-video',{mode:'metadata'})).length,0);
   x.svc.db.close();
 });
+
+
+test('metadata ranking, aliases and catalog cache invalidate after local and external writes',async()=>{
+  const { DatabaseSync }=await import('node:sqlite');
+  const { unlink }=await import('node:fs/promises');
+  const x=await setup();
+  const exact=join(x.docs,'预算.md');
+  const prefix=join(x.docs,'预算清单.md');
+  const contains=join(x.docs,'年度预算备份.md');
+  await writeFile(exact,'# 预算\\n去年账目');
+  await writeFile(prefix,'# 预算清单\\n本月计划');
+  await writeFile(contains,'# 预算备份\\n审核记录');
+  await x.svc.sync();
+
+  const initial=await x.svc.search('预算',{mode:'metadata',limit:8});
+  assert.deepEqual(initial.map((r:any)=>r.uri).slice(0,2),[exact,prefix],
+    'filename prefixes must outrank a later substring match');
+  assert.equal(initial[2].uri,contains);
+  const firstRevision=(x.svc.searcher as any).catalogCache?.revision;
+  assert.ok(firstRevision,'small catalog should be cached');
+  await x.svc.search('预算',{mode:'metadata',limit:8});
+  assert.equal((x.svc.searcher as any).catalogCache?.revision,firstRevision);
+
+  const row=x.svc.db.db.prepare('SELECT id FROM documents WHERE uri=?').get(contains) as any;
+  x.svc.setSearchAliases(row.id,['月度账目']);
+  const alias=await x.svc.search('月度账目',{mode:'metadata'});
+  assert.equal(alias.length,1);
+  assert.equal(alias[0].uri,contains);
+  assert.ok(alias[0].reasons.includes('verified_alias'));
+  assert.notEqual((x.svc.searcher as any).catalogCache?.revision,firstRevision,
+    'local alias ledger writes must invalidate catalog projection');
+
+  const other=new DatabaseSync(join(x.svc.cfg.dataDir,'knowledge.db'));
+  other.prepare('UPDATE documents SET title=? WHERE uri=?').run('专项数据备份.md',contains);
+  other.close();
+  assert.equal((await x.svc.search('专项数据',{mode:'metadata'}))[0]?.uri,contains,
+    'another connection changing a filename must invalidate the catalog');
+  const pathMatch=await x.svc.search('年度预算',{mode:'metadata'});
+  assert.equal(pathMatch[0]?.uri,contains,
+    'renaming display title must not hide a still-matching original filesystem path');
+  assert.equal(pathMatch[0]?.title,'专项数据备份.md');
+
+  await unlink(exact);
+  await x.svc.sync();
+  assert.ok(!(await x.svc.search('预算',{mode:'metadata'})).some((r:any)=>r.uri===exact),
+    'deleted files must disappear without a PKS restart');
+  x.svc.db.close();
+});
+
+
+test('Chinese substring FTS fallback finds exact phrases inside longer Chinese text',async()=>{
+  const x=await setup();
+  const matched=join(x.docs,'dialysis-study.md');
+  const unrelated=join(x.docs,'unrelated-study.md');
+  await writeFile(matched,'# 临床笔记\n患者正在进行腹膜透析治疗，需要观察血压。');
+  await writeFile(unrelated,'# 临床笔记\n透析相关知识和腹腔观察是不同的内容。');
+  await x.svc.sync();
+  const results=await x.svc.search('腹膜透析',{mode:'fts',limit:10});
+  assert.ok(results.some((r:any)=>r.uri===matched),
+    'Chinese substring must be found even when unicode61 groups long Han text');
+  assert.ok(!results.some((r:any)=>r.uri===unrelated),
+    'unrelated character overlap must not be treated as an exact phrase');
+  x.svc.db.close();
+});

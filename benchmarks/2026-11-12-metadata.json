@@ -1,0 +1,58 @@
+{
+  "environment": {
+    "node": "v22.22.0",
+    "documents": 20000,
+    "fixture": "synthetic SQLite metadata-only files",
+    "method": "baseline HEAD JS and working-tree JS, alternating queries in same process and DB",
+    "warmupPerQuery": 6,
+    "measuredPerQuery": 30
+  },
+  "baselineCommit": "f34dfcfc9a3efe16ca7ec188d7a005f2dbd6b59e",
+  "queries": [
+    {
+      "query": "notes",
+      "before": {
+        "p50Ms": 77.14,
+        "p95Ms": 139.47
+      },
+      "after": {
+        "p50Ms": 3.27,
+        "p95Ms": 10.29
+      }
+    },
+    {
+      "query": "预算",
+      "before": {
+        "p50Ms": 43.12,
+        "p95Ms": 60.5
+      },
+      "after": {
+        "p50Ms": 1.22,
+        "p95Ms": 1.78
+      }
+    },
+    {
+      "query": "学习资料",
+      "before": {
+        "p50Ms": 35.03,
+        "p95Ms": 48.01
+      },
+      "after": {
+        "p50Ms": 1.05,
+        "p95Ms": 2.52
+      }
+    },
+    {
+      "query": "notes-project-19999",
+      "before": {
+        "p50Ms": 35.7,
+        "p95Ms": 54.07
+      },
+      "after": {
+        "p50Ms": 2.28,
+        "p95Ms": 2.5
+      }
+    }
+  ],
+  "notes": "Query-only synthetic metadata timing, not an installed-app latency guarantee. Host load may affect individual measurements; full-text extraction, Spotlight, UI and index-build costs are excluded. Repeat with npm run benchmark:metadata."
+}

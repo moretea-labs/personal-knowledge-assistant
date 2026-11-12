@@ -8,6 +8,9 @@ export class SearchEngine {
   // Derived, bounded in-process search acceleration only. SQLite remains canonical;
   // a write by this connection or another connection invalidates the snapshot.
   private semanticCache: { key:string; revision:string; rows:any[] } | null = null;
+  // One rebuildable, bounded catalog projection; SQLite + corrections remain
+  // authoritative. Invalidate on local writes and other-connection commits.
+  private catalogCache: { key:string; revision:string; rows:any[] } | null = null;
   constructor(private db:KnowledgeDB, private embeddings:EmbeddingProvider) {}
 
   async search(query:string, opts:{mode?:SearchMode;domain?:string;source?:string;documentType?:string;dateFrom?:string;dateTo?:string;limit?:number;excludeUri?:string}={}):Promise<SearchResult[]> {
@@ -81,39 +84,83 @@ export class SearchEngine {
     return { sql:parts.join(' AND '), args };
   }
 
+  private catalogRows(w:{sql:string;args:any[]}):any[] {
+    const key=JSON.stringify([w.sql,w.args]);
+    const localRevision=(this.db.db.prepare('SELECT total_changes() n').get() as any).n;
+    const externalRevision=(this.db.db.prepare('PRAGMA data_version').get() as any).data_version;
+    const revision=localRevision+':'+externalRevision;
+    if(this.catalogCache?.key===key&&this.catalogCache.revision===revision)return this.catalogCache.rows;
+
+    // Read the authoritative alias ledger once per catalog revision.
+    const aliases=new Map<string,string[]>();
+    for(const c of this.db.db.prepare("SELECT target_id,new_value FROM corrections WHERE field='search_aliases' ORDER BY rowid DESC").all() as any[]){
+      if(aliases.has(c.target_id))continue;
+      try{
+        const names=JSON.parse(c.new_value);
+        aliases.set(c.target_id,Array.isArray(names)?names.map(normalizeCatalogText):[]);
+      }catch{aliases.set(c.target_id,[]);}
+    }
+    const raw=this.db.db.prepare('SELECT d.id document_id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,d.index_status,d.tags_json FROM documents d WHERE '+w.sql).all(...w.args) as any[];
+    let approxBytes=0;
+    const rows=raw.map(r=>{
+      const titleKey=normalizeCatalogText(r.title);
+      const pathKey=normalizeCatalogText(r.uri);
+      const names=aliases.get(r.document_id)||[];
+      let tags:string[]=[];
+      try{
+        const parsed=JSON.parse(r.tags_json||'[]');
+        tags=Array.isArray(parsed)?parsed.map(normalizeCatalogText):[];
+      }catch{}
+      approxBytes+=320+2*(String(r.uri).length+String(r.title).length+names.join('').length+tags.join('').length);
+      return {...r,titleKey,pathKey,aliases:names,tags};
+    });
+    // Cache only one view and never retain an unbounded second catalog.
+    this.catalogCache=approxBytes<=32*1024*1024?{key,revision,rows}:null;
+    return rows;
+  }
+
   private metadata(query:string, limit:number, opts:any):SearchResult[] {
     const pdfOnly=/\bpdf\b/i.test(query);
-    const needle = normalizeCatalogText(locatorSubject(query).replace(/\bpdf\b/gi,''));
-    if (!needle) return [];
-    const w = this.where(opts);
-    const rows = this.db.db.prepare('SELECT d.id document_id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,d.index_status,d.tags_json FROM documents d WHERE ' + w.sql).all(...w.args) as any[];
-    // corrections is the existing higher-authority user-correction ledger; never duplicate aliases in derived documents.
-    const aliases = new Map<string,string[]>();
-    for (const c of this.db.db.prepare("SELECT target_id,new_value FROM corrections WHERE field='search_aliases' ORDER BY rowid DESC").all() as any[]) {
-      if (!aliases.has(c.target_id)) {
-        try { const names=JSON.parse(c.new_value); aliases.set(c.target_id,Array.isArray(names)?names:[]); }
-        catch { aliases.set(c.target_id,[]); }
+    const needle=normalizeCatalogText(locatorSubject(query).replace(/\bpdf\b/gi,''));
+    if(!needle)return[];
+    const rows=this.catalogRows(this.where(opts));
+    const best:SearchResult[]=[];
+    const compare=(a:SearchResult,b:SearchResult)=>b.score-a.score || String(a.title).localeCompare(String(b.title));
+    for(const r of rows){
+      if(pdfOnly&&!String(r.uri).toLowerCase().endsWith('.pdf'))continue;
+      const exactAlias=r.aliases.some((x:string)=>x===needle);
+      const titleExact=r.titleKey===needle || r.titleKey.replace(/pdf$/,'')===needle;
+      const titlePrefix=r.titleKey.startsWith(needle);
+      const titleContains=r.titleKey.includes(needle);
+      const aliasContains=r.aliases.some((x:string)=>x.includes(needle));
+      const pathContains=r.pathKey.includes(needle);
+      const tagContains=r.tags.some((x:string)=>x.includes(needle));
+      if(!(exactAlias||titleExact||titleContains||aliasContains||pathContains||tagContains))continue;
+      // Prefer exact/prefix titles, but preserve verified aliases and paths.
+      const score=exactAlias?1.0:titleExact?0.99:titlePrefix?0.975:titleContains?0.96:aliasContains?0.95:pathContains?0.88:0.72;
+      if(best.length>=limit){
+        const worst=best[best.length-1];
+        if(score<worst.score||(score===worst.score&&String(r.title).localeCompare(String(worst.title))>=0))continue;
       }
-    }
-    return rows.map(r=>{
-      if(pdfOnly&&!String(r.uri).toLowerCase().endsWith('.pdf'))return null;
-      const title=normalizeCatalogText(r.title);
-      const path=normalizeCatalogText(r.uri);
-      const known=(aliases.get(r.document_id)||[]).map(normalizeCatalogText);
-      const tagNames=(JSON.parse(r.tags_json||'[]') as string[]).map(normalizeCatalogText);
-      const exactAlias=known.some(x=>x===needle);
-      const titleExact=title===needle || title.replace(/pdf$/,'')===needle;
-      const titleContains=title.includes(needle);
-      const aliasContains=known.some(x=>x.includes(needle));
-      const pathContains=path.includes(needle);
-      const tagContains=tagNames.some(x=>x.includes(needle));
-      if (!(exactAlias||titleExact||titleContains||aliasContains||pathContains||tagContains)) return null;
-      const score=exactAlias?1.0:titleExact?0.99:titleContains?0.96:aliasContains?0.95:pathContains?0.88:0.72;
-      return {documentId:r.document_id,title:r.title,uri:r.uri,sourceType:r.source_type,documentType:r.document_type,modifiedAt:r.modified_at,indexStatus:r.index_status,
+      const result:SearchResult={
+        documentId:r.document_id,title:r.title,uri:r.uri,sourceType:r.source_type,
+        documentType:r.document_type,modifiedAt:r.modified_at,indexStatus:r.index_status,
         snippet:r.index_status==='deferred'?'Cloud placeholder: filename/path known; PDF text not locally accessible.':
                 r.index_status==='metadata_only'?(String(r.uri).toLowerCase().endsWith('.pdf')?'PDF metadata only: no extractable native text.':'File name only: content is not indexed.'):r.uri,
-        score,reasons:[exactAlias||aliasContains?'verified_alias':r.index_status==='deferred'?'metadata_deferred':'metadata']} as SearchResult;
-    }).filter(Boolean).sort((a:any,b:any)=>b.score-a.score || String(a.title).localeCompare(String(b.title))).slice(0,limit) as SearchResult[];
+        score,reasons:[exactAlias||aliasContains?'verified_alias':r.index_status==='deferred'?'metadata_deferred':'metadata']
+      };
+      // Keep only the best K matches rather than sorting the entire catalog.
+      let lo=0,hi=best.length;
+      while(lo<hi){
+        const mid=(lo+hi)>>1;
+        if(compare(result,best[mid])<0)hi=mid;else lo=mid+1;
+      }
+      if(lo<limit){
+        best.splice(lo,0,result);
+        if(best.length>limit)best.pop();
+      }
+    }
+    return best;
   }
 
   private fts(query:string, limit:number, opts:any):SearchResult[] {
@@ -122,7 +169,28 @@ export class SearchEngine {
     if(!safe)return[];
     try {
       const rows=this.db.db.prepare(`SELECT d.id document_id,c.id chunk_id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,c.text,c.page,c.heading_path,bm25(chunks_fts) rank FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.chunk_id JOIN documents d ON d.id=c.document_id WHERE chunks_fts MATCH ? AND ${w.sql} ORDER BY rank LIMIT ?`).all(safe,...w.args,limit) as any[];
-      return rows.map((r,i)=>({documentId:r.document_id,chunkId:r.chunk_id,title:r.title,uri:r.uri,sourceType:r.source_type,documentType:r.document_type,modifiedAt:r.modified_at,snippet:snippet(r.text,query),score:1/(1+i*0.08),reasons:['full_text'],page:r.page??undefined,headingPath:r.heading_path??undefined}));
+      const results:SearchResult[]=rows.map((r,i)=>({documentId:r.document_id,chunkId:r.chunk_id,title:r.title,uri:r.uri,sourceType:r.source_type,documentType:r.document_type,modifiedAt:r.modified_at,snippet:snippet(r.text,query),score:1/(1+i*0.08),reasons:['full_text'],page:r.page??undefined,headingPath:r.heading_path??undefined}));
+      // unicode61 groups adjacent Han characters into longer tokens, so a
+      // literal short Chinese substring can be absent from FTS5 results.
+      // Run a bounded exact-content fallback only when needed; no extra index.
+      const literal=query.trim().normalize('NFKC');
+      if(results.length<limit&&/^[\p{Script=Han}]{2,8}$/u.test(literal)){
+        const seen=new Set(rows.map(r=>r.chunk_id));
+        const extra=this.db.db.prepare(`SELECT d.id document_id,c.id chunk_id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,c.text,c.page,c.heading_path
+          FROM chunks c JOIN documents d ON d.id=c.document_id
+          WHERE instr(c.text,?)>0 AND ${w.sql} ORDER BY d.modified_at DESC LIMIT ?`)
+          .all(literal,...w.args,limit) as any[];
+        for(const r of extra){
+          if(seen.has(r.chunk_id))continue;
+          seen.add(r.chunk_id);
+          results.push({documentId:r.document_id,chunkId:r.chunk_id,title:r.title,uri:r.uri,
+            sourceType:r.source_type,documentType:r.document_type,modifiedAt:r.modified_at,
+            snippet:snippet(r.text,literal),score:0.82/(1+results.length*0.08),
+            reasons:['literal_substring'],page:r.page??undefined,headingPath:r.heading_path??undefined});
+          if(results.length>=limit)break;
+        }
+      }
+      return results;
     } catch { return []; }
   }
 
