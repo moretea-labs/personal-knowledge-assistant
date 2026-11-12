@@ -448,6 +448,21 @@ final class PDFReaderController: ObservableObject {
         return pageIndex.map { $0 + 1 }
     }
 
+    /// The dragged payload is the same portable Markdown citation as Add to Note.
+    /// NSTextView can insert this plain text at its native drop position, preserving
+    /// the existing draft binding, undo stack and autosave writer.
+    func selectedCitationForDrag(pdf: URL, root: URL) -> String? {
+        guard let text = selectedText() else { return nil }
+        let anchor = selectedSourceAnchor()
+        let page = anchor?.page ?? selectedSourcePage() ?? currentPageIndex + 1
+        guard let snippet = PDFPageReference.noteSnippet(
+            for: pdf, page: page, root: root, selectedText: text, anchor: anchor
+        ) else { return nil }
+        // The entire dropped citation remains a block even when the caret is
+        // in the middle of an existing Markdown paragraph.
+        return "\n\n\(snippet)\n\n"
+    }
+
     func selectedSourceAnchor() -> PDFSourceAnchor? {
         guard let document,
               let selection = pdfView?.currentSelection,
@@ -720,6 +735,7 @@ struct NativePDFPreview: View {
     let requestedAnchor: PDFSourceAnchor?
     let navigationSequence: UInt64
     let onAddPageToNote: (Int, String?, PDFSourceAnchor?) -> Void
+    let onQuoteToCurrentNote: ((Int, String?, PDFSourceAnchor?) -> Void)?
 
     @State private var pageText = "1"
     @State private var searchText = ""
@@ -759,10 +775,20 @@ struct NativePDFPreview: View {
                     PDFCanvas(
                         document: document,
                         url: url,
+                        root: root,
                         requestedPage: requestedPage,
                         requestedAnchor: requestedAnchor,
                         navigationSequence: navigationSequence,
-                        controller: controller
+                        controller: controller,
+                        quoteTitle: language.text("Add to Study Note"),
+                        onQuoteToCurrentNote: onQuoteToCurrentNote.map { quote in
+                            {
+                                let anchor = controller.selectedSourceAnchor()
+                                quote(anchor?.page ?? controller.selectedSourcePage()
+                                      ?? controller.currentPageIndex + 1,
+                                      controller.selectedText(), anchor)
+                            }
+                        }
                     )
                     .accessibilityIdentifier("pks-pdf-canvas")
                 }
@@ -1051,18 +1077,96 @@ struct NativePDFPreview: View {
     }
 }
 
+/// Preserve PDFKit's native copy/search menu and add a direct path to the
+/// active Markdown note only when the current PDF contains a text selection.
+final class StudyPDFView: PDFView {
+    var quoteTitle = "Add to Study Note"
+    var onQuoteToCurrentNote: (() -> Void)?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let standard = super.menu(for: event)
+        guard onQuoteToCurrentNote != nil,
+              let selectedText = currentSelection?.string,
+              !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return standard
+        }
+        let menu = (standard?.copy() as? NSMenu) ?? NSMenu()
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
+        let item = NSMenuItem(title: quoteTitle,
+                              action: #selector(quoteSelection(_:)), keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func quoteSelection(_ sender: NSMenuItem) {
+        onQuoteToCurrentNote?()
+    }
+}
+
 private struct PDFCanvas: NSViewRepresentable {
     let document: PDFDocument
     let url: URL
+    let root: URL?
     let requestedPage: Int?
     let requestedAnchor: PDFSourceAnchor?
     let navigationSequence: UInt64
     let controller: PDFReaderController
+    let quoteTitle: String
+    let onQuoteToCurrentNote: (() -> Void)?
 
-    final class Coordinator {
+    @MainActor
+    final class Coordinator: NSObject, NSGestureRecognizerDelegate, NSDraggingSource {
         let controller: PDFReaderController
+        weak var view: PDFView?
+        var pdf: URL?
+        var root: URL?
+
         init(controller: PDFReaderController) {
             self.controller = controller
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: NSGestureRecognizer) -> Bool {
+            guard let pan = gestureRecognizer as? NSPanGestureRecognizer,
+                  let view, let selection = view.currentSelection,
+                  controller.selectedText() != nil else { return false }
+            let location = pan.location(in: view)
+            let translation = pan.translation(in: view)
+            let origin = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
+            guard let page = view.page(for: origin, nearest: false),
+                  selection.pages.contains(where: { $0 === page }) else { return false }
+            return selection.bounds(for: page).insetBy(dx: -3, dy: -3)
+                .contains(view.convert(origin, to: page))
+        }
+
+        @objc func dragSelectedText(_ recognizer: NSPanGestureRecognizer) {
+            guard recognizer.state == .began,
+                  let view, let pdf, let root,
+                  let citation = controller.selectedCitationForDrag(pdf: pdf, root: root),
+                  let event = NSApp.currentEvent,
+                  event.type == .leftMouseDragged else { return }
+
+            let item = NSPasteboardItem()
+            item.setString(citation, forType: .string)
+            let drag = NSDraggingItem(pasteboardWriter: item)
+            let label = String(citation.prefix(64)).replacingOccurrences(of: "\n", with: " ")
+            let image = NSImage(size: NSSize(width: 250, height: 34))
+            image.lockFocus()
+            NSColor.controlBackgroundColor.setFill()
+            NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: 250, height: 34),
+                         xRadius: 6, yRadius: 6).fill()
+            (label as NSString).draw(in: NSRect(x: 10, y: 9, width: 230, height: 20),
+                                     withAttributes: [.font: NSFont.systemFont(ofSize: 12),
+                                                      .foregroundColor: NSColor.labelColor])
+            image.unlockFocus()
+            drag.setDraggingFrame(NSRect(origin: recognizer.location(in: view),
+                                         size: image.size), contents: image)
+            view.beginDraggingSession(with: [drag], event: event, source: self)
+        }
+
+        func draggingSession(_ session: NSDraggingSession,
+                             sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+            .copy
         }
     }
 
@@ -1071,7 +1175,16 @@ private struct PDFCanvas: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> PDFView {
-        let view = PDFView()
+        let view = StudyPDFView()
+        view.quoteTitle = quoteTitle
+        view.onQuoteToCurrentNote = onQuoteToCurrentNote
+        context.coordinator.view = view
+        context.coordinator.pdf = url
+        context.coordinator.root = root
+        let recognizer = NSPanGestureRecognizer(target: context.coordinator,
+                                                action: #selector(Coordinator.dragSelectedText(_:)))
+        recognizer.delegate = context.coordinator
+        view.addGestureRecognizer(recognizer)
         controller.attach(
             view: view,
             document: document,
@@ -1084,6 +1197,12 @@ private struct PDFCanvas: NSViewRepresentable {
     }
 
     func updateNSView(_ view: PDFView, context: Context) {
+        if let view = view as? StudyPDFView {
+            view.quoteTitle = quoteTitle
+            view.onQuoteToCurrentNote = onQuoteToCurrentNote
+        }
+        context.coordinator.pdf = url
+        context.coordinator.root = root
         controller.attach(
             view: view,
             document: document,

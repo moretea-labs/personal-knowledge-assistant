@@ -3323,7 +3323,22 @@ struct NotesWindow: View {
                     selectedText: selectedText,
                     anchor: anchor
                 )
-            }
+            },
+            onQuoteToCurrentNote: model.selected == nil || model.externalBody != nil
+                ? nil : { page, selectedText, anchor in
+                    guard let note = model.selected else { return }
+                    Task { @MainActor in
+                        let saved = await model.appendPDFReference(
+                            pdf: url, page: page, selectedText: selectedText,
+                            anchor: anchor, to: note
+                        )
+                        guard saved, model.selected == note else { return }
+                        showingMindMap = false
+                        compactStudyShowsStudyPane = true
+                        mode = .edit
+                        editorFocused = true
+                    }
+                }
         )
     }
 
