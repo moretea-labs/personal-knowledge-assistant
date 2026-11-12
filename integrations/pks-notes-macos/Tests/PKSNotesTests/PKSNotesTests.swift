@@ -2734,13 +2734,30 @@ extension PKSNotesTests {
         XCTAssertTrue(model.openInternalLink(link))
         XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
         XCTAssertEqual(model.previewPDFPage, 4)
-        XCTAssertEqual(model.previewPDFAnchor, anchor)
+        let restoredAnchor = try XCTUnwrap(model.previewPDFAnchor)
+        XCTAssertEqual(restoredAnchor.page, anchor.page)
+        XCTAssertEqual(restoredAnchor.fingerprint, anchor.fingerprint)
+        XCTAssertEqual(restoredAnchor.normalizedRects.count, anchor.normalizedRects.count)
+        for (restored, original) in zip(restoredAnchor.normalizedRects, anchor.normalizedRects) {
+            XCTAssertEqual(restored.minX, original.minX, accuracy: 0.00001)
+            XCTAssertEqual(restored.minY, original.minY, accuracy: 0.00001)
+            XCTAssertEqual(restored.width, original.width, accuracy: 0.00001)
+            XCTAssertEqual(restored.height, original.height, accuracy: 0.00001)
+        }
         XCTAssertEqual(model.selected, note.standardizedFileURL)
 
         let firstNavigation = model.previewPDFNavigationSequence
         XCTAssertTrue(model.openInternalLink(link))
         XCTAssertEqual(model.previewPDFNavigationSequence, firstNavigation + 1)
-        XCTAssertEqual(model.previewPDFAnchor, anchor)
+        let secondRestoredAnchor = try XCTUnwrap(model.previewPDFAnchor)
+        XCTAssertEqual(secondRestoredAnchor.page, anchor.page)
+        XCTAssertEqual(secondRestoredAnchor.fingerprint, anchor.fingerprint)
+        for (restored, original) in zip(secondRestoredAnchor.normalizedRects, anchor.normalizedRects) {
+            XCTAssertEqual(restored.minX, original.minX, accuracy: 0.00001)
+            XCTAssertEqual(restored.minY, original.minY, accuracy: 0.00001)
+            XCTAssertEqual(restored.width, original.width, accuracy: 0.00001)
+            XCTAssertEqual(restored.height, original.height, accuracy: 0.00001)
+        }
 
         model.closePDFPreview()
         XCTAssertNil(model.previewPDFAnchor)
@@ -3508,5 +3525,70 @@ extension PKSNotesTests {
         XCTAssertTrue(undoManager.canUndo)
         undoManager.undo()
         XCTAssertEqual(textView.string, original)
+    }
+}
+
+
+extension PKSNotesTests {
+    @MainActor
+    func testPDFCaptureRoundTripsThroughMarkdownMindMapAndBackToExactSource() async throws {
+        let defaults = UserDefaults.standard
+        let oldWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
+        let oldBookmark = defaults.object(forKey: "PKSNotesWorkspaceBookmark")
+        defer {
+            if let oldWorkspace { defaults.set(oldWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let oldBookmark { defaults.set(oldBookmark, forKey: "PKSNotesWorkspaceBookmark") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = root.appendingPathComponent("Study.md")
+        try "# Study\n".write(to: note, atomically: true, encoding: .utf8)
+        let pdf = root.appendingPathComponent("Book.pdf")
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let textView = NSTextView(frame: bounds)
+        textView.string = "Introduction\n\nImportant fact\nSecond line\n\nConclusion"
+        let generated = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: bounds)))
+        XCTAssertTrue(generated.write(to: pdf))
+        let document = try XCTUnwrap(PDFDocument(url: pdf))
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(note)
+        await waitForNote(model, note)
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        defer { controller.detach(view: view) }
+        controller.attach(view: view, document: document, url: pdf, requestedPage: nil, requestedAnchor: nil)
+        let selection = try XCTUnwrap(document.findString("Important fact", withOptions: []).first)
+        selection.add(try XCTUnwrap(document.findString("Second line", withOptions: []).first))
+        view.currentSelection = selection
+        let selectedText = try XCTUnwrap(controller.selectedText())
+        let anchor = try XCTUnwrap(controller.selectedSourceAnchor())
+        let saved = await model.appendPDFReference(pdf: pdf, page: anchor.page, commentary: "My interpretation",
+                                                   selectedText: selectedText, anchor: anchor, to: note)
+        XCTAssertTrue(saved)
+        let persisted = try String(contentsOf: note, encoding: .utf8)
+        XCTAssertTrue(persisted.contains("My interpretation"))
+        XCTAssertTrue(persisted.contains("> Important fact\n> Second line"))
+        let nodes = MindMapOutline.nodes(in: persisted)
+        let node = try XCTUnwrap(nodes.first)
+        let presentation = try XCTUnwrap(MindMapOutline.presentations(in: persisted, nodes: nodes)[node.id])
+        let link = try XCTUnwrap(presentation.links.first)
+        XCTAssertEqual(link.target, "/Book.pdf#\(anchor.fragment)")
+        XCTAssertTrue(model.openKnowledgeLink(link.target))
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        XCTAssertEqual(model.previewPDFPage, anchor.page)
+        let finalRestoredAnchor = try XCTUnwrap(model.previewPDFAnchor)
+        XCTAssertEqual(finalRestoredAnchor.page, anchor.page)
+        XCTAssertEqual(finalRestoredAnchor.fingerprint, anchor.fingerprint)
+        for (restored, original) in zip(finalRestoredAnchor.normalizedRects, anchor.normalizedRects) {
+            XCTAssertEqual(restored.minX, original.minX, accuracy: 0.00001)
+            XCTAssertEqual(restored.minY, original.minY, accuracy: 0.00001)
+            XCTAssertEqual(restored.width, original.width, accuracy: 0.00001)
+            XCTAssertEqual(restored.height, original.height, accuracy: 0.00001)
+        }
+        XCTAssertEqual(model.selected, note.standardizedFileURL)
     }
 }

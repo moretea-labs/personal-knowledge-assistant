@@ -736,6 +736,7 @@ struct NativePDFPreview: View {
     let navigationSequence: UInt64
     let onAddPageToNote: (Int, String?, PDFSourceAnchor?) -> Void
     let onQuoteToCurrentNote: ((Int, String?, PDFSourceAnchor?) -> Void)?
+    let onReload: () -> Void
 
     @State private var pageText = "1"
     @State private var searchText = ""
@@ -822,6 +823,7 @@ struct NativePDFPreview: View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
                 pdfOutlineControls
+                pdfReloadControl
                 Divider().frame(height: 18)
                 pdfNavigationControls
                 pdfCaptureControls
@@ -838,6 +840,7 @@ struct NativePDFPreview: View {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     pdfOutlineControls
+                    pdfReloadControl
                     pdfNavigationControls
                     Spacer(minLength: 0)
                     pdfCaptureControls
@@ -880,6 +883,16 @@ struct NativePDFPreview: View {
             // AppKit menus otherwise claim leftover toolbar width and
             // squeeze page/search controls at the split-pane threshold.
             .frame(width: 24, height: 26)
+    }
+
+    private var pdfReloadControl: some View {
+        Button(action: onReload) {
+            Image(systemName: "arrow.clockwise")
+        }
+        .buttonStyle(.plain)
+        .help(language.text("Reload PDF"))
+        .accessibilityLabel(language.text("Reload PDF"))
+        .accessibilityIdentifier("pks-pdf-reload")
     }
 
     private var pdfNavigationControls: some View {
@@ -1068,6 +1081,8 @@ struct NativePDFPreview: View {
             Text(language.text("The original file may be unavailable or damaged."))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            Button(language.text("Reload PDF"), action: onReload)
+                .padding(.top, 6)
             Button(language.text("Open with Default App")) {
                 NSWorkspace.shared.open(url)
             }

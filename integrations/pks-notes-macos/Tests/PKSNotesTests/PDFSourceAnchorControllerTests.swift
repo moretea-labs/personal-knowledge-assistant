@@ -330,4 +330,99 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         controller.nextSearchMatch()
         XCTAssertEqual(controller.searchMatchIndex, 0)
     }
+
+    @MainActor
+    func testPDFDocumentLoadingReadsReplacementAtTheSamePath() async throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        func makeDocument(_ text: String) throws -> PDFDocument {
+            let textView = NSTextView(frame: bounds)
+            textView.string = text
+            return try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: textView.bounds)))
+        }
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Reload-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertTrue(try makeDocument("Original PDF source").write(to: url))
+        let originalResult = await PDFDocumentLoading.load(url)
+        let original = try XCTUnwrap(originalResult)
+        XCTAssertNotNil(original.findString("Original PDF source", withOptions: []).first)
+
+        XCTAssertTrue(try makeDocument("Updated PDF source").write(to: url))
+        let refreshedResult = await PDFDocumentLoading.load(url)
+        let refreshed = try XCTUnwrap(refreshedResult)
+        XCTAssertFalse(original === refreshed)
+        XCTAssertNotNil(refreshed.findString("Updated PDF source", withOptions: []).first)
+        XCTAssertNil(refreshed.findString("Original PDF source", withOptions: []).first)
+    }
+
+    @MainActor
+    func testExternalPDFChangeReloadsOpenPreviewFromFSEvents() async throws {
+        let defaults = UserDefaults.standard
+        let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        let priorBookmark = defaults.data(forKey: "PKSNotesWorkspaceBookmark")
+        defer {
+            if let priorWorkspace { defaults.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let priorBookmark { defaults.set(priorBookmark, forKey: "PKSNotesWorkspaceBookmark") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+        }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LeafspanPDFExternal-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        func makeDocument(_ text: String) throws -> PDFDocument {
+            let textView = NSTextView(frame: bounds)
+            textView.string = text
+            return try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: textView.bounds)))
+        }
+
+        let pdf = root.appendingPathComponent("Source.pdf")
+        let originalData = try XCTUnwrap(makeDocument("Original PDF source").dataRepresentation())
+        try originalData.write(to: pdf, options: .atomic)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openFile(pdf, pdfPage: 1)
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        let initialReload = model.previewPDFReloadSequence
+
+        // Exercise the actual FSEvents monitor installed by openWorkspace.
+        let updatedData = try XCTUnwrap(makeDocument("Updated PDF source").dataRepresentation())
+        try updatedData.write(to: pdf, options: .atomic)
+        for _ in 0..<120 where model.previewPDFReloadSequence == initialReload {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+
+        XCTAssertEqual(model.previewPDFReloadSequence, initialReload + 1, "Preview: \(model.previewPDF?.path ?? "nil"); source: \(pdf.path); canonical source: \(pdf.resolvingSymlinksInPath().path)")
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        XCTAssertEqual(model.previewPDFPage, 1)
+    }
+
+    @MainActor
+    func testWorkspaceChangeMonitorEmitsFileLevelEvents() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LeafspanFSEvents-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let file = root.appendingPathComponent("Source.pdf")
+        try Data("original".utf8).write(to: file)
+        let event = expectation(description: "FSEvents reports the changed file path")
+        let canonicalFile = file.standardizedFileURL.resolvingSymlinksInPath()
+        var observedPaths: [String] = []
+        let monitor = try XCTUnwrap(WorkspaceChangeMonitor(root: root) { paths in
+            observedPaths.append(contentsOf: paths)
+            if paths.contains(where: { URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath() == canonicalFile }) { event.fulfill() }
+        })
+
+        try Data("updated".utf8).write(to: file, options: .atomic)
+        await fulfillment(of: [event], timeout: 3)
+        XCTAssertTrue(observedPaths.contains(where: { URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath() == canonicalFile }), "Observed paths: \(observedPaths); file: \(file.path)")
+        withExtendedLifetime(monitor) {}
+    }
 }

@@ -918,6 +918,7 @@ final class NotesModel: ObservableObject {
     @Published private(set) var previewPDFPage: Int?
     @Published private(set) var previewPDFAnchor: PDFSourceAnchor?
     @Published private(set) var previewPDFNavigationSequence: UInt64 = 0
+    @Published private(set) var previewPDFReloadSequence: UInt64 = 0
     @Published var draft: String = "" {
         didSet {
             draftRevision &+= 1
@@ -1260,8 +1261,10 @@ final class NotesModel: ObservableObject {
     /// note is reloaded only if the user has no unsaved edits.
     func noteExternalPaths(_ paths: [String], in observedRoot: URL) {
         guard let root, root == observedRoot else { return }
-        let base = root.standardizedFileURL.path
-        pendingExternalPaths.formUnion(paths.filter {
+        let base = root.standardizedFileURL.resolvingSymlinksInPath().path
+        pendingExternalPaths.formUnion(paths.map {
+            URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path
+        }.filter {
             $0 == base || $0.hasPrefix(base + "/")
         })
         guard !pendingExternalPaths.isEmpty else { return }
@@ -1272,6 +1275,12 @@ final class NotesModel: ObservableObject {
             let changed = self.pendingExternalPaths
             self.pendingExternalPaths.removeAll()
             self.externalRefreshTask = nil
+            if let previewPDF = self.previewPDF?.standardizedFileURL.resolvingSymlinksInPath(),
+               changed.contains(where: {
+                   URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath() == previewPDF
+               }) {
+                self.reloadPreviewPDF()
+            }
             var parents: Set<URL> = []
             for path in changed {
                 let url = URL(fileURLWithPath: path).standardizedFileURL
@@ -1964,6 +1973,11 @@ final class NotesModel: ObservableObject {
         backlinkTask?.cancel()
         backlinks = []
         loadingBacklinks = false
+    }
+
+    func reloadPreviewPDF() {
+        guard previewPDF != nil else { return }
+        previewPDFReloadSequence &+= 1
     }
 
     func loadRelationships() {
