@@ -9,6 +9,7 @@ final class PKSNotesAppDelegate: NSObject, NSApplicationDelegate {
     private var markdownKeyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        GlobalSearchController.shared.install()
         markdownKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard let command = MarkdownShortcut.command(for: event),
                   MarkdownNativeCommand.perform(command) else { return event }
@@ -127,6 +128,9 @@ struct PKSNotesApp: App {
                     NotificationCenter.default.post(name: NotesMenuEvent.quickOpen, object: nil)
                 }
                 .keyboardShortcut("p", modifiers: .command)
+                Button(language.resolved == .simplifiedChinese ? "全局搜索…" : "Global Search…") {
+                    GlobalSearchController.shared.present()
+                }
                 Button(language.text("Reveal Current File")) {
                     NotificationCenter.default.post(name: NotesMenuEvent.revealCurrentFile, object: nil)
                 }
@@ -163,6 +167,7 @@ private struct PKSNotesSettingsView: View {
     @EnvironmentObject private var purchases: ProPurchases
     @Environment(\.notesLanguage) private var language
     @State private var showingPro = false
+    @State private var showingGlobalSearch = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -170,9 +175,10 @@ private struct PKSNotesSettingsView: View {
                 settingsPaneButton(
                     title: language.text("Appearance"),
                     symbol: "textformat.size",
-                    selected: !showingPro
+                    selected: !showingPro && !showingGlobalSearch
                 ) {
                     showingPro = false
+                    showingGlobalSearch = false
                 }
                 settingsPaneButton(
                     title: language.text("Pro"),
@@ -180,15 +186,26 @@ private struct PKSNotesSettingsView: View {
                     selected: showingPro
                 ) {
                     showingPro = true
+                    showingGlobalSearch = false
+                }
+                settingsPaneButton(
+                    title: language.resolved == .simplifiedChinese ? "搜索" : "Search",
+                    symbol: "magnifyingglass",
+                    selected: showingGlobalSearch
+                ) {
+                    showingGlobalSearch = true
+                    showingPro = false
                 }
             }
-            .frame(width: 280)
+            .frame(width: 350)
             .padding(.top, 16)
             .padding(.bottom, 10)
 
             Divider()
 
-            if showingPro {
+            if showingGlobalSearch {
+                GlobalSearchSettingsView()
+            } else if showingPro {
                 ProSettingsView()
                     .environmentObject(purchases)
             } else {
