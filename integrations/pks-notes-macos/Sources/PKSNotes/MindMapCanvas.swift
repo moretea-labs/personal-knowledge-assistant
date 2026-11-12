@@ -854,7 +854,7 @@ struct MindMapCanvas: View {
     private func nodeDetails(_ node: MindMapNode) -> some View {
         let presentation = nodePresentations[node.id]
             ?? MindMapOutline.presentation(for: node.title)
-        let notes = MindMapOutline.attachedBody(in: source, nodeID: node.id, nodes: nodes)
+        let notes = presentation.body
         return VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text(language.text("Node Details")).font(.headline)

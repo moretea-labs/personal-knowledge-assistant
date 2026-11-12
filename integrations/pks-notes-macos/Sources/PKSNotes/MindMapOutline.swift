@@ -320,6 +320,15 @@ struct MarkdownLinkOccurrence: Equatable {
 struct MindMapNodePresentation: Equatable, Sendable {
     let title: String
     let links: [MindMapLink]
+    // Derived once with the links from the same canonical Markdown segment.
+    // The inspector must not split the entire document during pan/pinch redraw.
+    let body: String
+
+    init(title: String, links: [MindMapLink], body: String = "") {
+        self.title = title
+        self.links = links
+        self.body = body
+    }
 }
 
 extension MindMapOutline {
@@ -572,25 +581,12 @@ extension MindMapOutline {
                     links.append(link)
                 }
             }
-            result[node.id] = .init(title: title.title, links: links)
+            result[node.id] = .init(
+                title: title.title, links: links,
+                body: body.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
         }
         return result
-    }
-
-    /// Return only the Markdown body attached directly to this structural
-    /// node. Descendant headings/list items own their own content.
-    static func attachedBody(
-        in markdown: String,
-        nodeID: Int,
-        nodes: [MindMapNode]
-    ) -> String {
-        guard let index = nodes.firstIndex(where: { $0.id == nodeID }) else { return "" }
-        let lines = markdown.components(separatedBy: "\n")
-        let start = nodeID + 1
-        let end = min(lines.count, index + 1 < nodes.count ? nodes[index + 1].id : lines.count)
-        guard start < end else { return "" }
-        return lines[start..<end].joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Add one canonical WikiLink to an existing structural node. The source

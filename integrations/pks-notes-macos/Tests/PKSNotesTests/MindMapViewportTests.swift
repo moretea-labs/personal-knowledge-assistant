@@ -41,6 +41,20 @@ final class MindMapViewportTests: XCTestCase {
         XCTAssertEqual(newY, oldY, accuracy: 0.001)
     }
 
+    func testInspectorBodyTracksMarkdownRevisionWithoutSeparateAuthority() throws {
+        let base = "# Root\nSummary\n- Child\n  Original detail\n"
+        let changed = "# Root\nUpdated summary\n- Child\n  Updated detail\n"
+        let originalNodes = MindMapOutline.nodes(in: base)
+        let original = MindMapOutline.presentations(in: base, nodes: originalNodes)
+        let changedNodes = MindMapOutline.nodes(in: changed)
+        let updated = MindMapOutline.presentations(in: changed, nodes: changedNodes)
+        XCTAssertEqual(original[0]?.body, "Summary")
+        XCTAssertEqual(updated[0]?.body, "Updated summary")
+        XCTAssertEqual(original[2]?.body, "Original detail")
+        XCTAssertEqual(updated[2]?.body, "Updated detail")
+        XCTAssertEqual(original[0]?.links, updated[0]?.links)
+    }
+
     func testFitCanShowMapsFarLargerThanTheViewport() {
         let scale = MindMapViewportGeometry.fittingZoom(
             mapSize: CGSize(width: 20000, height: 150000),
@@ -70,15 +84,16 @@ final class MindMapViewportTests: XCTestCase {
         let parent = try XCTUnwrap(nodes.first(where: { $0.title == "Parent" }))
         let child = try XCTUnwrap(nodes.first(where: { $0.title == "Child" }))
         let sibling = try XCTUnwrap(nodes.first(where: { $0.title == "Sibling" }))
-        let parentBody = MindMapOutline.attachedBody(in: source, nodeID: parent.id, nodes: nodes)
-        let childBody = MindMapOutline.attachedBody(in: source, nodeID: child.id, nodes: nodes)
+        let projected = MindMapOutline.presentations(in: source, nodes: nodes)
+        let parentBody = try XCTUnwrap(projected[parent.id]?.body)
+        let childBody = try XCTUnwrap(projected[child.id]?.body)
         XCTAssertTrue(parentBody.contains("A note for parent."))
         XCTAssertTrue(parentBody.contains("[[Reference|source]]"))
         XCTAssertFalse(parentBody.contains("Child note line"))
         XCTAssertTrue(childBody.contains("Quoted detail"))
         XCTAssertFalse(childBody.contains("Sibling-only"))
         XCTAssertEqual(
-            MindMapOutline.attachedBody(in: source, nodeID: sibling.id, nodes: nodes),
+            projected[sibling.id]?.body,
             "Sibling-only details"
         )
     }
