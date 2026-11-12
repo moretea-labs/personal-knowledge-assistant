@@ -100,6 +100,26 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertEqual(merged[1].sourceHit?.score, 0.9)
     }
 
+    func testRelatedSuggestionsRemainVisibleWhenDirectResultsFillTheLimit() {
+        func item(_ index: Int, related: Bool) -> GlobalSearchItem {
+            let url = URL(fileURLWithPath: "/Users/test/Documents/Study-\(index).md")
+            let hit = SearchHit(documentId: "\(index)", chunkId: nil,
+                                title: url.lastPathComponent, uri: url.path,
+                                sourceType: "local", snippet: "notes about study",
+                                score: Double(index) / 100, headingPath: nil)
+            return GlobalSearchItem.file(hit, url: url, isRelated: related)
+        }
+        let direct = (0..<45).map { item($0, related: false) }
+        let related = (45..<57).map { item($0, related: true) }
+        let results = GlobalSearchRanker.merge(
+            apps: [], documents: direct, spotlight: [],
+            related: related, query: "学习阅读技巧", limit: 45)
+        XCTAssertEqual(results.count, 53)
+        XCTAssertTrue(results.prefix(45).allSatisfy { !$0.isRelated })
+        XCTAssertTrue(results.suffix(8).allSatisfy(\.isRelated))
+        XCTAssertEqual(Set(results.map(\.url)).count, 53)
+    }
+
     func testLocalFileSourceDoesNotInterpretOpaqueURI() {
         let hit = SearchHit(
             documentId: "opaque", chunkId: nil, title: "Notion page",

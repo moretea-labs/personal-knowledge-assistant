@@ -173,7 +173,7 @@ enum GlobalSearchRanker {
             if name.contains(term) { return isApp ? 4 : 5 }
             return 6 // content-only PKS match
         }
-        return unique.sorted { left, right in
+        let ranked = unique.sorted { left, right in
             let a = weight(left)
             let b = weight(right)
             if a != b { return a < b }
@@ -186,7 +186,12 @@ enum GlobalSearchRanker {
                 return left.title.count < right.title.count
             }
             return left.title.localizedStandardCompare(right.title) == .orderedAscending
-        }.prefix(max(0, limit)).map { $0 }
+        }
+        // Keep all direct-result slots. Related suggestions have a separate
+        // eight-item budget so a large Spotlight list cannot hide them.
+        let direct = ranked.lazy.filter { !$0.isRelated }.prefix(max(0, limit))
+        let suggestions = ranked.lazy.filter(\.isRelated).prefix(8)
+        return Array(direct) + Array(suggestions)
     }
 }
 
