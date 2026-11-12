@@ -190,6 +190,20 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         XCTAssertTrue(selectedText.contains("First page evidence"))
         XCTAssertTrue(selectedText.contains("Second page evidence"))
         XCTAssertNil(controller.selectedSourceAnchor())
+
+        let sourcePage = try XCTUnwrap(controller.selectedSourcePage())
+        XCTAssertEqual(sourcePage, 1, "A multi-page quote should use its first source page for a page-only link.")
+        let snippet = try XCTUnwrap(
+            PDFPageReference.noteSnippet(
+                for: url,
+                page: sourcePage,
+                root: url.deletingLastPathComponent(),
+                selectedText: selectedText
+            )
+        )
+        XCTAssertTrue(snippet.contains("#page=1"))
+        XCTAssertTrue(snippet.contains("> First page evidence"))
+        XCTAssertTrue(snippet.contains("> Second page evidence"))
     }
 
     @MainActor

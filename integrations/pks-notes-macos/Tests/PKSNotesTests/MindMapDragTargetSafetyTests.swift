@@ -52,6 +52,22 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         }
     }
 
+    func testDeletingLeafRebasesCollapsedBranchesAfterItsLine() throws {
+        let source = "# Plan\n- A\n  - A1\n- Delete me\n- B\n  - B1\n"
+        let nodes = MindMapOutline.nodes(in: source)
+        let a = try XCTUnwrap(nodes.first(where: { $0.title == "A" }))
+        let deleted = try XCTUnwrap(nodes.first(where: { $0.title == "Delete me" }))
+        let b = try XCTUnwrap(nodes.first(where: { $0.title == "B" }))
+        let collapsed = Set([a.id, b.id])
+
+        let updated = try XCTUnwrap(MindMapOutline.deleteLeaf(in: source, nodeID: deleted.id))
+        let rebased = MindMapOutline.rebasedLineIndexes(collapsed, afterDeletingLine: deleted.id)
+        let updatedB = try XCTUnwrap(MindMapOutline.nodes(in: updated).first(where: { $0.title == "B" }))
+
+        XCTAssertEqual(rebased, Set([a.id, updatedB.id]))
+        XCTAssertEqual(updatedB.id, b.id - 1)
+    }
+
     func testUnsafeUnindentedTextStillRejectsChildInsertionAndReparenting() throws {
         let source = "# Plan\n- Move me\n- Target\nUnindented text outside the list.\n- Existing child\n"
         let nodes = MindMapOutline.nodes(in: source)

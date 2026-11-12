@@ -848,6 +848,7 @@ struct MindMapCanvas: View {
         case .deleteLeaf:
             guard let selectedID, let updated = MindMapOutline.deleteLeaf(in: source, nodeID: selectedID)
             else { return false }
+            collapsed = MindMapOutline.rebasedLineIndexes(collapsed, afterDeletingLine: selectedID)
             source = updated
             self.selectedID = nil
         case .deleteBranch:

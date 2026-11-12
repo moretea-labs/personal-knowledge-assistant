@@ -235,6 +235,15 @@ extension MindMapOutline {
         return lines.joined(separator: "\n")
     }
 
+    /// Node IDs are Markdown line indexes. Rebase transient view state after a
+    /// single-line leaf deletion so collapsed branches remain attached to their nodes.
+    static func rebasedLineIndexes(_ indexes: Set<Int>, afterDeletingLine lineIndex: Int) -> Set<Int> {
+        Set(indexes.compactMap { index in
+            guard index != lineIndex else { return nil }
+            return index > lineIndex ? index - 1 : index
+        })
+    }
+
     /// Explicit branch deletion: only a complete, list-only subtree may be
     /// deleted. Never remove Markdown paragraphs, headings, code or attachments
     /// as a side effect of a graph edit.

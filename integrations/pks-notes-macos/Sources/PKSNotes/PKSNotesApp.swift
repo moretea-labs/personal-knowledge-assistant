@@ -403,7 +403,7 @@ struct NotesWindow: View {
     @State private var pdfCaptureTask: Task<Void, Never>?
     @State private var loadedPDFDocument: PDFDocument?
     @State private var loadedPDFURL: URL?
-    @State private var compactStudyShowsNote = false
+    @State private var compactStudyShowsStudyPane = false
     @StateObject private var pdfReaderController = PDFReaderController()
     @State private var mindMapLinkNodeID: Int?
     @State private var linkRepairRequest: (source: URL, target: String, revision: UInt64)?
@@ -553,13 +553,15 @@ struct NotesWindow: View {
                     .accessibilityIdentifier("pks-markdown-toolbar-toggle")
                 }
 
-                if model.selected != nil && model.externalBody == nil && model.previewPDF == nil {
+                if model.selected != nil && model.externalBody == nil {
                     Toggle(isOn: mindMapToggleBinding) {
                         toolbarSymbol(showingMindMap ? "doc.text" : "point.3.connected.trianglepath.dotted")
                     }
                     .toggleStyle(.button)
                     .buttonStyle(.plain)
-                    .help(language.text(showingMindMap ? "Return to Markdown" : "Mind Map"))
+                    .help(language.text(showingMindMap
+                        ? (model.previewPDF == nil ? "Return to Markdown" : "Return to Study Note")
+                        : "Mind Map"))
                     .accessibilityLabel(language.text("Mind Map"))
                     .accessibilityValue(language.text(showingMindMap ? "On" : "Off"))
                     .accessibilityIdentifier("pks-mind-map-toggle")
@@ -823,6 +825,10 @@ struct NotesWindow: View {
             treeCursorPath = nil
             previewCache = nil
         }
+        .onChange(of: model.previewPDF) { _, pdf in
+            guard pdf != nil else { return }
+            compactStudyShowsStudyPane = showingMindMap
+        }
         .onChange(of: model.loadingNote) { _, loading in
             if !loading, mode != .read {
                 resetNativeEditorUndoBaseline()
@@ -835,6 +841,9 @@ struct NotesWindow: View {
             if openAsMap {
                 pendingMindMapOpen = nil
                 mode = .read
+                if model.previewPDF != nil {
+                    compactStudyShowsStudyPane = true
+                }
             }
             showingBacklinks = false
             outgoingLinks = []
@@ -1165,7 +1174,7 @@ struct NotesWindow: View {
         pdfCaptureRequest = PDFCaptureRequest(
             pdf: pdf,
             page: page,
-            selectedText: selectionWasUnanchored ? nil : normalizedSelectedText,
+            selectedText: normalizedSelectedText,
             anchor: selectionWasUnanchored ? nil : anchor,
             selectionWasUnanchored: selectionWasUnanchored
         )
@@ -1225,7 +1234,7 @@ struct NotesWindow: View {
 
             closeQuickPicker()
             // In narrow windows, show the citation in the note immediately.
-            compactStudyShowsNote = true
+            compactStudyShowsStudyPane = true
             pendingEditorFocus = studyNote
             model.openStudyNote(studyNote)
             if model.selected == studyNote {
@@ -1604,7 +1613,7 @@ struct NotesWindow: View {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(language.text("This PDF selection cannot be linked precisely. Only the current page will be added. Clear the selection and retry to capture the quote."))
+                        Text(language.text("This PDF selection cannot be linked precisely. The quote will still be saved with a page-only link to its first page. Select a smaller passage on one page to enable precise highlighting."))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -3108,26 +3117,28 @@ struct NotesWindow: View {
                 // Small windows show one full-width surface; larger windows provide
                 // a balanced, user-resizable PDF + note workspace.
                 GeometryReader { geometry in
-                    if geometry.size.width >= 820 {
+                    let splitThreshold: CGFloat = showingMindMap ? 940 : 820
+                    let secondaryMinimumWidth: CGFloat = showingMindMap ? 460 : 340
+                    if geometry.size.width >= splitThreshold {
                         HSplitView {
                             pdfReader(url)
-                                .frame(minWidth: 420, idealWidth: geometry.size.width * 0.55)
+                                .frame(minWidth: 420, idealWidth: geometry.size.width * (showingMindMap ? 0.50 : 0.55))
                             studyNotePane(note)
-                                .frame(minWidth: 340, idealWidth: geometry.size.width * 0.45)
+                                .frame(minWidth: secondaryMinimumWidth, idealWidth: geometry.size.width * (showingMindMap ? 0.50 : 0.45))
                         }
                     } else {
                         VStack(spacing: 0) {
                             HStack(spacing: 12) {
-                                Picker("", selection: $compactStudyShowsNote) {
+                                Picker("", selection: $compactStudyShowsStudyPane) {
                                     Text("PDF").tag(false)
-                                    Text(language.text("Study Note")).tag(true)
+                                    Text(language.text(showingMindMap ? "Mind Map" : "Study Note")).tag(true)
                                 }
                                 .pickerStyle(.segmented)
                                 .labelsHidden()
                                 .frame(width: 224)
                                 .accessibilityIdentifier("pks-study-compact-picker")
                                 Spacer(minLength: 0)
-                                Text(compactStudyShowsNote
+                                Text(compactStudyShowsStudyPane
                                      ? note.deletingPathExtension().lastPathComponent
                                      : url.lastPathComponent)
                                     .font(.caption)
@@ -3138,7 +3149,7 @@ struct NotesWindow: View {
                             .frame(height: 42)
                             .background(Color.primary.opacity(colorScheme == .dark ? 0.055 : 0.025))
 
-                            if compactStudyShowsNote {
+                            if compactStudyShowsStudyPane {
                                 studyNotePane(note)
                             } else {
                                 pdfReader(url)
@@ -3153,29 +3164,7 @@ struct NotesWindow: View {
         } else if showingMindMap
                     && ProAccess.allows(.mindMap, unlocked: purchases.unlocked)
                     && model.selected != nil && model.externalBody == nil {
-            MindMapCanvas(
-                source: $model.draft,
-                selectedID: $mindMapSelectionLine,
-                revision: model.draftRevision,
-                openLink: { target in
-                    _ = model.openKnowledgeLink(
-                        target,
-                        onUnresolved: { beginLinkRepair(target) }
-                    )
-                },
-                connectNote: { nodeID in beginMindMapLink(nodeID: nodeID) },
-                connectSection: { nodeID in beginMindMapLink(nodeID: nodeID, section: true) },
-                createLinkedNote: { nodeID in createLinkedNoteFromMindMap(nodeID: nodeID) },
-                revealSource: { line in revealMarkdownLine(line) },
-                importOutline: { markdown, name in
-                    // Import into a new note rather than overwriting the active note.
-                    guard model.newNote(named: name, initialContent: markdown) != nil else {
-                        return false
-                    }
-                    showingMindMap = true
-                    return true
-                }
-            )
+            mindMapCanvas
         } else if model.externalBody != nil || mode == .read {
             renderedNote
         } else if mode == .edit {
@@ -3188,6 +3177,33 @@ struct NotesWindow: View {
                     .frame(minWidth: 270)
             }
         }
+    }
+
+    private var mindMapCanvas: some View {
+        MindMapCanvas(
+            source: $model.draft,
+            selectedID: $mindMapSelectionLine,
+            revision: model.draftRevision,
+            openLink: { target in
+                _ = model.openKnowledgeLink(
+                    target,
+                    onUnresolved: { beginLinkRepair(target) }
+                )
+            },
+            connectNote: { nodeID in beginMindMapLink(nodeID: nodeID) },
+            connectSection: { nodeID in beginMindMapLink(nodeID: nodeID, section: true) },
+            createLinkedNote: { nodeID in createLinkedNoteFromMindMap(nodeID: nodeID) },
+            revealSource: { line in revealMarkdownLine(line) },
+            importOutline: { markdown, name in
+                // Import into a new note rather than overwriting the active note.
+                guard model.newNote(named: name, initialContent: markdown) != nil else {
+                    return false
+                }
+                showingMindMap = true
+                compactStudyShowsStudyPane = true
+                return true
+            }
+        )
     }
 
     private func pdfReader(_ url: URL) -> some View {
@@ -3215,13 +3231,13 @@ struct NotesWindow: View {
     private func studyNotePane(_ note: URL) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "note.text")
+                Image(systemName: showingMindMap ? "point.3.connected.trianglepath.dotted" : "note.text")
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(note.deletingPathExtension().lastPathComponent)
                         .font(.caption.weight(.semibold))
                         .lineLimit(1)
-                    Text(language.text("Study Note"))
+                    Text(language.text(showingMindMap ? "Mind Map" : "Study Note"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -3231,19 +3247,22 @@ struct NotesWindow: View {
                         .controlSize(.mini)
                         .accessibilityLabel(language.text("Save"))
                 }
-                Button {
-                    mode = mode == .read ? .edit : .read
-                    if mode == .edit {
-                        Task { @MainActor in editorFocused = true }
+                if !showingMindMap {
+                    Button {
+                        mode = mode == .read ? .edit : .read
+                        if mode == .edit {
+                            Task { @MainActor in editorFocused = true }
+                        }
+                    } label: {
+                        Image(systemName: mode == .read ? "square.and.pencil" : "book")
+                            .frame(width: 24, height: 24)
                     }
-                } label: {
-                    Image(systemName: mode == .read ? "square.and.pencil" : "book")
-                        .frame(width: 24, height: 24)
+                    .buttonStyle(.plain)
+                    .help(language.text(mode == .read ? "Edit" : "Read"))
+                    .accessibilityIdentifier("pks-study-note-mode-toggle")
                 }
-                .buttonStyle(.plain)
-                .help(language.text(mode == .read ? "Edit" : "Read"))
-                .accessibilityIdentifier("pks-study-note-mode-toggle")
                 Button {
+                    showingMindMap = false
                     model.closePDFPreview()
                     mode = .edit
                     Task { @MainActor in editorFocused = true }
@@ -3260,9 +3279,11 @@ struct NotesWindow: View {
             .padding(.horizontal, 12)
             .frame(height: 38)
             .background(Color.primary.opacity(colorScheme == .dark ? 0.055 : 0.03))
-            // Study notes honor the normal Markdown reading mode. Do not
-            // silently force raw source in an otherwise read-only session.
-            if mode == .read {
+            // The note and map are two views of the same canonical Markdown draft.
+            // Preserve the normal read/edit mode whenever the map is not visible.
+            if showingMindMap {
+                mindMapCanvas
+            } else if mode == .read {
                 renderedNote
             } else {
                 editor
@@ -3413,6 +3434,9 @@ struct NotesWindow: View {
                 mindMapSelectionLine = MindMapOutline.nodes(in: model.draft).first?.id
             }
             showingMindMap = true
+            if model.previewPDF != nil {
+                compactStudyShowsStudyPane = true
+            }
         } else if let line = mindMapSelectionLine {
             revealMarkdownLine(line)
         } else {

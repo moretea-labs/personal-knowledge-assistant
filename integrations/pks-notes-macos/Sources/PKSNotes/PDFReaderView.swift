@@ -188,10 +188,8 @@ enum PDFPageReference {
 
         if let selectedText {
             let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                guard let anchor, anchor.page == page, anchor.matches(text: trimmed) else {
-                    return nil
-                }
+            if !trimmed.isEmpty, let anchor {
+                guard anchor.page == page, anchor.matches(text: trimmed) else { return nil }
             }
         }
 
@@ -437,6 +435,17 @@ final class PDFReaderController: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty else { return nil }
         return text
+    }
+
+    func selectedSourcePage() -> Int? {
+        guard let document,
+              let pages = pdfView?.currentSelection?.pages,
+              !pages.isEmpty else { return nil }
+        let pageIndex = pages
+            .map { document.index(for: $0) }
+            .filter { $0 >= 0 && $0 < document.pageCount }
+            .min()
+        return pageIndex.map { $0 + 1 }
     }
 
     func selectedSourceAnchor() -> PDFSourceAnchor? {
@@ -736,7 +745,7 @@ struct NativePDFPreview: View {
                     } else if controller.invalidRequestedSelection {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle")
-                            Text(language.text("Referenced PDF selection has changed."))
+                            Text(language.text("Referenced PDF selection changed. The page is open, but the exact highlight is no longer available."))
                             Spacer()
                         }
                         .font(.caption)
@@ -887,7 +896,7 @@ struct NativePDFPreview: View {
                 let selectedText = controller.selectedText()
                 let anchor = controller.selectedSourceAnchor()
                 onAddPageToNote(
-                    anchor?.page ?? controller.currentPageIndex + 1,
+                    anchor?.page ?? controller.selectedSourcePage() ?? controller.currentPageIndex + 1,
                     selectedText,
                     anchor
                 )
@@ -897,7 +906,7 @@ struct NativePDFPreview: View {
             }
             .buttonStyle(.plain)
             .disabled(root == nil || controller.pageCount == 0)
-            .help(language.text("Add current PDF page to note"))
+            .help(language.text("Add selected PDF text or current page to note"))
             .accessibilityIdentifier("pks-pdf-add-page-to-note")
 
             Button {
