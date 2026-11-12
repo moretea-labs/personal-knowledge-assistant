@@ -74,6 +74,32 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertNil(GlobalSearchItem.spotlight(url, title: "Study.md", isFolder: false).sourceHit)
     }
 
+    func testRelatedSuggestionsRankAfterDirectMatches() {
+        XCTAssertFalse(GlobalSearchRanker.shouldFindRelated("kafka"))
+        XCTAssertFalse(GlobalSearchRanker.shouldFindRelated("my file"))
+        XCTAssertTrue(GlobalSearchRanker.shouldFindRelated("Kafka consumer event"))
+        XCTAssertTrue(GlobalSearchRanker.shouldFindRelated("腹膜透析治疗"))
+        XCTAssertFalse(GlobalSearchRanker.shouldFindRelated("腹膜"))
+        func item(_ name: String, score: Double, related: Bool) -> GlobalSearchItem {
+            let url = URL(fileURLWithPath: "/Users/test/Documents/" + name)
+            let hit = SearchHit(documentId: name, chunkId: nil, title: name,
+                uri: url.path, sourceType: "local", snippet: "matching consumer event",
+                score: score, headingPath: nil)
+            return GlobalSearchItem.file(hit, url: url, isRelated: related)
+        }
+        let merged = GlobalSearchRanker.merge(
+            apps: [], documents: [item("Kafka.md", score: 0.6, related: false)],
+            spotlight: [], related: [
+                item("Offset.md", score: 0.4, related: true),
+                item("Kafka.md", score: 0.99, related: true),
+                item("Consumer.md", score: 0.9, related: true)
+            ], query: "Kafka consumer event")
+        XCTAssertEqual(merged.map(\.title), ["Kafka.md", "Consumer.md", "Offset.md"])
+        XCTAssertFalse(merged[0].isRelated)
+        XCTAssertTrue(merged[1].isRelated)
+        XCTAssertEqual(merged[1].sourceHit?.score, 0.9)
+    }
+
     func testLocalFileSourceDoesNotInterpretOpaqueURI() {
         let hit = SearchHit(
             documentId: "opaque", chunkId: nil, title: "Notion page",

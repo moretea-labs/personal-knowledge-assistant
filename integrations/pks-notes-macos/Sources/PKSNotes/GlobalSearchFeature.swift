@@ -55,24 +55,25 @@ struct GlobalSearchItem: Identifiable, Sendable {
     let snippet: String?
     // Existing PKS provenance for in-workspace Markdown/PDF navigation.
     let sourceHit: SearchHit?
+    let isRelated: Bool
 
     static func application(_ url: URL, title: String) -> GlobalSearchItem {
         .init(id: "app:" + url.path, kind: .application, title: title,
               subtitle: url.deletingLastPathComponent().path, url: url,
-              snippet: nil, sourceHit: nil)
+              snippet: nil, sourceHit: nil, isRelated: false)
     }
 
-    static func file(_ hit: SearchHit, url: URL) -> GlobalSearchItem {
+    static func file(_ hit: SearchHit, url: URL, isRelated: Bool = false) -> GlobalSearchItem {
         .init(id: "file:" + url.path, kind: .file, title: hit.title,
               subtitle: url.deletingLastPathComponent().path, url: url,
-              snippet: hit.snippet, sourceHit: hit)
+              snippet: hit.snippet, sourceHit: hit, isRelated: isRelated)
     }
 
     static func spotlight(_ url: URL, title: String, isFolder: Bool) -> GlobalSearchItem {
         .init(id: (isFolder ? "folder:" : "file:") + url.path,
               kind: isFolder ? .folder : .file, title: title,
               subtitle: url.deletingLastPathComponent().path, url: url,
-              snippet: nil, sourceHit: nil)
+              snippet: nil, sourceHit: nil, isRelated: false)
     }
 }
 
@@ -136,15 +137,35 @@ enum GlobalApplicationCatalog {
 /// Presentation-only ranker: one visible result per path, regardless of the
 /// separate OS application/Spotlight and PKS content result providers.
 enum GlobalSearchRanker {
+    // Extra suggestions require at least two meaningful terms or a longer Han
+    // phrase. The PKS "related" mode independently requires multiple
+    // matching content signals; never infer relatedness from names alone.
+    static func shouldFindRelated(_ query: String) -> Bool {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count >= 4 else { return false }
+        if text.unicodeScalars.filter({ (0x4E00...0x9FFF).contains($0.value) }).count >= 4 {
+            return true
+        }
+        let ignored: Set<String> = [
+            "my", "the", "and", "about", "file", "files", "note", "notes",
+            "文件", "资料", "笔记", "相关"
+        ]
+        let meaningful = text.lowercased().split { !$0.isLetter && !$0.isNumber }
+            .filter { $0.count >= 2 && !ignored.contains(String($0)) }
+        return meaningful.count >= 2
+    }
+
     static func merge(apps: [GlobalSearchItem], documents: [GlobalSearchItem],
-                      spotlight: [GlobalSearchItem], query: String,
+                      spotlight: [GlobalSearchItem],
+                      related: [GlobalSearchItem] = [], query: String,
                       limit: Int = 45) -> [GlobalSearchItem] {
         let term = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
         var seen = Set<String>()
-        let unique = (apps + documents + spotlight).filter {
+        let unique = (apps + documents + spotlight + related).filter {
             seen.insert($0.url.standardizedFileURL.path).inserted
         }
         func weight(_ item: GlobalSearchItem) -> Int {
+            if item.isRelated { return 7 }
             let name = item.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             let isApp = item.kind == .application
             if name == term { return isApp ? 0 : 1 }
@@ -156,6 +177,11 @@ enum GlobalSearchRanker {
             let a = weight(left)
             let b = weight(right)
             if a != b { return a < b }
+            if a >= 6 {
+                let leftScore = left.sourceHit?.score ?? 0
+                let rightScore = right.sourceHit?.score ?? 0
+                if leftScore != rightScore { return leftScore > rightScore }
+            }
             if left.title.count != right.title.count {
                 return left.title.count < right.title.count
             }
@@ -178,6 +204,7 @@ final class GlobalSearchResults: ObservableObject {
     private let spotlight = GlobalSpotlightLookup()
     private var appHits: [GlobalSearchItem] = []
     private var pksHits: [GlobalSearchItem] = []
+    private var relatedHits: [GlobalSearchItem] = []
     private var spotlightHits: [GlobalSearchItem] = []
     private var searchTask: Task<Void, Never>?
 
@@ -200,7 +227,8 @@ final class GlobalSearchResults: ObservableObject {
     private func publish() {
         let selectedID = selected?.id
         let combined = GlobalSearchRanker.merge(
-            apps: appHits, documents: pksHits, spotlight: spotlightHits, query: query
+            apps: appHits, documents: pksHits, spotlight: spotlightHits,
+            related: relatedHits, query: query
         )
         items = combined
         if let selectedID, let index = combined.firstIndex(where: { $0.id == selectedID }) {
@@ -217,6 +245,7 @@ final class GlobalSearchResults: ObservableObject {
         statusMessage = nil
         appHits = GlobalApplicationCatalog.matches(applications, query: text)
         pksHits = []
+        relatedHits = []
         spotlightHits = []
         publish()
         loading = false
@@ -262,6 +291,38 @@ final class GlobalSearchResults: ObservableObject {
                 }
                 self.publish()
                 self.statusMessage = nil
+
+                // Only request additional evidence-based suggestions for
+                // substantive queries when literal/content results are sparse.
+                // PKS uses the same existing catalog, not a second index.
+                if GlobalSearchRanker.shouldFindRelated(text), self.pksHits.count < 15 {
+                    var relatedURL = URLComponents(string: "http://127.0.0.1:3217/api/search")!
+                    relatedURL.queryItems = [
+                        URLQueryItem(name: "q", value: text),
+                        URLQueryItem(name: "mode", value: "related"),
+                        URLQueryItem(name: "limit", value: "12")
+                    ]
+                    var relatedRequest = URLRequest(url: relatedURL.url!)
+                    relatedRequest.timeoutInterval = 3
+                    do {
+                        let (relatedData, relatedResponse) = try await URLSession.shared.data(for: relatedRequest)
+                        guard (relatedResponse as? HTTPURLResponse)?.statusCode == 200 else {
+                            throw URLError(.badServerResponse)
+                        }
+                        let relatedResults = try JSONDecoder().decode([SearchHit].self, from: relatedData)
+                        guard !Task.isCancelled,
+                              self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+                        var seen = Set<String>()
+                        self.relatedHits = relatedResults.compactMap { hit in
+                            guard let file = hit.localFileURL,
+                                  seen.insert(file.standardizedFileURL.path).inserted else { return nil }
+                            return GlobalSearchItem.file(hit, url: file, isRelated: true)
+                        }
+                        self.publish()
+                    } catch {
+                        // Optional related suggestions must not break primary search.
+                    }
+                }
             } catch {
                 guard !Task.isCancelled, self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 // Ordinary filename search remains available through Spotlight.
@@ -446,6 +507,15 @@ private struct GlobalSearchPalette: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         ForEach(Array(results.items.enumerated()), id: \.element.id) { index, item in
+                            if item.isRelated &&
+                                (index == 0 || !results.items[index - 1].isRelated) {
+                                Text(AppLanguage.current.resolved == .simplifiedChinese
+                                     ? "可能相关" : "Possibly related")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 14)
+                                    .padding(.top, 11)
+                            }
                             HStack(spacing: 12) {
                                 Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
                                     .resizable()

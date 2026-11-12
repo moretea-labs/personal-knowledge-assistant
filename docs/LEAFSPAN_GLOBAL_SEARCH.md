@@ -15,6 +15,23 @@ deduplicated by local URL and ordered to prioritize exact/prefix filename
 matches over content-only hits. PKS results retain their original evidence
 record and reuse Leafspan's existing note navigation and unsaved-draft safety
 when a note is within the current workspace. Other files open through macOS.
+
+### Evidence-based possibly related files
+
+For a substantial multi-term query (or at least four Han characters), when
+PKS returns fewer than 15 ordinary document hits the palette requests a second,
+bounded `mode=related` result set (12 maximum). PKS requires at least two
+independent matched content terms and minimum evidence coverage. These items
+appear under a distinct **Possibly related** heading, after exact file names
+and document content matches. Their snippets, PKS scores and source hits are
+retained for context and native navigation. A duplicate document already
+present in direct search is not repeated.
+
+This is neither a whole-disk recommendation crawler nor an AI request on every
+keystroke. It reuses the same PKS index and obeys the separate opt-in for
+indexed-folder search. If PKS is unavailable, system apps and Spotlight
+filenames continue to work without related suggestions.
+
 Arrow keys move the selection; Return opens it; Escape closes the window.
 Context actions include Finder reveal and copy path. No new persistent file
 index is created by the macOS app.
