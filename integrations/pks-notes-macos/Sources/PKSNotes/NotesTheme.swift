@@ -2,12 +2,41 @@ import SwiftUI
 import AppKit
 
 /// One persisted presentation preference; notes remain plain Markdown on disk.
-enum NotesTheme: String, CaseIterable, Identifiable {
+enum NotesTheme: RawRepresentable, CaseIterable, Identifiable, Equatable {
     case system
     case paper
     case warm
     case midnight
     case graphite
+    case community(CommunityReadingTheme)
+
+    static var allCases: [NotesTheme] { [.system, .paper, .warm, .midnight, .graphite] }
+
+    init?(rawValue: String) {
+        switch rawValue {
+        case "system": self = .system
+        case "paper": self = .paper
+        case "warm": self = .warm
+        case "midnight": self = .midnight
+        case "graphite": self = .graphite
+        default:
+            guard rawValue.hasPrefix("community:"),
+                  let package = CommunityThemeStore.application.load(id: String(rawValue.dropFirst(10)))
+            else { return nil }
+            self = .community(package)
+        }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .system: "system"
+        case .paper: "paper"
+        case .warm: "warm"
+        case .midnight: "midnight"
+        case .graphite: "graphite"
+        case .community(let package): "community:" + package.id
+        }
+    }
 
     var id: String { rawValue }
 
@@ -18,6 +47,7 @@ enum NotesTheme: String, CaseIterable, Identifiable {
         case .warm: "Warm"
         case .midnight: "Midnight"
         case .graphite: "Graphite"
+        case .community(let package): package.name
         }
     }
 
@@ -28,6 +58,7 @@ enum NotesTheme: String, CaseIterable, Identifiable {
         case .warm: "sun.max"
         case .midnight: "moon.stars"
         case .graphite: "circle.lefthalf.filled"
+        case .community: "paintpalette"
         }
     }
 
@@ -67,6 +98,7 @@ enum NotesTheme: String, CaseIterable, Identifiable {
                 light: Self.rgb(0.962, 0.964, 0.958),
                 dark: Self.rgb(0.125, 0.129, 0.137)
             )
+        case .community(let package): package.colors.canvas.color()
         }
     }
 
@@ -94,6 +126,7 @@ enum NotesTheme: String, CaseIterable, Identifiable {
                 light: Self.rgb(0.15, 0.16, 0.15),
                 dark: Self.rgb(0.915, 0.916, 0.902)
             )
+        case .community(let package): package.colors.ink.color()
         }
     }
 
@@ -121,6 +154,7 @@ enum NotesTheme: String, CaseIterable, Identifiable {
                 light: Self.rgb(0.900, 0.910, 0.890),
                 dark: Self.rgb(0.173, 0.18, 0.192)
             )
+        case .community(let package): package.colors.codeBackground.color()
         }
     }
 
@@ -128,6 +162,7 @@ enum NotesTheme: String, CaseIterable, Identifiable {
         switch self {
         case .warm: .serif
         case .system, .paper, .midnight, .graphite: .default
+        case .community(let package): package.typography.design
         }
     }
 
@@ -203,6 +238,7 @@ extension NotesTheme {
                 pageWidth: 755, quoteInset: 15, codePadding: 17,
                 codeCorner: 6, listSpacing: 0.28
             )
+        case .community(let package): package.typography.reading
         }
     }
 
@@ -230,6 +266,33 @@ extension NotesTheme {
                 light: Self.rgb(0.49, 0.33, 0.09),
                 dark: Self.rgb(0.92, 0.72, 0.39)
             )
+        case .community(let package): package.colors.link.color()
         }
+    }
+
+    var headingDesign: Font.Design { self == .system ? .serif : typography.design }
+    var quoteRuleWidth: CGFloat {
+        if case .community(let package) = self { return CGFloat(package.blocks.quoteRuleWidth) }
+        return self == .warm ? 2 : 3
+    }
+    var quoteRuleOpacity: Double {
+        if case .community = self { return 0.30 }
+        return self == .midnight || self == .graphite ? 0.42 : 0.22
+    }
+    var quoteTextOpacity: Double {
+        if case .community(let package) = self { return package.blocks.quoteOpacity }
+        return self == .warm ? 0.82 : 0.78
+    }
+    var quoteItalic: Bool {
+        if case .community(let package) = self { return package.blocks.quoteItalic }
+        return self == .warm
+    }
+    var inlineCodeScale: Double {
+        if case .community(let package) = self { return package.blocks.inlineCodeScale }
+        return self == .midnight || self == .graphite ? 0.98 : 0.88
+    }
+    var codeBlockScale: Double {
+        if case .community(let package) = self { return package.blocks.codeBlockScale }
+        return self == .midnight || self == .graphite ? 0.94 : 0.85
     }
 }

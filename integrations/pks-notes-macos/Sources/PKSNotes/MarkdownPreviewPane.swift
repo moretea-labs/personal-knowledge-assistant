@@ -222,7 +222,7 @@ struct MarkdownPreviewPane: View {
     }
 }
 
-private extension Theme {
+extension Theme {
     /// A theme controls typography and block layout, not merely background color.
     /// Parsed MarkdownContent is unchanged when any appearance setting changes.
     static func pksReading(_ theme: NotesTheme, fontAdjustment: Double, lineAdjustment: Double) -> Theme {
@@ -242,7 +242,7 @@ private extension Theme {
             }
             .heading1 { configuration in
                 configuration.label
-                    .fontDesign(theme == .system ? .serif : type.design)
+                    .fontDesign(theme.headingDesign)
                     .markdownTextStyle {
                         FontWeight(type.headingWeight)
                         FontSize(.em(type.heading1))
@@ -252,7 +252,7 @@ private extension Theme {
             }
             .heading2 { configuration in
                 configuration.label
-                    .fontDesign(theme == .system ? .serif : type.design)
+                    .fontDesign(theme.headingDesign)
                     .markdownTextStyle {
                         FontWeight(type.headingWeight)
                         FontSize(.em(type.heading2))
@@ -278,22 +278,22 @@ private extension Theme {
             .blockquote { configuration in
                 HStack(alignment: .top, spacing: type.quoteInset) {
                     RoundedRectangle(cornerRadius: 1)
-                        .fill(theme.ink.opacity(theme == .midnight || theme == .graphite ? 0.42 : 0.22))
-                        .frame(width: theme == .warm ? 2 : 3)
-                    if theme == .warm {
+                        .fill(theme.ink.opacity(theme.quoteRuleOpacity))
+                        .frame(width: theme.quoteRuleWidth)
+                    if theme.quoteItalic {
                         configuration.label
                             .italic()
-                            .foregroundStyle(theme.ink.opacity(0.82))
+                            .foregroundStyle(theme.ink.opacity(theme.quoteTextOpacity))
                     } else {
                         configuration.label
-                            .foregroundStyle(theme.ink.opacity(0.78))
+                            .foregroundStyle(theme.ink.opacity(theme.quoteTextOpacity))
                     }
                 }
                 .markdownMargin(top: .rem(0.5), bottom: .rem(type.paragraphSpacing))
             }
             .code {
                 FontFamilyVariant(.monospaced)
-                FontSize(.em(theme == .midnight || theme == .graphite ? 0.98 : 0.88))
+                FontSize(.em(theme.inlineCodeScale))
                 BackgroundColor(theme.codeBackground)
             }
             .codeBlock { configuration in
@@ -303,7 +303,7 @@ private extension Theme {
                         .relativeLineSpacing(.em(0.24))
                         .markdownTextStyle {
                             FontFamilyVariant(.monospaced)
-                            FontSize(.em(theme == .midnight || theme == .graphite ? 0.94 : 0.85))
+                            FontSize(.em(theme.codeBlockScale))
                         }
                         .padding(type.codePadding)
                 }

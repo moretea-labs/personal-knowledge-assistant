@@ -2864,9 +2864,9 @@ extension PKSNotesTests {
             ),
             "My interpretation\n- remember this\n\n[Book.pdf · p. 2](/Book.pdf#\(quoteAnchor.fragment))\n\n> Quoted fact"
         )
-        XCTAssertNil(PDFPageReference.noteSnippet(
+        XCTAssertEqual(PDFPageReference.noteSnippet(
             for: pdf, page: 2, root: root, selectedText: "Quoted fact"
-        ))
+        ), "[Book.pdf · p. 2](/Book.pdf#page=2)\n\n> Quoted fact")
         let staleFingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Different fact"))
         let staleAnchor = try XCTUnwrap(PDFSourceAnchor(
             page: 2,
@@ -2905,14 +2905,16 @@ extension PKSNotesTests {
         XCTAssertFalse(model.loadingFiles)
         model.openFile(pdf, pdfPage: 4)
 
-        let rejectedUnanchoredSelection = await model.appendPDFReference(
+        let appendedPageOnlyQuote = await model.appendPDFReference(
             pdf: pdf,
             page: 4,
             selectedText: "Unanchored quote",
             to: note
         )
-        XCTAssertFalse(rejectedUnanchoredSelection)
-        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "# Study\n")
+        XCTAssertTrue(appendedPageOnlyQuote)
+        let pageOnlyCapture = try String(contentsOf: note, encoding: .utf8)
+        XCTAssertTrue(pageOnlyCapture.contains("[Book.pdf · p. 4](/Book.pdf#page=4)"))
+        XCTAssertTrue(pageOnlyCapture.contains("> Unanchored quote"))
 
         let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Important fact\nSecond line"))
         let anchor = try XCTUnwrap(PDFSourceAnchor(
