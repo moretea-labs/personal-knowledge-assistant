@@ -2661,6 +2661,14 @@ extension PKSNotesTests {
         )
     }
 
+    func testPDFPageReferenceRejectsDuplicateOrMalformedPageParameters() throws {
+        let duplicate = try XCTUnwrap(URL(string: "/Study.pdf#page=7&page=8"))
+        XCTAssertNil(PDFPageReference.page(from: duplicate))
+
+        let malformed = try XCTUnwrap(URL(string: "/Study.pdf#page=invalid&page=8"))
+        XCTAssertNil(PDFPageReference.page(from: malformed))
+    }
+
     @MainActor
     func testPDFManualPageJumpRejectsOutOfRangeInsteadOfClampingSilently() throws {
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))

@@ -174,13 +174,14 @@ struct PDFSourceAnchor: Equatable {
 enum PDFPageReference {
     static func page(from url: URL) -> Int? {
         guard let fragment = url.fragment else { return nil }
+        var requestedPage: Int?
         for part in fragment.split(separator: "&") {
             let pair = part.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            guard pair.count == 2, pair[0].lowercased() == "page",
-                  let page = Int(pair[1]), page > 0 else { continue }
-            return page
+            guard pair.count == 2, pair[0].lowercased() == "page" else { continue }
+            guard requestedPage == nil, let page = Int(pair[1]), page > 0 else { return nil }
+            requestedPage = page
         }
-        return nil
+        return requestedPage
     }
 
     static func anchor(from url: URL) -> PDFSourceAnchor? {
