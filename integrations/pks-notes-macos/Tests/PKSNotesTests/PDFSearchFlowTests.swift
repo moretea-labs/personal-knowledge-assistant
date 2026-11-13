@@ -144,6 +144,40 @@ final class PDFSearchFlowTests: XCTestCase {
         controller.detach(view: view)
     }
 
+    func testEditingSubmittedQueryPreservesPageOnlyWarningForMultiPageSelection() async throws {
+        let document = try makeDocument(pages: [
+            "Alpha search result. First page source evidence.",
+            "Second page source evidence."
+        ])
+        let view = PDFView(frame: NSRect(x: 0, y: 0, width: 700, height: 800))
+        let controller = PDFReaderController()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pks-search-multipage-selection-\(UUID().uuidString).pdf")
+        controller.attach(view: view, document: document, url: url,
+                          requestedPage: nil, requestedAnchor: nil)
+
+        controller.search("alpha")
+        try await finishSearch(controller)
+
+        let selection = try XCTUnwrap(
+            document.findString("First page source evidence", withOptions: []).first
+        )
+        selection.add(try XCTUnwrap(
+            document.findString("Second page source evidence", withOptions: []).first
+        ))
+        view.currentSelection = selection
+        await Task.yield()
+        XCTAssertTrue(controller.selectionNeedsPageOnlyReference)
+
+        controller.invalidateSearchIfQueryChanged("beta")
+
+        let selectedText = try XCTUnwrap(controller.selectedText())
+        XCTAssertTrue(selectedText.contains("First page source evidence"))
+        XCTAssertTrue(selectedText.contains("Second page source evidence"))
+        XCTAssertTrue(controller.selectionNeedsPageOnlyReference)
+        controller.detach(view: view)
+    }
+
     func testCrossPageSearchUpdatesCanonicalPageIndex() async throws {
         let document = try makeDocument(pages: [
             "Opening evidence.",

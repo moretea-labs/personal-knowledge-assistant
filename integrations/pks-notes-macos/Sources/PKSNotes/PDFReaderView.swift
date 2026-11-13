@@ -781,7 +781,7 @@ final class PDFReaderController: ObservableObject {
             pdfView?.currentSelection = nil
         }
         activeSearchSelection = nil
-        selectionNeedsPageOnlyReference = false
+        syncSelectionStatus()
         completedSearchQuery = ""
         searchMatchCount = 0
         searchMatchIndex = 0
