@@ -259,6 +259,18 @@ enum PDFPageReference {
     }
 }
 
+enum PDFStudyNoteTarget {
+    static func resolve(note: URL?, pdf: URL, root: URL?, externalBody: String?) -> URL? {
+        guard externalBody == nil,
+              let note,
+              let root,
+              ["md", "markdown"].contains(note.pathExtension.lowercased()),
+              WorkspaceFiles.contains(note, in: root),
+              WorkspaceFiles.contains(pdf, in: root) else { return nil }
+        return note
+    }
+}
+
 struct PDFOutlineEntry: Identifiable, Equatable {
     let id: String
     let title: String

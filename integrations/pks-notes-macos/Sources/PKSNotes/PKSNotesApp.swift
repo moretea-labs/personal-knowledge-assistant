@@ -3620,21 +3620,26 @@ struct NotesWindow: View {
                     anchor: anchor
                 )
             },
-            onQuoteToCurrentNote: model.selected == nil || model.externalBody != nil
-                ? nil : { page, selectedText, anchor in
-                    guard let note = model.selected else { return }
+            onQuoteToCurrentNote: PDFStudyNoteTarget.resolve(
+                note: model.selected, pdf: url, root: model.root, externalBody: model.externalBody
+            ).map { note in
+                { page, selectedText, anchor in
+                    guard PDFStudyNoteTarget.resolve(
+                        note: model.selected, pdf: url, root: model.root, externalBody: model.externalBody
+                    )?.standardizedFileURL == note.standardizedFileURL else { return }
                     Task { @MainActor in
                         let saved = await model.appendPDFReference(
                             pdf: url, page: page, selectedText: selectedText,
                             anchor: anchor, to: note
                         )
-                        guard saved, model.selected == note else { return }
+                        guard saved, model.selected?.standardizedFileURL == note.standardizedFileURL else { return }
                         showingMindMap = false
                         compactStudyShowsStudyPane = true
                         mode = .edit
                         editorFocused = true
                     }
-                },
+                }
+            },
             onReload: { model.reloadPreviewPDF() }
         )
         .id(model.previewPDFReloadSequence)

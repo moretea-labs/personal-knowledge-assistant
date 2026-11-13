@@ -78,6 +78,35 @@ final class PDFCitationDragTests: XCTestCase {
         XCTAssertNil(PDFCitationPasteboard.markdown(from: 42))
     }
 
+    func testPDFQuoteContextMenuRequiresAnInWorkspaceMarkdownStudyNote() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-PDF-Quote-Target-\(UUID().uuidString)", isDirectory: true)
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-PDF-Quote-Outside-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+
+        let note = root.appendingPathComponent("Study.MARKDOWN")
+        let pdf = root.appendingPathComponent("Reading.pdf")
+        let foreignNote = outside.appendingPathComponent("Study.md")
+        let externalPDF = outside.appendingPathComponent("Outside.pdf")
+        XCTAssertTrue(FileManager.default.createFile(atPath: note.path, contents: Data()))
+        XCTAssertTrue(FileManager.default.createFile(atPath: pdf.path, contents: Data()))
+        XCTAssertTrue(FileManager.default.createFile(atPath: foreignNote.path, contents: Data()))
+        XCTAssertTrue(FileManager.default.createFile(atPath: externalPDF.path, contents: Data()))
+
+        XCTAssertEqual(PDFStudyNoteTarget.resolve(note: note, pdf: pdf, root: root, externalBody: nil), note)
+        XCTAssertNil(PDFStudyNoteTarget.resolve(note: pdf, pdf: pdf, root: root, externalBody: nil))
+        XCTAssertNil(PDFStudyNoteTarget.resolve(note: foreignNote, pdf: pdf, root: root, externalBody: nil))
+        XCTAssertNil(PDFStudyNoteTarget.resolve(note: note, pdf: pdf, root: root, externalBody: "External content"))
+        XCTAssertNil(PDFStudyNoteTarget.resolve(note: nil, pdf: pdf, root: root, externalBody: nil))
+        XCTAssertNil(PDFStudyNoteTarget.resolve(note: note, pdf: externalPDF, root: root, externalBody: nil))
+    }
+
     @MainActor
     func testPDFContextMenuOffersNativeDirectQuoteOnlyForSelectedText() throws {
         let source = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
