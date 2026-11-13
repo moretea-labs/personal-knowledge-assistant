@@ -229,8 +229,29 @@ enum MarkdownEditing {
         let ns = text as NSString
         let selected = ns.substring(with: range)
         let marker = String(repeating: "*", count: delimiterLength)
-        guard !selected.isEmpty else {
-            return wrap(text, range: range, prefix: marker, suffix: marker)
+        if selected.isEmpty {
+            var start = range.location
+            var end = range.location
+            while start > 0 && ns.character(at: start - 1) == 42 { start -= 1 }
+            while end < ns.length && ns.character(at: end) == 42 { end += 1 }
+            let leading = range.location - start
+            let trailing = end - range.location
+            let removeCount: Int
+            if leading == trailing {
+                removeCount = delimiterLength == 2
+                    ? (leading >= 2 ? 2 : 0)
+                    : (leading == 1 || leading >= 3 ? 1 : 0)
+            } else {
+                removeCount = 0
+            }
+            guard removeCount > 0 else {
+                return wrap(text, range: range, prefix: marker, suffix: marker)
+            }
+            let remaining = leading - removeCount
+            let replacement = String(repeating: "*", count: remaining * 2)
+            let target = NSRange(location: start, length: end - start)
+            let updated = ns.replacingCharacters(in: target, with: replacement)
+            return .init(text: updated, selection: NSRange(location: start + remaining, length: 0))
         }
 
         let insideLeading = selected.prefix { $0 == "*" }.count

@@ -35,6 +35,25 @@ final class MarkdownEditingTests: XCTestCase {
         XCTAssertEqual(italic.selection, NSRange(location: 1, length: 0))
     }
 
+    func testEmptyEmphasisCommandsToggleOffAndPreserveCombinedStyles() {
+        let prefix = "😀"
+        let caret = NSRange(location: (prefix as NSString).length, length: 0)
+
+        let bold = MarkdownEditing.apply(.bold, to: prefix, selection: caret)
+        let italicOnBold = MarkdownEditing.apply(.italic, to: bold.text, selection: bold.selection)
+        let italicOff = MarkdownEditing.apply(.italic, to: italicOnBold.text, selection: italicOnBold.selection)
+        let boldOff = MarkdownEditing.apply(.bold, to: italicOff.text, selection: italicOff.selection)
+        XCTAssertEqual([italicOnBold.text, italicOff.text, boldOff.text], [prefix + "******", prefix + "****", prefix])
+        XCTAssertEqual(boldOff.selection, caret)
+
+        let italic = MarkdownEditing.apply(.italic, to: prefix, selection: caret)
+        let boldOnItalic = MarkdownEditing.apply(.bold, to: italic.text, selection: italic.selection)
+        let boldOffItalic = MarkdownEditing.apply(.bold, to: boldOnItalic.text, selection: boldOnItalic.selection)
+        let italicOffAfterBold = MarkdownEditing.apply(.italic, to: boldOffItalic.text, selection: boldOffItalic.selection)
+        XCTAssertEqual([boldOnItalic.text, boldOffItalic.text, italicOffAfterBold.text], [prefix + "******", prefix + "**", prefix])
+        XCTAssertEqual(italicOffAfterBold.selection, caret)
+    }
+
     func testInlineCodeCommandTogglesOffLiveSelectionAndPreservesPadding() {
         let selectedCases = [
             "ordinary",
