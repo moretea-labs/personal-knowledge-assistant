@@ -68,9 +68,9 @@ enum MarkdownEditing {
         case .heading(let level):
             return prefixLines(text, range: range, prefix: String(repeating: "#", count: min(6, max(1, level))) + " ")
         case .bullet:
-            return prefixLines(text, range: range, prefix: "- ")
+            return toggleListLines(text, range: range, asTask: false)
         case .task:
-            return prefixLines(text, range: range, prefix: "- [ ] ")
+            return toggleListLines(text, range: range, asTask: true)
         case .quote:
             return prefixLines(text, range: range, prefix: "> ")
         case .table:
@@ -104,6 +104,104 @@ enum MarkdownEditing {
         let updated = ns.replacingCharacters(in: range, with: value)
         let cursor = location + (value as NSString).length
         return .init(text: updated, selection: NSRange(location: cursor, length: 0))
+    }
+
+    private enum ListLineKind {
+        case bullet
+        case task(checked: String)
+        case ordered
+    }
+
+    private struct ParsedListLine {
+        let indentation: String
+        let kind: ListLineKind
+        let content: String
+    }
+
+    private static func toggleListLines(
+        _ text: String,
+        range: NSRange,
+        asTask: Bool
+    ) -> MarkdownEditResult {
+        let ns = text as NSString
+        let lineRange = ns.lineRange(for: range)
+        let original = ns.substring(with: lineRange)
+        let hasTrailingNewline = original.hasSuffix("\n")
+        var lines = original.components(separatedBy: "\n")
+        if hasTrailingNewline { lines.removeLast() }
+
+        let contentLines = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        let removesExistingList = !contentLines.isEmpty && contentLines.allSatisfy { line in
+            guard let parsed = parseListLine(line) else { return false }
+            if asTask, case .task(_) = parsed.kind { return true }
+            if !asTask, case .bullet = parsed.kind { return true }
+            return false
+        }
+
+        let formattedLines = lines.map { line -> String in
+            if line.trimmingCharacters(in: .whitespaces).isEmpty && lines.count > 1 { return line }
+
+            let parsed = parseListLine(line)
+            let indentation = parsed?.indentation ?? ""
+            let content = parsed?.content ?? line
+            if removesExistingList {
+                return indentation + content
+            }
+            if asTask {
+                if let parsed, case let .task(checked) = parsed.kind {
+                    return indentation + "- [\(checked)] " + parsed.content
+                }
+                return indentation + "- [ ] " + content
+            }
+            return indentation + "- " + content
+        }
+
+        let replacement = formattedLines.joined(separator: "\n")
+            + (hasTrailingNewline ? "\n" : "")
+        let updated = ns.replacingCharacters(in: lineRange, with: replacement)
+        return .init(
+            text: updated,
+            selection: NSRange(
+                location: lineRange.location,
+                length: (replacement as NSString).length
+            )
+        )
+    }
+
+    private static func parseListLine(_ line: String) -> ParsedListLine? {
+        let indentation = String(line.prefix { $0 == " " || $0 == "\t" })
+        let value = String(line.dropFirst(indentation.count))
+
+        if let marker = value.first, "-*+".contains(marker), value.dropFirst().hasPrefix(" ") {
+            let body = String(value.dropFirst(2))
+            if body == "[ ]" || body.hasPrefix("[ ] ") {
+                return ParsedListLine(
+                    indentation: indentation,
+                    kind: .task(checked: " "),
+                    content: body == "[ ]" ? "" : String(body.dropFirst(4))
+                )
+            }
+            if body == "[x]" || body.hasPrefix("[x] ") || body == "[X]" || body.hasPrefix("[X] ") {
+                let checked = String(body.dropFirst(1).prefix(1))
+                return ParsedListLine(
+                    indentation: indentation,
+                    kind: .task(checked: checked),
+                    content: body.count == 3 ? "" : String(body.dropFirst(4))
+                )
+            }
+            return ParsedListLine(indentation: indentation, kind: .bullet, content: body)
+        }
+
+        let digits = value.prefix { $0.isNumber }
+        let suffix = value.dropFirst(digits.count)
+        if !digits.isEmpty && (suffix.hasPrefix(". ") || suffix.hasPrefix(") ")) {
+            return ParsedListLine(
+                indentation: indentation,
+                kind: .ordered,
+                content: String(suffix.dropFirst(2))
+            )
+        }
+        return nil
     }
 
     private static func wrapInlineCode(_ text: String, range: NSRange) -> MarkdownEditResult {

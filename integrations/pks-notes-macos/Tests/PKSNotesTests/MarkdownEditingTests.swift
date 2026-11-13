@@ -58,4 +58,51 @@ final class MarkdownEditingTests: XCTestCase {
             XCTAssertEqual((result.text as NSString).substring(with: result.selection), selected)
         }
     }
+
+    func testBulletListCommandTogglesOffExistingNestedBullets() {
+        let source = "- first\n  * nested\n"
+        let result = MarkdownEditing.apply(
+            .bullet, to: source, selection: NSRange(location: 0, length: (source as NSString).length)
+        )
+        XCTAssertEqual(result.text, "first\n  nested\n")
+    }
+
+    func testTaskCommandConvertsMixedLinesAndPreservesCheckedStateAndBlankLines() {
+        let source = "first\n* [X] done\n- bullet\n  \nlast\n"
+        let result = MarkdownEditing.apply(
+            .task, to: source, selection: NSRange(location: 0, length: (source as NSString).length)
+        )
+        XCTAssertEqual(result.text, "- [ ] first\n- [X] done\n- [ ] bullet\n  \n- [ ] last\n")
+    }
+
+    func testTaskListCommandTogglesOffCheckedAndUncheckedItems() {
+        let source = "- [ ] todo\n  + [x] done\n"
+        let result = MarkdownEditing.apply(
+            .task, to: source, selection: NSRange(location: 0, length: (source as NSString).length)
+        )
+        XCTAssertEqual(result.text, "todo\n  done\n")
+    }
+
+    func testBulletCommandConvertsOrderedAndTaskItemsWithoutNestingMarkers() {
+        let source = "1. first\n- [ ] done\n"
+        let result = MarkdownEditing.apply(
+            .bullet, to: source, selection: NSRange(location: 0, length: (source as NSString).length)
+        )
+        XCTAssertEqual(result.text, "- first\n- done\n")
+    }
+
+    func testMixedBulletSelectionDoesNotDoublePrefixExistingItems() {
+        let source = "- already\nplain\n"
+        let result = MarkdownEditing.apply(
+            .bullet, to: source, selection: NSRange(location: 0, length: (source as NSString).length)
+        )
+        XCTAssertEqual(result.text, "- already\n- plain\n")
+    }
+
+    func testTaskCommandCreatesAnEmptyItemInAnEmptyDocument() {
+        let result = MarkdownEditing.apply(.task, to: "", selection: NSRange(location: 0, length: 0))
+        XCTAssertEqual(result.text, "- [ ] ")
+        XCTAssertEqual(result.selection, NSRange(location: 0, length: 6))
+    }
+
 }
