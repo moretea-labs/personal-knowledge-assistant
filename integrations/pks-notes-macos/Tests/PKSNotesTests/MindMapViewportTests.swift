@@ -185,6 +185,38 @@ final class MindMapViewportTests: XCTestCase {
         )
     }
 
+    func testConnectorSpatialIndexBoundsExpansionForVeryLongEdges() throws {
+        func placement(_ id: Int, parentID: Int?, x: CGFloat) -> MindMapPlacement {
+            MindMapPlacement(
+                node: MindMapNode(id: id, depth: parentID == nil ? 0 : 1, title: "Node \(id)"),
+                parentID: parentID,
+                center: CGPoint(x: x, y: 100),
+                size: CGSize(width: 100, height: 60)
+            )
+        }
+
+        let layout = MindMapLayoutSnapshot(
+            placements: [
+                placement(1, parentID: nil, x: 100),
+                placement(2, parentID: 1, x: 1_000_000_000_000)
+            ],
+            size: CGSize(width: 1_000_000_001_000, height: 1_000)
+        )
+
+        XCTAssertEqual(
+            layout.visibleConnectors(
+                in: CGRect(x: 999_999_999_000, y: 0, width: 500, height: 300)
+            ).count,
+            1
+        )
+        XCTAssertEqual(
+            layout.visibleConnectors(
+                in: CGRect(x: 1e100, y: 0, width: 500, height: 300)
+            ).count,
+            0
+        )
+    }
+
     func testConnectorSpatialIndexKeepsInvalidGeometryVisible() {
         func placement(_ id: Int, parentID: Int?, x: CGFloat) -> MindMapPlacement {
             MindMapPlacement(

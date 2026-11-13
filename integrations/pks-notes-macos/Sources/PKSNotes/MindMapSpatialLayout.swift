@@ -91,6 +91,7 @@ private struct MindMapConnectorCell: Hashable {
 
 struct MindMapLayoutSnapshot: Equatable {
     private static let connectorCellSize = CGSize(width: 640, height: 480)
+    private static let maxIndexedCellsPerConnector = 64
 
     let placements: [MindMapPlacement]
     let size: CGSize
@@ -136,10 +137,21 @@ struct MindMapLayoutSnapshot: Equatable {
                 unindexedIndices.append(index)
                 continue
             }
-            let minColumn = Int(floor(bounds.minX / Self.connectorCellSize.width))
-            let maxColumn = Int(floor(bounds.maxX / Self.connectorCellSize.width))
-            let minRow = Int(floor(bounds.minY / Self.connectorCellSize.height))
-            let maxRow = Int(floor(bounds.maxY / Self.connectorCellSize.height))
+            guard let minColumn = Self.cellCoordinate(bounds.minX, size: Self.connectorCellSize.width),
+                  let maxColumn = Self.cellCoordinate(bounds.maxX, size: Self.connectorCellSize.width),
+                  let minRow = Self.cellCoordinate(bounds.minY, size: Self.connectorCellSize.height),
+                  let maxRow = Self.cellCoordinate(bounds.maxY, size: Self.connectorCellSize.height) else {
+                unindexedIndices.append(index)
+                continue
+            }
+            let columnCount = Double(maxColumn) - Double(minColumn) + 1
+            let rowCount = Double(maxRow) - Double(minRow) + 1
+            guard columnCount * rowCount <= Double(Self.maxIndexedCellsPerConnector) else {
+                // A long edge must not expand into millions of dictionary entries.
+                // Keep it in the existing linear fail-open candidate set instead.
+                unindexedIndices.append(index)
+                continue
+            }
             for row in minRow...maxRow {
                 for column in minColumn...maxColumn {
                     cellIndex[.init(column: column, row: row), default: []].append(index)
@@ -168,13 +180,16 @@ struct MindMapLayoutSnapshot: Equatable {
             return connectors
         }
 
-        let minColumn = Int(floor(viewport.minX / Self.connectorCellSize.width))
-        let maxColumn = Int(floor(viewport.maxX / Self.connectorCellSize.width))
-        let minRow = Int(floor(viewport.minY / Self.connectorCellSize.height))
-        let maxRow = Int(floor(viewport.maxY / Self.connectorCellSize.height))
-        let queriedCellCount = Double(maxColumn - minColumn + 1)
-            * Double(maxRow - minRow + 1)
-        guard queriedCellCount < Double(connectorIndicesByCell.count) else {
+        guard let minColumn = Self.cellCoordinate(viewport.minX, size: Self.connectorCellSize.width),
+              let maxColumn = Self.cellCoordinate(viewport.maxX, size: Self.connectorCellSize.width),
+              let minRow = Self.cellCoordinate(viewport.minY, size: Self.connectorCellSize.height),
+              let maxRow = Self.cellCoordinate(viewport.maxY, size: Self.connectorCellSize.height) else {
+            return connectors.filter { Self.intersects($0, viewport: viewport) }
+        }
+        let queriedCellCount = (Double(maxColumn) - Double(minColumn) + 1)
+            * (Double(maxRow) - Double(minRow) + 1)
+        guard queriedCellCount.isFinite,
+              queriedCellCount < Double(connectorIndicesByCell.count) else {
             return connectors.filter { Self.intersects($0, viewport: viewport) }
         }
 
@@ -190,6 +205,15 @@ struct MindMapLayoutSnapshot: Equatable {
             let connector = connectors[index]
             return Self.intersects(connector, viewport: viewport) ? connector : nil
         }
+    }
+
+    private static func cellCoordinate(_ value: CGFloat, size: CGFloat) -> Int? {
+        let coordinate = floor(value / size)
+        // Leave ample headroom for safe range arithmetic below.
+        guard coordinate.isFinite,
+              coordinate > CGFloat(Int.min / 2),
+              coordinate < CGFloat(Int.max / 2) else { return nil }
+        return Int(coordinate)
     }
 
     private static func intersects(_ connector: MindMapConnector, viewport: CGRect) -> Bool {
