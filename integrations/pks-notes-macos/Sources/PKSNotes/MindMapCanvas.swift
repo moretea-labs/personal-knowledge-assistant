@@ -679,6 +679,13 @@ struct MindMapCanvas: View {
                 }
             }
         }
+        .onChange(of: hidesNodeDetails) { _, sourceVisible in
+            if sourceVisible {
+                canvasFocused = false
+            } else {
+                requestCanvasFocus()
+            }
+        }
         .onDisappear {
             // A draft placeholder may already have autosaved before the user
             // leaves the canvas. Cancel an unfinished Add Child/Sibling here,
@@ -1594,6 +1601,7 @@ struct MindMapCanvas: View {
             // when that index collides with another old node.
             selectedID = draggedID
             dropTargetID = nil
+            requestCanvasFocus()
             return true
         } isTargeted: { targeted in
             if targeted {
@@ -1684,6 +1692,7 @@ struct MindMapCanvas: View {
                 selectedID = node.id
                 revealSource(node.id)
             }
+            .disabled(editingNodeID != nil)
             Divider()
             Button(language.text("Delete Leaf"), systemImage: "trash") {
                 selectedID = node.id
