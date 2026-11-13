@@ -184,7 +184,9 @@ enum MindMapOutline {
             return false
         }
         let nodeID = context.node.id
-        guard isListLine(context.lines[nodeID]) else { return false }
+        // A heading is a structural map node too. Keep another node when deleting
+        // a heading so a heading-only map cannot become an empty canvas.
+        guard isListLine(context.lines[nodeID]) || context.parsed.count > 1 else { return false }
         let nextNode = context.position + 1 < context.parsed.count
             ? context.parsed[context.position + 1].id
             : context.lines.count

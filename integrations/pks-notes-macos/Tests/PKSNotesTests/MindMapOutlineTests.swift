@@ -411,6 +411,30 @@ extension MindMapOutlineTests {
         XCTAssertNil(MindMapOutline.shiftListSubtree(in: "# Root\n- Root item", nodeID: 1, deeper: false))
     }
 
+    func testDeleteLeafSupportsEmptyHeadingLeavesButRetainsTheOnlyRoot() throws {
+        let source = "# Root\n## Empty\n## Keep\n"
+        let empty = try XCTUnwrap(MindMapOutline.nodes(in: source).first { $0.title == "Empty" })
+
+        XCTAssertEqual(MindMapOutline.deleteLeaf(in: source, nodeID: empty.id), "# Root\n## Keep\n")
+        XCTAssertTrue(MindMapOutline.actionAvailability(in: source, nodeID: empty.id).canDeleteLeaf)
+
+        let onlyRoot = "# Only\n"
+        XCTAssertNil(MindMapOutline.deleteLeaf(in: onlyRoot, nodeID: 0))
+        XCTAssertFalse(MindMapOutline.actionAvailability(in: onlyRoot, nodeID: 0).canDeleteLeaf)
+    }
+
+    func testDeleteLeafRejectsHeadingWithAttachedContentOrDescendants() throws {
+        let source = "# Root\n## With prose\n> Keep this quote\n## With child\n- Child\n"
+        let nodes = MindMapOutline.nodes(in: source)
+        let prose = try XCTUnwrap(nodes.first { $0.title == "With prose" })
+        let branch = try XCTUnwrap(nodes.first { $0.title == "With child" })
+
+        XCTAssertNil(MindMapOutline.deleteLeaf(in: source, nodeID: prose.id))
+        XCTAssertNil(MindMapOutline.deleteLeaf(in: source, nodeID: branch.id))
+        XCTAssertFalse(MindMapOutline.actionAvailability(in: source, nodeID: prose.id).canDeleteLeaf)
+        XCTAssertFalse(MindMapOutline.actionAvailability(in: source, nodeID: branch.id).canDeleteLeaf)
+    }
+
     func testActionAvailabilityMatchesCanonicalMutations() {
         let source = "# Root\n- First\n- Second\n  - Child\n- With prose\n  details"
 
