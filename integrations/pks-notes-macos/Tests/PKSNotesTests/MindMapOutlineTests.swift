@@ -13,6 +13,153 @@ final class MindMapOutlineTests: XCTestCase {
         let nodes = MindMapOutline.nodes(in: "# Root\n```md\n# Not heading\n- Not node\n```\n- Real")
         XCTAssertEqual(nodes.map(\.title), ["Root", "Real"])
     }
+
+    func testIndentedCodeBlocksDoNotCreateNodesOrKnowledgeLinks() {
+        let markdown = """
+        # Root
+            - Fake root node
+            [Fake root link](/root.pdf)
+        - Parent
+              - Fake nested node
+              [Fake nested link](/nested.pdf)
+          - Child
+            [Real child link](/child.pdf)
+        - Next
+        """
+        let nodes = MindMapOutline.nodes(in: markdown)
+
+        XCTAssertEqual(nodes.map(\.title), ["Root", "Parent", "Child", "Next"])
+        XCTAssertEqual(MindMapOutline.knowledgeLinks(in: markdown).map(\.target), ["/child.pdf"])
+        XCTAssertEqual(MindMapOutline.linkOccurrences(in: markdown).map { $0.link.target }, ["/child.pdf"])
+    }
+
+    func testCollapsedNodeLineIndexMapTracksInsertedAndDeletedMarkdownLines() {
+        let original = MindMapOutline.nodes(in: "# Root\n- A\n  - A1\n- B\n- C")
+        let inserted = MindMapOutline.nodes(in: "# Root\n- A\n  - New\n  - A1\n- B\n- C")
+        let insertionMap = MindMapOutline.lineIndexMap(from: original, to: inserted)
+
+        XCTAssertEqual(insertionMap[2], 3)
+        XCTAssertEqual(insertionMap[3], 4)
+        XCTAssertEqual(insertionMap[4], 5)
+
+        let deleted = MindMapOutline.nodes(in: "# Root\n- A\n- C")
+        let deletionMap = MindMapOutline.lineIndexMap(from: original, to: deleted)
+
+        XCTAssertNil(deletionMap[2])
+        XCTAssertNil(deletionMap[3])
+        XCTAssertEqual(deletionMap[4], 2)
+    }
+
+    func testCollapsedNodeLineIndexMapFollowsReparentedSubtreesAndPreservesRename() {
+        let original = MindMapOutline.nodes(in: "# Root\n- A\n  - A1\n- B\n- C")
+        let moved = MindMapOutline.nodes(in: "# Root\n- B\n- A\n  - A1\n- C")
+        let moveMap = MindMapOutline.lineIndexMap(from: original, to: moved)
+
+        XCTAssertEqual(moveMap[1], 2)
+        XCTAssertEqual(moveMap[2], 3)
+        XCTAssertEqual(moveMap[3], 1)
+        XCTAssertEqual(moveMap[4], 4)
+
+        let renamed = MindMapOutline.nodes(in: "# Root\n- A renamed\n- B")
+        let renameMap = MindMapOutline.lineIndexMap(
+            from: MindMapOutline.nodes(in: "# Root\n- A\n- B"),
+            to: renamed
+        )
+        XCTAssertEqual(renameMap[1], 1)
+        XCTAssertEqual(renameMap[2], 2)
+    }
+
+    func testCreatedNodeSnapshotMapSurvivesAnOldLineIndexCollision() throws {
+        let original = MindMapOutline.nodes(in: "# Plan\n- A\n  - A1\n- B")
+        XCTAssertEqual(try XCTUnwrap(original.first(where: { $0.title == "A1" })).id, 2)
+
+        let creationSnapshot = MindMapOutline.nodes(
+            in: "# Plan\n- A\n  - New idea\n  - A1\n- B"
+        )
+        let createdID = try XCTUnwrap(
+            creationSnapshot.first(where: { $0.title == "New idea" })
+        ).id
+        XCTAssertEqual(createdID, 2)
+
+        let latest = MindMapOutline.nodes(
+            in: "# Plan\n- A\n  - Extra\n  - New idea\n  - A1\n- B"
+        )
+        let creationMap = MindMapOutline.lineIndexMap(from: creationSnapshot, to: latest)
+
+        XCTAssertEqual(creationMap[createdID], 3)
+        XCTAssertEqual(try XCTUnwrap(latest.first(where: { $0.title == "New idea" })).id, 3)
+    }
+
+    func testIndentedCodeLinksStayInertAcrossPresentationPreviewAndRetargeting() {
+        let source = """
+        # Root
+            [[/root-code.pdf]]
+        - Parent
+              [[/nested-code.pdf]]
+          - Child
+            [[/child.pdf]]
+        """
+        let nodes = MindMapOutline.nodes(in: source)
+        let presentations = MindMapOutline.presentations(in: source, nodes: nodes)
+
+        XCTAssertEqual(nodes.map(\.title), ["Root", "Parent", "Child"])
+        XCTAssertEqual(presentations[0]?.links, [])
+        XCTAssertEqual(presentations[2]?.links, [])
+        XCTAssertEqual(
+            presentations[4]?.links,
+            [.init(label: "/child.pdf", target: "/child.pdf")]
+        )
+        XCTAssertNil(MindMapOutline.retargetLinks(
+            in: source, from: "/root-code.pdf", to: "/new-root.pdf"
+        ))
+        XCTAssertNil(MindMapOutline.retargetLinks(
+            in: source, from: "/nested-code.pdf", to: "/new-nested.pdf"
+        ))
+
+        let preview = """
+        # Root
+            [[/root-code.pdf]]
+        - Parent
+              [[/nested-code.pdf]]
+          - Child
+            [/child.pdf](/child.pdf)
+        """
+        XCTAssertEqual(MindMapOutline.previewMarkdown(in: source), preview)
+
+        let retargeted = """
+        # Root
+            [[/root-code.pdf]]
+        - Parent
+              [[/nested-code.pdf]]
+          - Child
+            [[/new-child.pdf|/child.pdf]]
+        """
+        XCTAssertEqual(
+            MindMapOutline.retargetLinks(in: source, from: "/child.pdf", to: "/new-child.pdf"),
+            retargeted
+        )
+    }
+
+    func testLongerFenceDoesNotCloseOnShorterEmbeddedFence() {
+        let markdown = """
+        # Root
+        - Parent
+          ````swift
+          ```
+          - Fake nested node
+          [Fake nested link](/nested.pdf)
+          ````
+        - Real
+        """
+        let nodes = MindMapOutline.nodes(in: markdown)
+
+        XCTAssertEqual(nodes.map(\.title), ["Root", "Parent", "Real"])
+        XCTAssertEqual(MindMapOutline.knowledgeLinks(in: markdown), [])
+        XCTAssertEqual(MindMapOutline.linkOccurrences(in: markdown), [])
+        XCTAssertTrue(MindMapOutline.isInsideCode(
+            in: markdown, at: (markdown as NSString).range(of: "Fake nested link").location
+        ))
+    }
 }
 
 extension MindMapOutlineTests {
@@ -522,5 +669,33 @@ extension MindMapOutlineTests {
             MindMapKeyboard.selection(from: 1, in: collapsed, moving: .next), 3
         )
         XCTAssertEqual(MindMapKeyboard.selection(from: nil, in: outline, moving: .next), 0)
+    }
+}
+
+
+extension MindMapOutlineTests {
+    func testCancelledProjectionParsingStopsAtCancellationCheckpoints() async {
+        let markdown = (0..<2_000)
+            .map { "- Node \($0)\n  [Reference](/ref-\($0).pdf)" }
+            .joined(separator: "\n")
+
+        let nodesStopped = await Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return MindMapOutline.nodes(in: markdown).isEmpty
+        }.value
+        XCTAssertTrue(nodesStopped)
+
+        let presentationsStopped = await Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            let root = MindMapNode(id: 0, depth: 0, title: "Root")
+            return MindMapOutline.presentations(in: markdown, nodes: [root]).isEmpty
+        }.value
+        XCTAssertTrue(presentationsStopped)
+
+        let linksStopped = await Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return MindMapOutline.linkOccurrences(in: markdown).isEmpty
+        }.value
+        XCTAssertTrue(linksStopped)
     }
 }

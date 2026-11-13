@@ -13,6 +13,11 @@ enum MindMapDropPlacement: Equatable {
     case after
 }
 
+struct MindMapMoveOutcome: Equatable {
+    let source: String
+    let movedNodeID: Int
+}
+
 struct MindMapActionAvailability: Equatable {
     let canPromote: Bool
     let canDemote: Bool
@@ -20,6 +25,39 @@ struct MindMapActionAvailability: Equatable {
 }
 
 enum MindMapOutline {
+    /// Escape plain text before embedding it in Markdown structure.
+    static func escapeInlineText(_ text: String) -> String {
+        let flattened = text.components(separatedBy: .newlines)
+            .joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        let entitySafe = flattened.replacingOccurrences(
+            of: #"&(?=[A-Za-z#][A-Za-z0-9#xX]*;)"#,
+            with: "&amp;", options: .regularExpression
+        )
+        let startsOrderedList = flattened.range(
+            of: #"^\d{1,9}[.)]\s"#,
+            options: .regularExpression
+        ) != nil
+        let markdownPunctuation: Set<Character> = [
+            "\\", "`", "*", "_", "{", "}", "[", "]",
+            "#", "+", "-", "!", "|", "~"
+        ]
+        var escaped = ""
+        for character in entitySafe {
+            switch character {
+            case "<": escaped += "&lt;"
+            case ">": escaped += "&gt;"
+            default:
+                let orderedListMarker = startsOrderedList && (character == "." || character == ")")
+                if markdownPunctuation.contains(character) || orderedListMarker {
+                    escaped.append("\\")
+                }
+                escaped.append(character)
+            }
+        }
+        return escaped
+    }
+
+
     private static let wikiLinkRegex = try! NSRegularExpression(pattern: #"\[\[([^\]\n]+)\]\]"#)
     private static let markdownLinkRegex = try! NSRegularExpression(pattern: #"\[([^\]\n]+)\]\(([^)\n]+)\)"#)
 
@@ -38,9 +76,54 @@ enum MindMapOutline {
         return EditContext(parsed: parsed, position: position, node: parsed[position], lines: lines)
     }
 
+    private struct MarkdownFence {
+        let marker: Character
+        let length: Int
+    }
+
+    private static func openingFence(in line: String) -> MarkdownFence? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let marker = trimmed.first, marker == "`" || marker == "~" else { return nil }
+        let length = trimmed.prefix(while: { $0 == marker }).count
+        guard length >= 3 else { return nil }
+        if marker == "`", trimmed.dropFirst(length).contains(marker) { return nil }
+        return MarkdownFence(marker: marker, length: length)
+    }
+
+    private static func closesFence(_ line: String, matching fence: MarkdownFence) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.first == fence.marker else { return false }
+        let length = trimmed.prefix(while: { $0 == fence.marker }).count
+        guard length >= fence.length else { return false }
+        return trimmed.dropFirst(length).allSatisfy(\.isWhitespace)
+    }
+
     private static func isListLine(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         return ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) })
+    }
+
+    private static func indentedCodeThreshold(
+        after previousNode: MindMapNode?,
+        in lines: [String],
+        baseIndent: Int
+    ) -> Int {
+        guard let previousNode, lines.indices.contains(previousNode.id),
+              isListLine(lines[previousNode.id]) else { return baseIndent + 4 }
+        let parentIndent = lines[previousNode.id].prefix(while: { $0 == " " }).count
+        return parentIndent + 6
+    }
+
+    private static func isIndentedCodeLine(
+        _ line: String,
+        after previousNode: MindMapNode?,
+        in lines: [String],
+        baseIndent: Int = 0
+    ) -> Bool {
+        let indent = line.prefix(while: { $0 == " " }).count
+        return indent >= indentedCodeThreshold(
+            after: previousNode, in: lines, baseIndent: baseIndent
+        )
     }
 
     /// List bodies move with their node only when every nonempty line is
@@ -111,19 +194,27 @@ enum MindMapOutline {
             canDeleteLeaf: canDeleteLeaf(context)
         )
     }
-    static func nodes(in markdown: String) -> [MindMapNode] {
+    static func nodes(in markdown: String, baseIndent: Int = 0) -> [MindMapNode] {
+        guard !Task.isCancelled else { return [] }
         var result: [MindMapNode] = []
         var headingDepth = 0
-        var fenceMarker: Character?
-        for (index, line) in markdown.components(separatedBy: .newlines).enumerated() {
+        var activeFence: MarkdownFence?
+        let lines = markdown.components(separatedBy: "\n")
+        for (index, line) in lines.enumerated() {
+            if index.isMultiple(of: 128), Task.isCancelled { return [] }
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if let marker = trimmed.first, marker == "`" || marker == "~",
-               trimmed.prefix(while: { $0 == marker }).count >= 3 {
-                if fenceMarker == nil { fenceMarker = marker }
-                else if fenceMarker == marker { fenceMarker = nil }
+            if let fence = activeFence {
+                if closesFence(line, matching: fence) { activeFence = nil }
                 continue
             }
-            if fenceMarker != nil || trimmed.isEmpty { continue }
+            if let opening = openingFence(in: line) {
+                activeFence = opening
+                continue
+            }
+            if trimmed.isEmpty
+                || isIndentedCodeLine(line, after: result.last, in: lines, baseIndent: baseIndent) {
+                continue
+            }
             let hashes = trimmed.prefix(while: { $0 == "#" }).count
             if (1...6).contains(hashes), trimmed.dropFirst(hashes).first == " " {
                 headingDepth = hashes
@@ -157,6 +248,47 @@ enum MindMapOutline {
             if character == "\n" { count += 1 }
         }
         return nodes(in: markdown).last(where: { $0.id <= lineIndex })?.id
+    }
+
+    /// PDF citations must remain active Markdown links, never code literals.
+    /// Match the outline parser's fenced-block rules and the link parser's
+    /// escaped-backtick handling at the editor's UTF-16 insertion boundary.
+    static func isInsideCode(in markdown: String, at offset: Int) -> Bool {
+        let source = markdown as NSString
+        let safeOffset = min(max(0, offset), source.length)
+        let lines = markdown.components(separatedBy: "\n")
+        let lineIndex = source.substring(to: safeOffset).reduce(into: 0) { count, character in
+            if character == "\n" { count += 1 }
+        }
+        let previousNode = nodes(in: markdown).last(where: { $0.id < lineIndex })
+        let indentedCode = lines.indices.contains(lineIndex)
+            && isIndentedCodeLine(lines[lineIndex], after: previousNode, in: lines)
+        var lineStart = 0
+        var activeFence: MarkdownFence?
+
+        for line in lines {
+            let lineLength = (line as NSString).length
+            let lineEnd = lineStart + lineLength
+            let containsOffset = safeOffset >= lineStart && safeOffset <= lineEnd
+            let opening = openingFence(in: line)
+            let closesActiveFence = activeFence.map { closesFence(line, matching: $0) } ?? false
+
+            if containsOffset {
+                if opening != nil || activeFence != nil || indentedCode { return true }
+                let lineOffset = safeOffset - lineStart
+                return inlineCodeRanges(in: line).contains {
+                    lineOffset >= $0.location && lineOffset < NSMaxRange($0)
+                }
+            }
+
+            if activeFence != nil {
+                if closesActiveFence { activeFence = nil }
+            } else if let opening {
+                activeFence = opening
+            }
+            lineStart = lineEnd + 1
+        }
+        return false
     }
 }
 
@@ -235,13 +367,64 @@ extension MindMapOutline {
         return lines.joined(separator: "\n")
     }
 
-    /// Node IDs are Markdown line indexes. Rebase transient view state after a
-    /// single-line leaf deletion so collapsed branches remain attached to their nodes.
-    static func rebasedLineIndexes(_ indexes: Set<Int>, afterDeletingLine lineIndex: Int) -> Set<Int> {
-        Set(indexes.compactMap { index in
-            guard index != lineIndex else { return nil }
-            return index > lineIndex ? index - 1 : index
-        })
+    /// Map transient collapsed-node IDs from one parsed Markdown projection
+    /// to the next. The Markdown text remains the only identity authority.
+    /// Node titles survive indentation changes, so reparented subtrees keep
+    /// their collapsed state; same-position title edits retain the current node.
+    static func lineIndexMap(
+        from oldNodes: [MindMapNode],
+        to newNodes: [MindMapNode]
+    ) -> [Int: Int] {
+        guard !oldNodes.isEmpty, !newNodes.isEmpty else { return [:] }
+
+        if oldNodes.map(\.title) == newNodes.map(\.title) {
+            return Dictionary(uniqueKeysWithValues: zip(oldNodes, newNodes).map {
+                ($0.id, $1.id)
+            })
+        }
+
+        let changes = newNodes.map(\.title)
+            .difference(from: oldNodes.map(\.title))
+            .inferringMoves()
+        var removedOffsets: Set<Int> = []
+        var insertedOffsets: Set<Int> = []
+        var movedOffsets: [Int: Int] = [:]
+
+        for change in changes {
+            switch change {
+            case let .remove(offset, _, associatedWith):
+                removedOffsets.insert(offset)
+                if let associatedWith { movedOffsets[offset] = associatedWith }
+            case let .insert(offset, _, associatedWith):
+                insertedOffsets.insert(offset)
+                if let associatedWith { movedOffsets[associatedWith] = offset }
+            }
+        }
+
+        let removed = removedOffsets.sorted()
+        let inserted = insertedOffsets.sorted()
+        var result: [Int: Int] = [:]
+        result.reserveCapacity(oldNodes.count)
+
+        for (oldPosition, node) in oldNodes.enumerated() {
+            let newPosition: Int
+            if let moved = movedOffsets[oldPosition] {
+                newPosition = moved
+            } else if removedOffsets.contains(oldPosition) {
+                // A same-position replacement is a rename/edit, not a deletion.
+                guard insertedOffsets.contains(oldPosition) else { continue }
+                newPosition = oldPosition
+            } else {
+                var shifted = oldPosition
+                for offset in removed where offset < oldPosition { shifted -= 1 }
+                for offset in inserted where offset <= shifted { shifted += 1 }
+                newPosition = shifted
+            }
+
+            guard newNodes.indices.contains(newPosition) else { continue }
+            result[node.id] = newNodes[newPosition].id
+        }
+        return result
     }
 
     /// Explicit branch deletion: only a complete, list-only subtree may be
@@ -487,23 +670,35 @@ extension MindMapOutline {
 
     /// Preserve every Markdown link occurrence and its canonical source line.
     /// Backlinks reuse this parse result; there is no second occurrence index.
-    /// Fenced code blocks are skipped so example markup never reports as a
-    /// real backlink — matching the outgoing-link parser's fence handling.
+    /// Fenced and indented code blocks are skipped so example markup never
+    /// reports as a real backlink.
     static func linkOccurrences(
         in markdown: String,
-        includeImages: Bool = false
+        includeImages: Bool = false,
+        baseIndent: Int = 0
     ) -> [MarkdownLinkOccurrence] {
+        guard !Task.isCancelled else { return [] }
+        let lines = markdown.components(separatedBy: "\n")
+        let parsedNodes = nodes(in: markdown, baseIndent: baseIndent)
+        var nodeCursor = 0
+        var previousNode: MindMapNode?
         var result: [MarkdownLinkOccurrence] = []
-        var fenceMarker: Character?
-        for (lineIndex, line) in markdown.components(separatedBy: "\n").enumerated() {
-            let trimmed = line.drop(while: { $0.isWhitespace })
-            if let marker = trimmed.first, marker == "\u{60}" || marker == "~",
-               trimmed.prefix(while: { $0 == marker }).count >= 3 {
-                if fenceMarker == nil { fenceMarker = marker }
-                else if fenceMarker == marker { fenceMarker = nil }
+        var activeFence: MarkdownFence?
+        for (lineIndex, line) in lines.enumerated() {
+            if lineIndex.isMultiple(of: 128), Task.isCancelled { return result }
+            while nodeCursor < parsedNodes.count && parsedNodes[nodeCursor].id < lineIndex {
+                previousNode = parsedNodes[nodeCursor]
+                nodeCursor += 1
+            }
+            if let fence = activeFence {
+                if closesFence(line, matching: fence) { activeFence = nil }
                 continue
             }
-            guard fenceMarker == nil,
+            if let opening = openingFence(in: line) {
+                activeFence = opening
+                continue
+            }
+            guard !isIndentedCodeLine(line, after: previousNode, in: lines, baseIndent: baseIndent),
                   line.contains("["), line.contains("]") else { continue }
             for item in parsedLinks(in: line, includeImages: includeImages) {
                 result.append(.init(link: item.link, lineIndex: lineIndex))
@@ -553,11 +748,13 @@ extension MindMapOutline {
         in markdown: String,
         nodes: [MindMapNode]
     ) -> [Int: MindMapNodePresentation] {
+        guard !Task.isCancelled else { return [:] }
         let lines = markdown.components(separatedBy: "\n")
         var result: [Int: MindMapNodePresentation] = [:]
         result.reserveCapacity(nodes.count)
 
         for (position, node) in nodes.enumerated() {
+            if position.isMultiple(of: 64), Task.isCancelled { return [:] }
             let title = presentation(for: node.title)
             guard lines.indices.contains(node.id) else {
                 result[node.id] = title
@@ -573,9 +770,15 @@ extension MindMapOutline {
                 ? lines[bodyStart..<bodyEnd].joined(separator: "\n")
                 : ""
 
+            let nodeLine = lines[node.id]
+            let baseIndent = isListLine(nodeLine)
+                ? nodeLine.prefix(while: { $0 == " " }).count + 2
+                : 0
             var links = title.links
             var seen = Set(links.map { $0.target + "\u{0}" + $0.label })
-            for link in linkOccurrences(in: body).map(\.link) {
+            let occurrences = linkOccurrences(in: body, baseIndent: baseIndent)
+            guard !Task.isCancelled else { return [:] }
+            for link in occurrences.map(\.link) {
                 let key = link.target + "\u{0}" + link.label
                 if seen.insert(key).inserted {
                     links.append(link)
@@ -656,7 +859,7 @@ extension MindMapOutline {
     /// Backwards-compatible child placement for existing callers.
     static func moveListSubtreeWithOutcome(
         in source: String, nodeID: Int, asChildOf targetID: Int
-    ) -> (source: String, movedNodeID: Int)? {
+    ) -> MindMapMoveOutcome? {
         moveListSubtreeWithOutcome(
             in: source, nodeID: nodeID, relativeTo: targetID, placement: .child
         )
@@ -669,7 +872,7 @@ extension MindMapOutline {
         nodeID: Int,
         relativeTo targetID: Int,
         placement: MindMapDropPlacement
-    ) -> (source: String, movedNodeID: Int)? {
+    ) -> MindMapMoveOutcome? {
         guard nodeID != targetID else { return nil }
         let parsed = nodes(in: source)
         guard let sourcePosition = parsed.firstIndex(where: { $0.id == nodeID }),
@@ -738,36 +941,22 @@ extension MindMapOutline {
         let adjustedInsertion = insertionLine > nodeID ? insertionLine - removedCount : insertionLine
         guard adjustedInsertion >= 0, adjustedInsertion <= lines.count else { return nil }
         lines.insert(contentsOf: moved, at: adjustedInsertion)
-        return (lines.joined(separator: "\n"), adjustedInsertion)
+        return MindMapMoveOutcome(
+            source: lines.joined(separator: "\n"),
+            movedNodeID: adjustedInsertion
+        )
     }
 }
 
 
 extension MindMapOutline {
-    /// Extract user-authored knowledge links from Markdown while ignoring fenced code.
+    /// Extract distinct user-authored links through the canonical occurrence parser.
     static func knowledgeLinks(in markdown: String) -> [MindMapLink] {
-        var result: [MindMapLink] = []
         var seen: Set<String> = []
-        var fenceMarker: Character?
-
-        for line in markdown.split(omittingEmptySubsequences: false, whereSeparator: { $0.isNewline }) {
-            let trimmed = line.drop(while: { $0.isWhitespace })
-            if let marker = trimmed.first, marker == "\u{60}" || marker == "~",
-               trimmed.prefix(while: { $0 == marker }).count >= 3 {
-                if fenceMarker == nil { fenceMarker = marker }
-                else if fenceMarker == marker { fenceMarker = nil }
-                continue
-            }
-            guard fenceMarker == nil,
-                  line.contains("["), line.contains("]") else { continue }
-
-            // Convert only candidate lines. Most prose lines never allocate a
-            // standalone String and never enter either link regex.
-            for link in links(in: String(line)) {
-                let key = link.target + "\u{0}" + link.label
-                if seen.insert(key).inserted { result.append(link) }
-            }
+        return linkOccurrences(in: markdown).compactMap { occurrence in
+            let link = occurrence.link
+            let key = link.target + "\u{0}" + link.label
+            return seen.insert(key).inserted ? link : nil
         }
-        return result
     }
 }

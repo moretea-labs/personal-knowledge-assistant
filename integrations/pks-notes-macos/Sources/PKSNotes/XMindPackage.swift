@@ -1,20 +1,23 @@
 import Foundation
-import zlib
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Read-only XMind import from a bounded single ZIP entry. The original .xmind
 /// archive is never extracted to disk or modified. Content remains a Markdown
 /// outline once the user chooses to import it into Leafspan.
 enum XMindPackage {
     enum Failure: LocalizedError {
-        case unsupported, malformed, tooLarge, tooDeep, failedToRead
+        case unsupported, malformed, missingEntry, tooLarge, tooDeep, failedToRead, unsupportedAttachment
 
         var errorDescription: String? {
             switch self {
             case .unsupported: "This is not an XMind archive with a supported content.json or content.xml."
             case .malformed: "This XMind document has no readable topic hierarchy."
+            case .missingEntry: "The requested entry is missing from this XMind archive."
             case .tooLarge: "The XMind archive or its topic data exceeds the safe import limit."
             case .tooDeep: "This XMind map is nested too deeply (maximum 64 levels)."
             case .failedToRead: "The XMind archive could not be read. Try exporting it as OPML from XMind."
+            case .unsupportedAttachment: "An embedded XMind image is missing, unsafe, or not a supported PNG, JPEG, or TIFF. The import was not written."
             }
         }
     }
@@ -22,187 +25,316 @@ enum XMindPackage {
     private struct Topic {
         let title: String
         let noteParagraphs: [String]
+        let imageMarkers: [String]
         let children: [Topic]
     }
 
+    struct ImportedDocument {
+        let markdown: String
+        let images: [MindNodePackage.ImportedImage]
+    }
+
     static func importOutline(from url: URL) throws -> String {
+        try readDocument(from: url, includeImages: false).markdown
+    }
+
+    static func importDocument(from url: URL) throws -> ImportedDocument {
+        try readDocument(from: url, includeImages: true)
+    }
+
+    private static func readDocument(from url: URL, includeImages: Bool) throws -> ImportedDocument {
         guard url.pathExtension.lowercased() == "xmind",
               let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
-              fileSize <= 64 * 1_024 * 1_024 else { throw Failure.tooLarge }
+              fileSize <= 64 * 1_024 * 1_024,
+              let archive = try? Data(contentsOf: url, options: .mappedIfSafe),
+              archive.count <= 64 * 1_024 * 1_024 else { throw Failure.tooLarge }
+
         let data: Data
         let legacy: Bool
-        if let json = try? readZipEntry("content.json", from: url) {
-            data = json
+        do {
+            data = try readZipEntry("content.json", from: archive)
             legacy = false
-        } else if let xml = try? readZipEntry("content.xml", from: url) {
-            data = xml
-            legacy = true
-        } else {
-            throw Failure.unsupported
+        } catch Failure.missingEntry {
+            do {
+                data = try readZipEntry("content.xml", from: archive)
+                legacy = true
+            } catch Failure.missingEntry {
+                throw Failure.unsupported
+            }
         }
-        let sheets: [Topic]
+
+        let imageImporter = EmbeddedImageImporter(archive: archive, includeImages: includeImages)
         if legacy {
-            let collector = LegacyContentParser()
-            sheets = try collector.parse(data)
-        } else {
-            sheets = try readJSON(data)
+            let sheets = try LegacyContentParser(imageImporter: imageImporter).parse(data)
+            guard !sheets.isEmpty else { throw Failure.malformed }
+            return ImportedDocument(markdown: makeOutline(sheets), images: imageImporter.images)
         }
+
+        let sheets = try readJSON(data, imageImporter: imageImporter)
         guard !sheets.isEmpty else { throw Failure.malformed }
-        return makeOutline(sheets)
+        return ImportedDocument(markdown: makeOutline(sheets), images: imageImporter.images)
     }
 
-    /// Read a bounded ZIP entry inside the app sandbox. Never launch a subprocess
-    /// or extract archive paths into the user's workspace.
-    private static func readZipEntry(_ name: String, from url: URL) throws -> Data {
-        guard let bytes = try? Data(contentsOf: url, options: .mappedIfSafe),
-              bytes.count <= 64 * 1024 * 1024 else { throw Failure.failedToRead }
-
-        func u16(_ i: Int) -> Int? {
-            guard i >= 0, i + 2 <= bytes.count else { return nil }
-            return Int(bytes[i]) | Int(bytes[i + 1]) << 8
-        }
-        func u32(_ i: Int) -> Int? {
-            guard i >= 0, i + 4 <= bytes.count else { return nil }
-            return Int(bytes[i]) | Int(bytes[i + 1]) << 8
-                | Int(bytes[i + 2]) << 16 | Int(bytes[i + 3]) << 24
-        }
-        guard bytes.count >= 22 else { throw Failure.unsupported }
-        // A ZIP comment may add up to 65535 bytes after the directory trailer.
-        let searchStart = max(0, bytes.count - 22 - 65_535)
-        guard let eocd = stride(from: bytes.count - 22, through: searchStart, by: -1).first(where: { index in
-            u32(index) == 0x06054b50 &&
-                u16(index + 20).map { length in index + 22 + length == bytes.count } == true
-        }), let commentLength = u16(eocd + 20),
-              eocd + 22 + commentLength == bytes.count,
-              u16(eocd + 4) == 0, u16(eocd + 6) == 0,
-              let count = u16(eocd + 10), u16(eocd + 8) == count,
-              count <= 10_000,
-              let centralSize = u32(eocd + 12),
-              let centralOffset = u32(eocd + 16),
-              centralOffset + centralSize <= eocd else {
+    /// Preserve XMind-specific error reporting while sharing the bounded ZIP reader.
+    private static func readZipEntry(_ name: String, from bytes: Data) throws -> Data {
+        do {
+            return try BoundedZipArchive.readEntry(name, from: bytes)
+        } catch BoundedZipArchive.Failure.tooLarge {
+            throw Failure.tooLarge
+        } catch BoundedZipArchive.Failure.unsupported {
             throw Failure.unsupported
-        }
-
-        var cursor = centralOffset
-        let centralEnd = centralOffset + centralSize
-        var selection: (method: Int, compressed: Int, inflated: Int, crc: Int, local: Int)?
-        for _ in 0..<count {
-            guard cursor + 46 <= centralEnd, u32(cursor) == 0x02014b50,
-                  let flags = u16(cursor + 8),
-                  let method = u16(cursor + 10),
-                  let crc = u32(cursor + 16),
-                  let compressed = u32(cursor + 20),
-                  let inflated = u32(cursor + 24),
-                  let nameLength = u16(cursor + 28),
-                  let extras = u16(cursor + 30),
-                  let comment = u16(cursor + 32),
-                  let local = u32(cursor + 42),
-                  cursor + 46 + nameLength + extras + comment <= centralEnd
-            else { throw Failure.malformed }
-
-            let rawName = bytes.subdata(in: (cursor + 46)..<(cursor + 46 + nameLength))
-            if String(data: rawName, encoding: .utf8) == name {
-                guard selection == nil, flags & 1 == 0,
-                      method == 0 || method == 8,
-                      inflated <= 12 * 1024 * 1024,
-                      local + 30 <= bytes.count else { throw Failure.tooLarge }
-                selection = (method, compressed, inflated, crc, local)
-            }
-            cursor += 46 + nameLength + extras + comment
-        }
-        guard let entry = selection,
-              u32(entry.local) == 0x04034b50,
-              let filenameLength = u16(entry.local + 26),
-              let extraLength = u16(entry.local + 28) else {
+        } catch BoundedZipArchive.Failure.notFound {
+            throw Failure.missingEntry
+        } catch BoundedZipArchive.Failure.failedToRead {
             throw Failure.failedToRead
+        } catch {
+            throw Failure.malformed
         }
-        let start = entry.local + 30 + filenameLength + extraLength
-        guard start <= centralOffset,
-              entry.compressed <= centralOffset - start else { throw Failure.malformed }
-        let compressed = bytes.subdata(in: start..<(start + entry.compressed))
-        let inflated: Data
-        if entry.method == 0 {
-            guard entry.compressed == entry.inflated else { throw Failure.malformed }
-            inflated = compressed
-        } else {
-            guard entry.inflated > 0 else { throw Failure.malformed }
-            var result = Data(count: entry.inflated)
-            var stream = z_stream()
-            guard inflateInit2_(&stream, -MAX_WBITS, ZLIB_VERSION,
-                                Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
-                throw Failure.failedToRead
-            }
-            defer { inflateEnd(&stream) }
-            let success = compressed.withUnsafeBytes { input in
-                result.withUnsafeMutableBytes { output -> Bool in
-                    stream.next_in = UnsafeMutablePointer(mutating: input.bindMemory(to: Bytef.self).baseAddress!)
-                    stream.avail_in = uInt(input.count)
-                    stream.next_out = output.bindMemory(to: Bytef.self).baseAddress!
-                    stream.avail_out = uInt(output.count)
-                    return inflate(&stream, Z_FINISH) == Z_STREAM_END &&
-                        Int(stream.total_in) == entry.compressed &&
-                        Int(stream.total_out) == entry.inflated
-                }
-            }
-            guard success else { throw Failure.malformed }
-            inflated = result
-        }
-        let checksum = inflated.withUnsafeBytes { buffer in
-            crc32(0, buffer.bindMemory(to: Bytef.self).baseAddress, uInt(buffer.count))
-        }
-        guard checksum == uLong(entry.crc) else { throw Failure.malformed }
-        return inflated
     }
 
-    private static func readJSON(_ data: Data) throws -> [Topic] {
+    private static func embeddedResourcePath(from source: String) throws -> String? {
+        let value = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        let path = value.hasPrefix("xap:") ? String(value.dropFirst(4)) : value
+        guard path.hasPrefix("resources/") || path.hasPrefix("attachments/") else { return nil }
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 2,
+              components[0] == "resources" || components[0] == "attachments",
+              components[1].range(
+                of: #"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"#,
+                options: .regularExpression
+              ) != nil else { throw Failure.unsupportedAttachment }
+        return path
+    }
+
+    /// Preserve PNG bytes; normalize bounded single-frame JPEG/TIFF resources to
+    /// PNG so the existing Markdown attachment writer remains the sole file writer.
+    private static func normalizedPNG(from data: Data) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(source) == 1,
+              let sourceType = CGImageSourceGetType(source) as String?,
+              [UTType.png.identifier, UTType.jpeg.identifier, UTType.tiff.identifier].contains(sourceType),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              width > 0, height > 0,
+              width <= 10_000, height <= 10_000,
+              width <= 16_000_000 / height,
+              let image = CGImageSourceCreateImageAtIndex(
+                source, 0, [kCGImageSourceShouldCache: false] as CFDictionary
+              ) else { return nil }
+
+        if sourceType == UTType.png.identifier { return data }
+
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output, UTType.png.identifier as CFString, 1, nil
+        ) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination),
+              output.length > 0, output.length <= 5 * 1024 * 1024 else { return nil }
+        return output as Data
+    }
+
+    /// One bounded importer owns archive image validation, normalization and deduplication
+    /// for both current JSON and legacy XML package formats.
+    private final class EmbeddedImageImporter {
+        let archive: Data
+        let includeImages: Bool
+        private(set) var images: [MindNodePackage.ImportedImage] = []
+        private var markersByPath: [String: String] = [:]
+        private var totalImageBytes = 0
+
+        init(archive: Data, includeImages: Bool) {
+            self.archive = archive
+            self.includeImages = includeImages
+        }
+
+        func marker(for source: String) throws -> String? {
+            guard includeImages,
+                  let path = try XMindPackage.embeddedResourcePath(from: source) else { return nil }
+            if let existing = markersByPath[path] { return existing }
+            guard images.count < 64 else { throw Failure.tooLarge }
+
+            let sourceImage: Data
+            do {
+                sourceImage = try XMindPackage.readZipEntry(path, from: archive)
+            } catch Failure.tooLarge {
+                throw Failure.tooLarge
+            } catch {
+                throw Failure.unsupportedAttachment
+            }
+            guard sourceImage.count <= 5 * 1024 * 1024,
+                  let png = XMindPackage.normalizedPNG(from: sourceImage) else {
+                throw Failure.unsupportedAttachment
+            }
+            guard png.count <= 20 * 1024 * 1024 - totalImageBytes else {
+                throw Failure.tooLarge
+            }
+
+            let marker = "__LEAFSPAN_XMIND_IMAGE_\(UUID().uuidString)__"
+            images.append(MindNodePackage.ImportedImage(
+                marker: marker,
+                stem: "xmind-image-\(images.count + 1)",
+                png: png
+            ))
+            markersByPath[path] = marker
+            totalImageBytes += png.count
+            return marker
+        }
+    }
+
+    private static func readJSON(
+        _ data: Data,
+        imageImporter: EmbeddedImageImporter
+    ) throws -> [Topic] {
         guard let sheets = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         else { throw Failure.malformed }
         var count = 0
-        func walk(_ object: [String: Any], depth: Int) throws -> Topic {
+
+        func oneLine(_ value: String) -> String {
+            value.components(separatedBy: .newlines).joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        func hrefParagraph(_ href: String) -> String {
+            let value = oneLine(href)
+            guard let url = URL(string: value), let scheme = url.scheme?.lowercased() else {
+                return MindMapOutline.escapeInlineText("Link reference: \(value)")
+            }
+            if scheme == "http" || scheme == "https" {
+                let target = value.replacingOccurrences(of: " ", with: "%20")
+                    .replacingOccurrences(of: ")", with: "%29")
+                return "[Open link](\(target))"
+            }
+            if scheme == "xmind" {
+                return MindMapOutline.escapeInlineText("XMind topic reference: \(url.fragment ?? value)")
+            }
+            if scheme == "xap" {
+                return MindMapOutline.escapeInlineText("Attachment reference: \(value)")
+            }
+            return MindMapOutline.escapeInlineText("Link reference: \(value)")
+        }
+
+        func walk(
+            _ object: [String: Any],
+            depth: Int,
+            topicTitles: inout [String: String]
+        ) throws -> Topic {
             guard depth < 64 else { throw Failure.tooDeep }
             count += 1
             guard count <= 10_000,
                   let title = object["title"] as? String else { throw Failure.malformed }
-            let children = object["children"] as? [String: Any] ?? [:]
-            let branches = ["attached", "detached", "summary"].flatMap {
-                children[$0] as? [[String: Any]] ?? []
+            if let id = object["id"] as? String, !id.isEmpty {
+                topicTitles[id] = oneLine(title)
             }
+
             let plainNote = ((object["notes"] as? [String: Any])?["plain"] as? [String: Any])?["content"] as? String
-            let paragraphs = plainNote?.components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespaces) } ?? []
-            return Topic(title: title, noteParagraphs: paragraphs,
-                         children: try branches.map { try walk($0, depth: depth + 1) })
+            var paragraphs = plainNote?.components(separatedBy: .newlines)
+                .map { MindMapOutline.escapeInlineText($0) } ?? []
+            var imageMarkers: [String] = []
+            if let labels = object["labels"] as? String, !oneLine(labels).isEmpty {
+                paragraphs.append(MindMapOutline.escapeInlineText("Labels: \(oneLine(labels))"))
+            }
+            if let markers = object["markers"] as? [[String: Any]] {
+                let markerIDs = markers.compactMap { $0["markerId"] as? String }
+                    .map(oneLine).filter { !$0.isEmpty }
+                if !markerIDs.isEmpty {
+                    paragraphs.append(MindMapOutline.escapeInlineText("Markers: \(markerIDs.joined(separator: ", "))"))
+                }
+            }
+            if let href = object["href"] as? String, !oneLine(href).isEmpty {
+                paragraphs.append(hrefParagraph(href))
+            }
+            if let image = object["image"] as? [String: Any],
+               let source = image["src"] as? String, !oneLine(source).isEmpty {
+                if let marker = try imageImporter.marker(for: source) {
+                    imageMarkers.append(marker)
+                } else {
+                    paragraphs.append(MindMapOutline.escapeInlineText("Image reference: \(oneLine(source))"))
+                }
+            }
+
+            let childGroups = object["children"] as? [String: Any] ?? [:]
+            var parsedChildren: [Topic] = []
+            for kind in ["attached", "detached", "summary", "callout"] {
+                for child in (childGroups[kind] as? [[String: Any]] ?? []) {
+                    let parsed = try walk(child, depth: depth + 1, topicTitles: &topicTitles)
+                    if kind == "summary" {
+                        parsedChildren.append(Topic(
+                            title: "[Summary] \(parsed.title)",
+                            noteParagraphs: parsed.noteParagraphs,
+                            imageMarkers: parsed.imageMarkers,
+                            children: parsed.children
+                        ))
+                    } else if kind == "callout" {
+                        parsedChildren.append(Topic(
+                            title: "[Callout] \(parsed.title)",
+                            noteParagraphs: parsed.noteParagraphs,
+                            imageMarkers: parsed.imageMarkers,
+                            children: parsed.children
+                        ))
+                    } else {
+                        parsedChildren.append(parsed)
+                    }
+                }
+            }
+            return Topic(
+                title: title, noteParagraphs: paragraphs,
+                imageMarkers: imageMarkers, children: parsedChildren
+            )
         }
+
         return try sheets.map { sheet in
             guard let root = sheet["rootTopic"] as? [String: Any] else { throw Failure.malformed }
-            return try walk(root, depth: 0)
+            var topicTitles: [String: String] = [:]
+            let parsedRoot = try walk(root, depth: 0, topicTitles: &topicTitles)
+            var paragraphs = parsedRoot.noteParagraphs
+            if let title = sheet["title"] as? String, !oneLine(title).isEmpty {
+                paragraphs.insert(MindMapOutline.escapeInlineText("Sheet: \(oneLine(title))"), at: 0)
+            }
+            let relationships = sheet["relationships"] as? [[String: Any]] ?? []
+            guard relationships.count <= 10_000 else { throw Failure.tooLarge }
+            for relationship in relationships {
+                guard let firstID = relationship["end1Id"] as? String,
+                      let secondID = relationship["end2Id"] as? String else { continue }
+                let first = topicTitles[firstID] ?? firstID
+                let second = topicTitles[secondID] ?? secondID
+                let title = (relationship["title"] as? String).map(oneLine) ?? ""
+                let suffix = title.isEmpty ? "" : " — \(title)"
+                paragraphs.append(MindMapOutline.escapeInlineText("Relationship: \(first) ↔ \(second)\(suffix)"))
+            }
+            return Topic(
+                title: parsedRoot.title,
+                noteParagraphs: paragraphs,
+                imageMarkers: parsedRoot.imageMarkers,
+                children: parsedRoot.children
+            )
         }
     }
 
     private static func makeOutline(_ roots: [Topic]) -> String {
-        func singleLine(_ title: String) -> String {
-            title.components(separatedBy: .newlines)
-                .joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "#", with: "\\#")
-                .replacingOccurrences(of: "[", with: "\\[")
-                .replacingOccurrences(of: "]", with: "\\]")
-        }
         var lines: [String] = []
         func emitNote(_ paragraphs: [String], indent: String) {
             for paragraph in paragraphs {
                 lines.append(indent + (paragraph.isEmpty ? ">" : "> " + paragraph))
             }
         }
+        func emitImages(_ markers: [String], indent: String) {
+            for marker in markers {
+                lines.append(indent + "![XMind image](" + marker + ")")
+            }
+        }
         func emit(_ topic: Topic, depth: Int) {
             let indent = String(repeating: "  ", count: depth)
-            lines.append(indent + "- " + singleLine(topic.title))
+            lines.append(indent + "- " + MindMapOutline.escapeInlineText(topic.title))
             emitNote(topic.noteParagraphs, indent: indent + "  ")
+            emitImages(topic.imageMarkers, indent: indent + "  ")
             for child in topic.children { emit(child, depth: depth + 1) }
         }
         if roots.count == 1 {
-            lines.append("# " + singleLine(roots[0].title))
+            lines.append("# " + MindMapOutline.escapeInlineText(roots[0].title))
             emitNote(roots[0].noteParagraphs, indent: "")
+            emitImages(roots[0].imageMarkers, indent: "")
             for child in roots[0].children { emit(child, depth: 0) }
         } else {
             lines.append("# Mind Maps")
@@ -211,15 +343,18 @@ enum XMindPackage {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    /// XMind legacy (pre-2017) content.xml. Each sheet has one topic tree.
-    /// Other XML content (style, relationships, notes) is intentionally left
-    /// with the untouched .xmind source, not silently labelled as migrated.
+    /// XMind legacy content.xml. Plain notes and embedded xap:attachments are
+    /// imported; styling and relationships remain in the untouched source archive.
     private final class LegacyContentParser: NSObject, XMLParserDelegate {
         private final class MutableTopic {
             var title = ""
             var note = ""
+            var imageReferences: [String] = []
+            var imageMarkers: [String] = []
             var children: [MutableTopic] = []
         }
+
+        private let imageImporter: EmbeddedImageImporter
         private var roots: [MutableTopic] = []
         private var stack: [MutableTopic] = []
         private var titleBuffer: String?
@@ -227,14 +362,26 @@ enum XMindPackage {
         private var count = 0
         private var failure: Failure?
 
+        init(imageImporter: EmbeddedImageImporter) {
+            self.imageImporter = imageImporter
+        }
+
         func parse(_ data: Data) throws -> [Topic] {
             let parser = XMLParser(data: data)
             parser.delegate = self
             parser.shouldResolveExternalEntities = false
             guard parser.parse(), failure == nil else { throw failure ?? .malformed }
             func freeze(_ node: MutableTopic) -> Topic {
-                Topic(title: node.title, noteParagraphs: node.note.isEmpty ? [] : node.note.components(separatedBy: .newlines),
-                      children: node.children.map(freeze))
+                var paragraphs = node.note.isEmpty
+                    ? []
+                    : node.note.components(separatedBy: .newlines).map { MindMapOutline.escapeInlineText($0) }
+                paragraphs.append(contentsOf: node.imageReferences.map { MindMapOutline.escapeInlineText($0) })
+                return Topic(
+                    title: node.title,
+                    noteParagraphs: paragraphs,
+                    imageMarkers: node.imageMarkers,
+                    children: node.children.map(freeze)
+                )
             }
             return roots.map(freeze)
         }
@@ -255,6 +402,23 @@ enum XMindPackage {
                 if !stack.isEmpty { titleBuffer = "" }
             case "plain":
                 if !stack.isEmpty { noteBuffer = "" }
+            case "img":
+                guard let topic = stack.last else { return }
+                let source = attributes["xhtml:src"] ?? attributes["src"]
+                    ?? attributes["xlink:href"] ?? attributes["href"]
+                guard let source, !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return
+                }
+                do {
+                    if let marker = try imageImporter.marker(for: source) {
+                        topic.imageMarkers.append(marker)
+                    } else {
+                        topic.imageReferences.append("Image reference: \(source)")
+                    }
+                } catch {
+                    failure = error as? Failure ?? .unsupportedAttachment
+                    parser.abortParsing()
+                }
             default: break
             }
         }
