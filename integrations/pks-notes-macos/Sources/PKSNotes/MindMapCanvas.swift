@@ -912,6 +912,8 @@ struct MindMapCanvas: View {
             }
             .menuIndicator(.hidden)
             .help(language.text("Zoom level"))
+            .accessibilityLabel(language.text("Zoom level"))
+            .accessibilityValue("\(Int((zoom * 100).rounded()))%")
             .accessibilityIdentifier("pks-mind-map-zoom-level")
             Button {
                 _ = performShortcut(.zoomIn)
@@ -1001,6 +1003,7 @@ struct MindMapCanvas: View {
                 }
                 .buttonStyle(.plain)
                 .help(language.text("Close"))
+                .accessibilityLabel(language.text("Close"))
                 .accessibilityIdentifier("pks-mind-map-details-close")
             }
             Text(MindMapTitleEmphasis.display(presentation.title))
@@ -1417,6 +1420,7 @@ struct MindMapCanvas: View {
                 }
                 .buttonStyle(.plain)
                 .help(language.text("Save"))
+                .accessibilityLabel(language.text("Save"))
                 .accessibilityIdentifier("pks-mind-map-inline-save")
                 Button {
                     finishRename(save: false)
@@ -1427,6 +1431,7 @@ struct MindMapCanvas: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help(language.text("Cancel"))
+                .accessibilityLabel(language.text("Cancel"))
                 .accessibilityIdentifier("pks-mind-map-inline-cancel")
             } else {
                 Text(MindMapTitleEmphasis.display(visibleTitle))
