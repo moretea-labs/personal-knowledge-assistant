@@ -2,6 +2,39 @@ import XCTest
 @testable import PKSNotes
 
 final class MarkdownEditingTests: XCTestCase {
+    func testEmphasisCommandsToggleLiveSelectionAndKeepCombinedStyles() {
+        let source = "😀 重要"
+        let selection = (source as NSString).range(of: "重要")
+        let bold = MarkdownEditing.apply(.bold, to: source, selection: selection)
+        let unbold = MarkdownEditing.apply(.bold, to: bold.text, selection: bold.selection)
+        XCTAssertEqual(bold.text, "😀 **重要**")
+        XCTAssertEqual(unbold.text, source)
+        XCTAssertEqual((unbold.text as NSString).substring(with: unbold.selection), "重要")
+
+        let italic = MarkdownEditing.apply(.italic, to: "emphasis", selection: NSRange(location: 0, length: 8))
+        let unitalic = MarkdownEditing.apply(.italic, to: italic.text, selection: italic.selection)
+        XCTAssertEqual(italic.text, "*emphasis*")
+        XCTAssertEqual(unitalic.text, "emphasis")
+
+        let boldText = MarkdownEditing.apply(.bold, to: "text", selection: NSRange(location: 0, length: 4))
+        let italicText = MarkdownEditing.apply(.italic, to: boldText.text, selection: boldText.selection)
+        let removeItalic = MarkdownEditing.apply(.italic, to: italicText.text, selection: italicText.selection)
+        let removeBold = MarkdownEditing.apply(.bold, to: removeItalic.text, selection: removeItalic.selection)
+        XCTAssertEqual(italicText.text, "***text***")
+        XCTAssertEqual(removeItalic.text, "**text**")
+        XCTAssertEqual(removeBold.text, "text")
+    }
+
+    func testBoldAndItalicCommandsKeepCaretInsideEmptyMarkers() {
+        let bold = MarkdownEditing.apply(.bold, to: "", selection: NSRange(location: 0, length: 0))
+        let italic = MarkdownEditing.apply(.italic, to: "", selection: NSRange(location: 0, length: 0))
+
+        XCTAssertEqual(bold.text, "****")
+        XCTAssertEqual(bold.selection, NSRange(location: 2, length: 0))
+        XCTAssertEqual(italic.text, "**")
+        XCTAssertEqual(italic.selection, NSRange(location: 1, length: 0))
+    }
+
     func testInlineCodeUsesSingleBackticksForOrdinaryText() {
         let source = "before ordinary after"
         let selection = (source as NSString).range(of: "ordinary")
