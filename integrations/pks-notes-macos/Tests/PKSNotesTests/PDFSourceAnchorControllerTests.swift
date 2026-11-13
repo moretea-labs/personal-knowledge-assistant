@@ -358,7 +358,7 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testExternalPDFChangeReloadsOpenPreviewFromFSEvents() async throws {
+    func testExternalPDFChangeReloadsPreviewAndRejectsItsStaleSelectionAnchor() async throws {
         let defaults = UserDefaults.standard
         let priorWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
         let priorBookmark = defaults.data(forKey: "PKSNotesWorkspaceBookmark")
@@ -384,11 +384,24 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         let pdf = root.appendingPathComponent("Source.pdf")
         let originalData = try XCTUnwrap(makeDocument("Original PDF source").dataRepresentation())
         try originalData.write(to: pdf, options: .atomic)
+        let originalDocument = try XCTUnwrap(PDFDocument(url: pdf))
+        let reader = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        defer { controller.detach(view: reader) }
+        controller.attach(
+            view: reader, document: originalDocument, url: pdf,
+            requestedPage: nil, requestedAnchor: nil
+        )
+        reader.currentSelection = try XCTUnwrap(
+            originalDocument.findString("Original PDF source", withOptions: []).first
+        )
+        let anchor = try XCTUnwrap(controller.selectedSourceAnchor())
 
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(root))
-        model.openFile(pdf, pdfPage: 1)
+        model.openFile(pdf, pdfPage: anchor.page, pdfAnchor: anchor)
         XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        XCTAssertEqual(model.previewPDFAnchor, anchor)
         let initialReload = model.previewPDFReloadSequence
 
         // Exercise the actual FSEvents monitor installed by openWorkspace.
@@ -400,7 +413,59 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
 
         XCTAssertEqual(model.previewPDFReloadSequence, initialReload + 1, "Preview: \(model.previewPDF?.path ?? "nil"); source: \(pdf.path); canonical source: \(pdf.resolvingSymlinksInPath().path)")
         XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
-        XCTAssertEqual(model.previewPDFPage, 1)
+        XCTAssertEqual(model.previewPDFPage, anchor.page)
+        XCTAssertEqual(model.previewPDFAnchor, anchor, "Reload keeps the original citation so the reader can validate it against the new PDF.")
+
+        let refreshedResult = await PDFDocumentLoading.load(pdf)
+        let refreshed = try XCTUnwrap(refreshedResult)
+        XCTAssertFalse(originalDocument === refreshed)
+        XCTAssertNotNil(refreshed.findString("Updated PDF source", withOptions: []).first)
+        XCTAssertNil(refreshed.findString("Original PDF source", withOptions: []).first)
+        controller.attach(
+            view: reader, document: refreshed, url: pdf,
+            requestedPage: model.previewPDFPage,
+            requestedAnchor: model.previewPDFAnchor,
+            navigationSequence: model.previewPDFNavigationSequence
+        )
+        XCTAssertTrue(controller.invalidRequestedSelection)
+        XCTAssertNil(reader.currentSelection, "A stale citation must never highlight different text after refresh.")
+        XCTAssertEqual(controller.currentPageIndex, anchor.page - 1)
+    }
+
+    func testPDFPageReferenceEscapesSelectedTextAsLiteralMarkdown() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let pdf = root.appendingPathComponent("Source.pdf")
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+        let selectedText = "Important *fact* _under_ `code` &amp; <script>\n- list item\n1. ordered item\n1) alternate item\n> block quote\n![remote](https://example.com/track.png)"
+        let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: selectedText))
+        let anchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 2,
+            normalizedRects: [CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.05)],
+            fingerprint: fingerprint
+        ))
+        let snippet = try XCTUnwrap(PDFPageReference.noteSnippet(
+            for: pdf, page: 2, root: root, selectedText: selectedText, anchor: anchor
+        ))
+        let expectedQuote = """
+        > Important \\*fact\\* \\_under\\_ \\`code\\` &amp;amp; &lt;script&gt;
+        > \\- list item
+        > 1\\. ordered item
+        > 1\\) alternate item
+        > &gt; block quote
+        > \\!\\[remote\\](https://example.com/track.png)
+        """
+        XCTAssertTrue(snippet.hasSuffix(expectedQuote))
+
+        let rendered = try AttributedString(markdown: expectedQuote)
+        let normalizedRendered = String(rendered.characters)
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let normalizedSelected = selectedText
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        XCTAssertEqual(normalizedRendered, normalizedSelected)
     }
 
     @MainActor
@@ -424,5 +489,33 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         await fulfillment(of: [event], timeout: 3)
         XCTAssertTrue(observedPaths.contains(where: { URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath() == canonicalFile }), "Observed paths: \(observedPaths); file: \(file.path)")
         withExtendedLifetime(monitor) {}
+    }
+}
+
+
+extension PDFSourceAnchorControllerTests {
+    func testSourceAnchorParserRejectsMalformedAndUnboundedFragments() throws {
+        let fingerprint = "0123456789abcdef"
+        let rect = "0.10000,0.20000,0.30000,0.04000"
+        let valid = "page=7&rects=\(rect)&fp=\(fingerprint)"
+
+        XCTAssertNotNil(PDFSourceAnchor.parse(fragment: valid))
+        XCTAssertNil(PDFSourceAnchor.parse(fragment: "page=7&page=8&rects=\(rect)&fp=\(fingerprint)"))
+        XCTAssertNil(PDFSourceAnchor.parse(fragment: "page=7&rects=\(rect)&rects=\(rect)&fp=\(fingerprint)"))
+        XCTAssertNil(PDFSourceAnchor.parse(fragment: "page=7&rects=\(rect)~~\(rect)&fp=\(fingerprint)"))
+        XCTAssertNil(PDFSourceAnchor.parse(fragment: "page=7&rects=\(rect)&fp=\(fingerprint)&"))
+        XCTAssertNil(PDFSourceAnchor.parse(fragment: "page=7&rects=\(Array(repeating: rect, count: PDFSourceAnchor.maxRects + 1).joined(separator: "~"))&fp=\(fingerprint)"))
+        for malformedRect in [
+            "0.50000,0.20000,-0.30000,0.04000",
+            "0.10000,0.50000,0.30000,-0.04000",
+            "0.80000,0.20000,0.30000,0.04000",
+            "0.10000,0.98000,0.30000,0.04000"
+        ] {
+            XCTAssertNil(
+                PDFSourceAnchor.parse(fragment: "page=7&rects=\(malformedRect)&fp=\(fingerprint)"),
+                "Malformed normalized rectangle should be rejected: \(malformedRect)"
+            )
+        }
+        XCTAssertNil(PDFSourceAnchor.parse(fragment: String(repeating: "x", count: PDFSourceAnchor.maxFragmentBytes + 1)))
     }
 }

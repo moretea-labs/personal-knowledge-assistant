@@ -4,6 +4,22 @@ import XCTest
 @testable import PKSNotes
 
 final class PDFCitationDragTests: XCTestCase {
+    func testPDFReferencesEncodeLiteralPercentInWorkspaceFilenames() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-PDF-Percent-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let pdf = root.appendingPathComponent("Reading%20(v2).pdf")
+        XCTAssertTrue(FileManager.default.createFile(atPath: pdf.path, contents: Data()))
+        let markdown = try XCTUnwrap(PDFPageReference.markdown(for: pdf, page: 1, root: root))
+        let target = try XCTUnwrap(MindMapOutline.linkOccurrences(in: markdown).first?.link.target)
+        let encodedPath = String(target.split(separator: "#", maxSplits: 1)[0])
+
+        XCTAssertTrue(encodedPath.contains("%2520"))
+        XCTAssertEqual(encodedPath.removingPercentEncoding, "/Reading%20(v2).pdf")
+    }
+
     @MainActor
     func testSelectedTextDragCreatesPortableMarkdownQuoteWithExactAnchor() throws {
         let root = FileManager.default.temporaryDirectory
@@ -33,8 +49,33 @@ final class PDFCitationDragTests: XCTestCase {
 
         let item = NSPasteboardItem()
         XCTAssertTrue(item.setString(markdown, forType: .string))
+        XCTAssertTrue(item.setString(markdown, forType: PDFCitationPasteboard.type))
         XCTAssertEqual(item.string(forType: .string), markdown)
+        XCTAssertEqual(item.string(forType: PDFCitationPasteboard.type), markdown)
         XCTAssertNil(controller.selectedCitationForDrag(pdf: pdf, root: root.appendingPathComponent("NotTheWorkspace")))
+    }
+
+    @MainActor
+    func testPDFCitationDropProviderLoadsTheInternalMarkdownPayload() async throws {
+        let typeIdentifier = PDFCitationPasteboard.type.rawValue
+        let citation = "\n\n[Reading.pdf · p. 1](/Reading.pdf#page=1)\n\n> Important fact\n\n"
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(forTypeIdentifier: typeIdentifier, visibility: .ownProcess) { completion in
+            completion(Data(citation.utf8), nil)
+            return nil
+        }
+
+        XCTAssertTrue(provider.hasItemConformingToTypeIdentifier(typeIdentifier))
+        let loaded: String? = await withCheckedContinuation { continuation in
+            provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
+                continuation.resume(returning: PDFCitationPasteboard.markdown(from: item))
+            }
+        }
+        XCTAssertEqual(loaded, citation)
+        XCTAssertEqual(PDFCitationPasteboard.markdown(from: citation as NSString), citation)
+        XCTAssertNil(PDFCitationPasteboard.markdown(from: Data([0xFF, 0xFE])))
+        XCTAssertNil(PDFCitationPasteboard.markdown(from: Data()))
+        XCTAssertNil(PDFCitationPasteboard.markdown(from: 42))
     }
 
     @MainActor
@@ -73,7 +114,399 @@ final class PDFCitationDragTests: XCTestCase {
     }
 
     @MainActor
-    func testSelectedMultiPageTextFallsBackToPageLink() throws {
+    func testPDFCitationInsertionAtDropCaretUsesOneStepNativeUndo() async throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 240),
+            styleMask: [],
+            backing: .buffered,
+            defer: true
+        )
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 240))
+        textView.allowsUndo = true
+        window.contentView = textView
+        XCTAssertTrue(window.makeFirstResponder(textView))
+        textView.string = "Before After"
+        textView.undoManager?.removeAllActions()
+
+        let citation = "\n\n[Reading.pdf · p. 1](/Reading.pdf#page=1&rects=...) \n\n> Important fact\n\n"
+        let insertionPoint = ("Before " as NSString).length
+        XCTAssertTrue(MarkdownNativeCommand.insertText(citation, at: insertionPoint, in: textView))
+        XCTAssertEqual(textView.string, "Before " + citation + "After")
+
+        await Task.yield()
+        let undoManager = try XCTUnwrap(textView.undoManager)
+        XCTAssertTrue(undoManager.canUndo)
+        undoManager.undo()
+        XCTAssertEqual(textView.string, "Before After")
+    }
+
+    func testPDFCitationDropInsideMindMapListKeepsTheGeneratedAnchorMovableWithItsNode() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-PDF-Map-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let pdf = root.appendingPathComponent("Reading (v2).pdf")
+        XCTAssertTrue(FileManager.default.createFile(atPath: pdf.path, contents: Data()))
+        let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Important fact"))
+        let anchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 1,
+            normalizedRects: [CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.04)],
+            fingerprint: fingerprint
+        ))
+        let snippet = try XCTUnwrap(PDFPageReference.noteSnippet(
+            for: pdf, page: 1, root: root, selectedText: "Important fact", anchor: anchor
+        ))
+        let citation = "\n\n\(snippet)\n\n"
+        let markdown = "# Root\n- Parent\n  - Concept\n    Existing text\n- Next\n"
+        let offset = (markdown as NSString).range(of: "Existing text").location
+            + ("Existing text" as NSString).length
+
+        let formatted = PDFCitationDropTarget.citationForInsertion(
+            citation, in: markdown, at: offset
+        )
+        XCTAssertTrue(formatted.contains("\n    [Reading (v2).pdf · p. 1](/Reading%20%28v2%29.pdf#"))
+        XCTAssertTrue(formatted.contains("\n    > Important fact"))
+
+        let inserted = MarkdownEditing.insert(
+            formatted, into: markdown, selection: NSRange(location: offset, length: 0)
+        ).text
+        let nodes = MindMapOutline.nodes(in: inserted)
+        let parent = try XCTUnwrap(nodes.first(where: { $0.title == "Parent" }))
+        let concept = try XCTUnwrap(nodes.first(where: { $0.title == "Concept" }))
+        let presentations = MindMapOutline.presentations(in: inserted, nodes: nodes)
+        let expectedTarget = "/Reading%20%28v2%29.pdf#\(anchor.fragment)"
+
+        XCTAssertEqual(presentations[concept.id]?.links.map(\.target), [expectedTarget])
+        XCTAssertEqual(presentations[parent.id]?.links, [])
+        XCTAssertTrue(MindMapOutline.actionAvailability(in: inserted, nodeID: concept.id).canPromote)
+        XCTAssertEqual(
+            PDFCitationDropTarget.citationForInsertion(citation, in: "# Root\nSummary\n", at: 10),
+            citation
+        )
+        let trailingList = "# Root\n- Concept\n"
+        let trailingOffset = (trailingList as NSString).length
+        let trailingInsertion = PDFCitationDropTarget.citationForInsertion(
+            citation, in: trailingList, at: trailingOffset
+        )
+        XCTAssertTrue(trailingInsertion.contains("\n  [Reading (v2).pdf · p. 1](/Reading%20%28v2%29.pdf#"))
+        XCTAssertTrue(trailingInsertion.contains("\n  > Important fact"))
+    }
+
+    @MainActor
+    func testPDFCitationMarkdownPersistsAndReopensWithExactAnchor() async throws {
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
+        let previousBookmark = defaults.object(forKey: "PKSNotesWorkspaceBookmark")
+        let previousLastOpened = defaults.object(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let previousWorkspace { defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousBookmark { defaults.set(previousBookmark, forKey: "PKSNotesWorkspaceBookmark") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+            if let previousLastOpened { defaults.set(previousLastOpened, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-PDF-Roundtrip-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        defaults.set(root.path, forKey: "PKSNotesWorkspace")
+        defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark")
+        defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown")
+
+        let pdf = root.appendingPathComponent("Reading (v2).pdf")
+        XCTAssertTrue(FileManager.default.createFile(atPath: pdf.path, contents: Data()))
+        let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Important fact"))
+        let anchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 1,
+            normalizedRects: [CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.04)],
+            fingerprint: fingerprint
+        ))
+        let snippet = try XCTUnwrap(PDFPageReference.noteSnippet(for: pdf, page: 1, root: root, selectedText: "Important fact", anchor: anchor))
+        let citation = "\n\n\(snippet)\n\n"
+        let markdown = "# Root\n- Parent\n  - Concept\n    Existing text\n- Next\n"
+        let offset = (markdown as NSString).range(of: "Existing text").location
+            + ("Existing text" as NSString).length
+        let formatted = PDFCitationDropTarget.citationForInsertion(citation, in: markdown, at: offset)
+        let inserted = MarkdownEditing.insert(
+            formatted, into: markdown, selection: NSRange(location: offset, length: 0)
+        ).text
+        let expectedTarget = "/Reading%20%28v2%29.pdf#\(anchor.fragment)"
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        let note = try XCTUnwrap(model.newNote(named: "Study", in: root, initialContent: markdown))
+        for _ in 0..<400 where model.selected != note || model.loadingNote { await Task.yield() }
+        XCTAssertEqual(model.selected, note)
+        XCTAssertFalse(model.loadingNote)
+
+        model.draft = inserted
+        XCTAssertTrue(model.isDirty)
+        model.save()
+        XCTAssertFalse(model.isDirty)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), inserted)
+
+        let reopened = NotesModel()
+        XCTAssertTrue(reopened.openWorkspace(root))
+        reopened.openNote(note)
+        for _ in 0..<400 where reopened.selected != note || reopened.loadingNote { await Task.yield() }
+        XCTAssertEqual(reopened.selected, note)
+        XCTAssertFalse(reopened.loadingNote)
+        XCTAssertEqual(reopened.draft, inserted)
+        let nodes = MindMapOutline.nodes(in: reopened.draft)
+        let concept = try XCTUnwrap(nodes.first(where: { $0.title == "Concept" }))
+        let links = MindMapOutline.presentations(in: reopened.draft, nodes: nodes)
+        XCTAssertEqual(links[concept.id]?.links.map(\.target), [expectedTarget])
+    }
+
+    func testPDFCitationDropOnMindMapTitleAttachesToNodeWithoutSplittingTitle() throws {
+        let markdown = "# Root\n- 😀Concept\n- Next\n"
+        let titleRange = (markdown as NSString).range(of: "Concept")
+        let pointerOffset = titleRange.location + 3
+        let insertionOffset = PDFCitationDropTarget.citationInsertionOffset(
+            in: markdown, at: pointerOffset
+        )
+        XCTAssertEqual(
+            (markdown as NSString).substring(to: insertionOffset),
+            "# Root\n- 😀Concept"
+        )
+
+        let citation = "\n\n[Reading.pdf · p. 1](/Reading.pdf#page=1)\n\n> Important fact\n\n"
+        let formatted = PDFCitationDropTarget.citationForInsertion(
+            citation, in: markdown, at: insertionOffset
+        )
+        let inserted = MarkdownEditing.insert(
+            formatted, into: markdown, selection: NSRange(location: insertionOffset, length: 0)
+        ).text
+        let nodes = MindMapOutline.nodes(in: inserted)
+        let concept = try XCTUnwrap(nodes.first(where: { $0.title == "😀Concept" }))
+        let next = try XCTUnwrap(nodes.first(where: { $0.title == "Next" }))
+        XCTAssertGreaterThan(next.id, concept.id)
+        let presentations = MindMapOutline.presentations(in: inserted, nodes: nodes)
+        XCTAssertEqual(presentations[concept.id]?.links.map(\.target), ["/Reading.pdf#page=1"])
+        XCTAssertTrue(inserted.contains("> Important fact"))
+        XCTAssertEqual(
+            PDFCitationDropTarget.citationInsertionOffset(
+                in: markdown, at: (markdown as NSString).range(of: "Concept").location + 2
+            ),
+            insertionOffset
+        )
+
+        let body = "# Root\n- Parent\n  Existing body\n"
+        let bodyOffset = (body as NSString).range(of: "Existing body").location + 3
+        XCTAssertEqual(
+            PDFCitationDropTarget.citationInsertionOffset(in: body, at: bodyOffset),
+            bodyOffset
+        )
+    }
+
+    func testPDFCitationDropRejectsFencedAndInlineCodeRegions() throws {
+        let fenced = """
+        # Root
+        - Parent
+          ```swift
+          print("do not split this block")
+          ```
+        - Next
+        """
+        let fencedOffset = (fenced as NSString).range(of: "do not split").location + 4
+        XCTAssertTrue(MindMapOutline.isInsideCode(in: fenced, at: fencedOffset))
+        XCTAssertFalse(MindMapOutline.isInsideCode(
+            in: fenced, at: (fenced as NSString).range(of: "Parent").location
+        ))
+
+        let inline = "# Root\n- Parent with `inline code` and normal text\n"
+        let inlineOffset = (inline as NSString).range(of: "inline code").location + 3
+        XCTAssertTrue(MindMapOutline.isInsideCode(in: inline, at: inlineOffset))
+        XCTAssertFalse(MindMapOutline.isInsideCode(
+            in: inline, at: (inline as NSString).range(of: "normal text").location
+        ))
+
+        let unclosed = "# Root\n- Parent\n  ```swift\n  print(1)\n"
+        let unclosedOffset = (unclosed as NSString).range(of: "print").location + 2
+        XCTAssertTrue(MindMapOutline.isInsideCode(in: unclosed, at: unclosedOffset))
+    }
+
+    func testPDFCitationDropRejectsIndentedCodeButAllowsNestedList() {
+        let markdown = """
+        # Root
+            [root code link](/root.pdf)
+        - Parent
+              - nested code node
+              [nested code link](/nested.pdf)
+          - Real child
+        """
+        XCTAssertTrue(MindMapOutline.isInsideCode(
+            in: markdown, at: (markdown as NSString).range(of: "root code link").location
+        ))
+        XCTAssertTrue(MindMapOutline.isInsideCode(
+            in: markdown, at: (markdown as NSString).range(of: "nested code node").location
+        ))
+        XCTAssertFalse(MindMapOutline.isInsideCode(
+            in: markdown, at: (markdown as NSString).range(of: "Real child").location
+        ))
+    }
+
+    func testPDFCitationDropOnHeadingTitleAttachesToHeadingBodyWithoutSplittingTitle() throws {
+        let markdown = "# 😀Root\n## Next\n"
+        let titleRange = (markdown as NSString).range(of: "Root")
+        let pointerOffset = titleRange.location + 2
+        let insertionOffset = PDFCitationDropTarget.citationInsertionOffset(
+            in: markdown, at: pointerOffset
+        )
+        XCTAssertEqual(
+            (markdown as NSString).substring(to: insertionOffset),
+            "# 😀Root"
+        )
+
+        let citation = "\n\n[Reading.pdf · p. 1](/Reading.pdf#page=1)\n\n> Important fact\n\n"
+        let formatted = PDFCitationDropTarget.citationForInsertion(
+            citation, in: markdown, at: insertionOffset
+        )
+        let inserted = MarkdownEditing.insert(
+            formatted, into: markdown, selection: NSRange(location: insertionOffset, length: 0)
+        ).text
+        let nodes = MindMapOutline.nodes(in: inserted)
+        let root = try XCTUnwrap(nodes.first(where: { $0.title == "😀Root" }))
+        let next = try XCTUnwrap(nodes.first(where: { $0.title == "Next" }))
+        let presentations = MindMapOutline.presentations(in: inserted, nodes: nodes)
+
+        XCTAssertEqual(presentations[root.id]?.links.map(\.target), ["/Reading.pdf#page=1"])
+        XCTAssertEqual(presentations[next.id]?.links, [])
+    }
+
+    @MainActor
+    func testPDFCitationDropResolvesTheFrontmostWindowUnderThePointer() throws {
+        let backWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 240, height: 200),
+            styleMask: [],
+            backing: .buffered,
+            defer: true
+        )
+        let frontWindow = NSWindow(
+            contentRect: NSRect(x: 100, y: 0, width: 240, height: 200),
+            styleMask: [],
+            backing: .buffered,
+            defer: true
+        )
+
+        XCTAssertTrue(
+            PDFCitationDropTarget.window(
+                at: NSPoint(x: 150, y: 100),
+                in: [frontWindow, backWindow]
+            ) === frontWindow
+        )
+        XCTAssertTrue(
+            PDFCitationDropTarget.window(
+                at: NSPoint(x: 20, y: 100),
+                in: [frontWindow, backWindow]
+            ) === backWindow
+        )
+        XCTAssertNil(
+            PDFCitationDropTarget.window(
+                at: NSPoint(x: 500, y: 100),
+                in: [frontWindow, backWindow]
+            )
+        )
+    }
+
+    @MainActor
+    func testPDFCitationDropResolvesTheTextViewUnderThePointer() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 240),
+            styleMask: [],
+            backing: .buffered,
+            defer: true
+        )
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 240))
+        let first = NSTextView(frame: NSRect(x: 0, y: 0, width: 180, height: 180))
+        let second = NSTextView(frame: NSRect(x: 220, y: 0, width: 180, height: 180))
+        first.isEditable = true
+        second.isEditable = true
+        root.addSubview(first)
+        root.addSubview(second)
+        window.contentView = root
+
+        let firstScreenPoint = window.convertPoint(
+            toScreen: first.convert(NSPoint(x: 24, y: 24), to: nil)
+        )
+        let secondScreenPoint = window.convertPoint(
+            toScreen: second.convert(NSPoint(x: 24, y: 24), to: nil)
+        )
+
+        XCTAssertTrue(
+            PDFCitationDropTarget.editableTextView(at: firstScreenPoint, in: window) === first
+        )
+        XCTAssertTrue(
+            PDFCitationDropTarget.editableTextView(at: secondScreenPoint, in: window) === second
+        )
+
+        let outsideScreenPoint = window.convertPoint(
+            toScreen: NSPoint(x: 500, y: 220)
+        )
+        XCTAssertNil(PDFCitationDropTarget.editableTextView(at: outsideScreenPoint, in: window))
+    }
+
+    @MainActor
+    func testPDFCitationDropTargetKeepsTheOriginalNoteRevisionAndCaret() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 240),
+            styleMask: [],
+            backing: .buffered,
+            defer: true
+        )
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 240))
+        textView.allowsUndo = true
+        window.contentView = textView
+
+        textView.string = "Before After"
+        textView.undoManager?.removeAllActions()
+        let note = URL(fileURLWithPath: "/tmp/Study.md")
+        let otherNote = URL(fileURLWithPath: "/tmp/Other.md")
+        let textPoint = NSPoint(x: 54, y: 15)
+        let screenPoint = window.convertPoint(
+            toScreen: textView.convert(textPoint, to: nil)
+        )
+        let expectedIndex = textView.characterIndexForInsertion(at: textPoint)
+        let target = try XCTUnwrap(PDFCitationDropTarget(
+            screenPoint: screenPoint,
+            note: note,
+            draftRevision: 7,
+            textView: textView
+        ))
+        XCTAssertEqual(target.insertionIndex, expectedIndex)
+
+        XCTAssertFalse(target.insert(
+            "wrong note", currentNote: otherNote,
+            currentDraftRevision: 7, canEdit: true
+        ))
+        XCTAssertFalse(target.insert(
+            "stale draft", currentNote: note,
+            currentDraftRevision: 8, canEdit: true
+        ))
+        XCTAssertEqual(textView.string, "Before After")
+
+        let citation = "\n\n[Reading.pdf · p. 1](/Reading.pdf#page=1)\n\n> Important fact\n\n"
+        XCTAssertTrue(target.insert(
+            citation, currentNote: note,
+            currentDraftRevision: 7, canEdit: true
+        ))
+        let expected = ("Before After" as NSString).replacingCharacters(
+            in: NSRange(location: expectedIndex, length: 0),
+            with: citation
+        )
+        XCTAssertEqual(textView.string, expected)
+
+        let undoManager = try XCTUnwrap(textView.undoManager)
+        XCTAssertTrue(undoManager.canUndo)
+        undoManager.undo()
+        XCTAssertEqual(textView.string, "Before After")
+    }
+
+    @MainActor
+    func testSelectedMultiPageTextFallsBackToPageLink() async throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let first = NSTextView(frame: bounds)
         first.string = "Page one quotation"
@@ -97,10 +530,16 @@ final class PDFCitationDragTests: XCTestCase {
         selected.add(try XCTUnwrap(document.findString("Page two quotation", withOptions: []).first))
         reader.currentSelection = selected
         XCTAssertNil(controller.selectedSourceAnchor())
+        await Task.yield()
+        XCTAssertTrue(controller.selectionNeedsPageOnlyReference)
         let markdown = try XCTUnwrap(controller.selectedCitationForDrag(pdf: pdf, root: root))
         XCTAssertTrue(markdown.contains("#page=1"))
         XCTAssertFalse(markdown.contains("&rects="))
         XCTAssertTrue(markdown.contains("> Page one quotation"))
         XCTAssertTrue(markdown.contains("> Page two quotation"))
+
+        reader.currentSelection = nil
+        await Task.yield()
+        XCTAssertFalse(controller.selectionNeedsPageOnlyReference)
     }
 }

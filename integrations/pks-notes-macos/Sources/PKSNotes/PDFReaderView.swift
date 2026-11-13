@@ -25,8 +25,30 @@ enum PDFDocumentLoading {
     }
 }
 
+enum PDFCitationPasteboard {
+    /// Internal type distinguishes a PDF citation from ordinary text dragged
+    /// inside the editor; the same payload is also exported as plain text.
+    static let type = NSPasteboard.PasteboardType("com.leafspan.pdf-citation")
+
+    static func markdown(from item: Any?) -> String? {
+        let value: String?
+        if let data = item as? Data {
+            value = String(data: data, encoding: .utf8)
+        } else if let string = item as? String {
+            value = string
+        } else if let string = item as? NSString {
+            value = string as String
+        } else {
+            value = nil
+        }
+        guard let value, !value.isEmpty else { return nil }
+        return value
+    }
+}
+
 struct PDFSourceAnchor: Equatable {
     static let maxRects = 32
+    static let maxFragmentBytes = 4_096
 
     let page: Int
     let normalizedRects: [CGRect]
@@ -98,31 +120,50 @@ struct PDFSourceAnchor: Equatable {
     }
 
     static func parse(fragment: String) -> PDFSourceAnchor? {
+        guard fragment.utf8.count <= maxFragmentBytes else { return nil }
+
         var page: Int?
         var rectString: String?
         var fingerprint: String?
 
-        for part in fragment.split(separator: "&") {
+        for part in fragment.split(separator: "&", omittingEmptySubsequences: false) {
+            guard !part.isEmpty else { return nil }
             let pair = part.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            guard pair.count == 2 else { continue }
+            guard pair.count == 2, !pair[0].isEmpty else { return nil }
+
             switch pair[0].lowercased() {
-            case "page": page = Int(pair[1])
-            case "rects": rectString = String(pair[1])
-            case "fp": fingerprint = String(pair[1])
-            default: continue
+            case "page":
+                guard page == nil, let value = Int(pair[1]), value > 0 else { return nil }
+                page = value
+            case "rects":
+                guard rectString == nil, !pair[1].isEmpty else { return nil }
+                rectString = String(pair[1])
+            case "fp":
+                guard fingerprint == nil, !pair[1].isEmpty else { return nil }
+                fingerprint = String(pair[1])
+            default:
+                continue
             }
         }
 
         guard let page, let rectString, let fingerprint else { return nil }
-        let rects = rectString.split(separator: "~").compactMap { encoded -> CGRect? in
+        let encodedRects = rectString.split(separator: "~", omittingEmptySubsequences: false)
+        guard !encodedRects.isEmpty,
+              encodedRects.count <= maxRects,
+              encodedRects.allSatisfy({ !$0.isEmpty }) else { return nil }
+
+        let rects = encodedRects.compactMap { encoded -> CGRect? in
             let values = encoded.split(separator: ",", omittingEmptySubsequences: false)
             guard values.count == 4,
                   let x = Double(values[0]), let y = Double(values[1]),
-                  let width = Double(values[2]), let height = Double(values[3])
+                  let width = Double(values[2]), let height = Double(values[3]),
+                  x.isFinite, y.isFinite, width.isFinite, height.isFinite,
+                  x >= 0, y >= 0, width > 0, height > 0,
+                  x + width <= 1.000_01, y + height <= 1.000_01
             else { return nil }
             return CGRect(x: x, y: y, width: width, height: height)
         }
-        guard rects.count == rectString.split(separator: "~").count else { return nil }
+        guard rects.count == encodedRects.count else { return nil }
         return PDFSourceAnchor(page: page, normalizedRects: rects, fingerprint: fingerprint)
     }
 }
@@ -162,7 +203,7 @@ enum PDFPageReference {
         // Parentheses are legal in a URL but terminate Markdown destinations.
         // Encode them here, as with spaces and '#', so copied references and
         // PDF-to-note captures resolve to filenames such as "Plan (v2).pdf".
-        allowed.remove(charactersIn: "#?()")
+        allowed.remove(charactersIn: "#?()%")
         guard let encoded = relative.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
 
         // Keep the readable filename in Markdown without inserting escaped
@@ -205,7 +246,7 @@ enum PDFPageReference {
             if !trimmed.isEmpty {
                 let quote = trimmed
                     .components(separatedBy: .newlines)
-                    .map { "> \($0)" }
+                    .map { "> \(MindMapOutline.escapeInlineText($0))" }
                     .joined(separator: "\n")
                 sections.append(quote)
             }
@@ -269,6 +310,7 @@ final class PDFReaderController: ObservableObject {
     @Published private(set) var isSearching = false
     @Published private(set) var invalidRequestedPage: Int?
     @Published private(set) var invalidRequestedSelection = false
+    @Published private(set) var selectionNeedsPageOnlyReference = false
 
     private weak var pdfView: PDFView?
     private var document: PDFDocument?
@@ -428,6 +470,7 @@ final class PDFReaderController: ObservableObject {
         guard pdfView === view else { return }
         removeViewObservers()
         pdfView = nil
+        selectionNeedsPageOnlyReference = false
     }
 
     func selectedText() -> String? {
@@ -641,6 +684,12 @@ final class PDFReaderController: ObservableObject {
     private func syncFromView() {
         syncPageFromView()
         syncScaleFromView()
+        syncSelectionStatus()
+    }
+
+    private func syncSelectionStatus() {
+        let hasSelectedText = selectedText() != nil
+        selectionNeedsPageOnlyReference = hasSelectedText && selectedSourceAnchor() == nil
     }
 
     private func installViewObservers(for view: PDFView) {
@@ -651,6 +700,9 @@ final class PDFReaderController: ObservableObject {
             },
             center.addObserver(forName: .PDFViewScaleChanged, object: view, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.syncScaleFromView() }
+            },
+            center.addObserver(forName: .PDFViewSelectionChanged, object: view, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.syncSelectionStatus() }
             }
         ]
     }
@@ -678,6 +730,7 @@ final class PDFReaderController: ObservableObject {
         // A previous match must not remain highlighted when a different
         // search is pending or the new query has no results.
         pdfView?.currentSelection = nil
+        selectionNeedsPageOnlyReference = false
         completedSearchQuery = ""
         searchMatchCount = 0
         searchMatchIndex = 0
@@ -771,6 +824,18 @@ struct NativePDFPreview: View {
                         .padding(.horizontal, 12)
                         .frame(minHeight: 30)
                         .background(Color(nsColor: .controlBackgroundColor))
+                    } else if root != nil && controller.selectionNeedsPageOnlyReference {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle")
+                            Text(language.text("This PDF selection cannot be linked precisely. The quote will still be saved with a page-only link to its first page. Select a smaller passage on one page to enable precise highlighting."))
+                            Spacer()
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 30)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .accessibilityIdentifier("pks-pdf-selection-anchor-warning")
                     }
                     Divider()
                     PDFCanvas(
@@ -1163,6 +1228,7 @@ private struct PDFCanvas: NSViewRepresentable {
 
             let item = NSPasteboardItem()
             item.setString(citation, forType: .string)
+            item.setString(citation, forType: PDFCitationPasteboard.type)
             let drag = NSDraggingItem(pasteboardWriter: item)
             let label = String(citation.prefix(64)).replacingOccurrences(of: "\n", with: " ")
             let image = NSImage(size: NSSize(width: 250, height: 34))
