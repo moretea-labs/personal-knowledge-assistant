@@ -397,18 +397,79 @@ extension MindMapOutlineTests {
 extension MindMapOutlineTests {
     func testShiftListSubtreeChangesHierarchyWithoutLosingChildren() {
         let source = "# Root\n- A\n- B\n  - B1\n- C"
-        let deeper = MindMapOutline.shiftListSubtree(in: source, nodeID: 2, deeper: true)
+        let deeper = MindMapOutline.shiftNodeSubtree(in: source, nodeID: 2, deeper: true)
         XCTAssertEqual(deeper, "# Root\n- A\n  - B\n    - B1\n- C")
         XCTAssertEqual(
-            MindMapOutline.shiftListSubtree(in: deeper!, nodeID: 2, deeper: false),
+            MindMapOutline.shiftNodeSubtree(in: deeper!, nodeID: 2, deeper: false),
             source
         )
     }
 
     func testShiftListSubtreeRejectsUnsafeOrImpossibleChanges() {
-        XCTAssertNil(MindMapOutline.shiftListSubtree(in: "# Root\n- First", nodeID: 1, deeper: true))
-        XCTAssertNil(MindMapOutline.shiftListSubtree(in: "# Root\n- Parent\nparagraph\n- Next", nodeID: 1, deeper: true))
-        XCTAssertNil(MindMapOutline.shiftListSubtree(in: "# Root\n- Root item", nodeID: 1, deeper: false))
+        XCTAssertNil(MindMapOutline.shiftNodeSubtree(in: "# Root\n- First", nodeID: 1, deeper: true))
+        XCTAssertNil(MindMapOutline.shiftNodeSubtree(in: "# Root\n- Parent\nparagraph\n- Next", nodeID: 1, deeper: true))
+        XCTAssertNil(MindMapOutline.shiftNodeSubtree(in: "# Root\n- Root item", nodeID: 1, deeper: false))
+    }
+
+    func testHeadingPromoteAndDemotePreserveNestedSectionsAndPDFEvidence() throws {
+        let citation = "/Books/Study.pdf#page=5&rects=0.2,0.3,0.4,0.05&fp=abcdef0123456789"
+        let source = """
+        # Root
+        ## Parent
+        ### First
+        ### Move
+        [Textbook · p. 5](\(citation))
+        > Selected passage
+        #### Detail
+        ##### Deep
+        ### Next
+        ## Other
+        """
+        let nodes = MindMapOutline.nodes(in: source)
+        let moved = try XCTUnwrap(nodes.first { $0.title == "Move" })
+        let availability = MindMapOutline.actionAvailability(in: source, nodeID: moved.id)
+        XCTAssertTrue(availability.canPromote)
+        XCTAssertTrue(availability.canDemote)
+
+        let demoted = try XCTUnwrap(
+            MindMapOutline.shiftNodeSubtree(in: source, nodeID: moved.id, deeper: true)
+        )
+        XCTAssertEqual(demoted, """
+        # Root
+        ## Parent
+        ### First
+        #### Move
+        [Textbook · p. 5](\(citation))
+        > Selected passage
+        ##### Detail
+        ###### Deep
+        ### Next
+        ## Other
+        """)
+        let demotedNodes = MindMapOutline.nodes(in: demoted)
+        let demotedMove = try XCTUnwrap(demotedNodes.first { $0.title == "Move" })
+        XCTAssertEqual(
+            MindMapOutline.presentations(in: demoted, nodes: demotedNodes)[demotedMove.id]?.links.map(\.target),
+            [citation]
+        )
+
+        let promoted = try XCTUnwrap(
+            MindMapOutline.shiftNodeSubtree(in: demoted, nodeID: moved.id, deeper: false)
+        )
+        XCTAssertEqual(promoted, source)
+    }
+
+    func testHeadingPromoteDemoteRespectMarkdownLevelBounds() throws {
+        let root = "# Root\n"
+        XCTAssertFalse(MindMapOutline.actionAvailability(in: root, nodeID: 0).canPromote)
+
+        let deep = "# Root\n###### Last\n###### Next\n"
+        let nodes = MindMapOutline.nodes(in: deep)
+        let next = try XCTUnwrap(nodes.first { $0.title == "Next" })
+        let availability = MindMapOutline.actionAvailability(in: deep, nodeID: next.id)
+        XCTAssertTrue(availability.canPromote)
+        XCTAssertFalse(availability.canDemote)
+        XCTAssertNil(MindMapOutline.shiftNodeSubtree(in: deep, nodeID: next.id, deeper: true))
     }
 
     func testDeleteLeafSupportsEmptyHeadingLeavesButRetainsTheOnlyRoot() throws {
@@ -442,11 +503,11 @@ extension MindMapOutlineTests {
             let availability = MindMapOutline.actionAvailability(in: source, nodeID: nodeID)
             XCTAssertEqual(
                 availability.canPromote,
-                MindMapOutline.shiftListSubtree(in: source, nodeID: nodeID, deeper: false) != nil
+                MindMapOutline.shiftNodeSubtree(in: source, nodeID: nodeID, deeper: false) != nil
             )
             XCTAssertEqual(
                 availability.canDemote,
-                MindMapOutline.shiftListSubtree(in: source, nodeID: nodeID, deeper: true) != nil
+                MindMapOutline.shiftNodeSubtree(in: source, nodeID: nodeID, deeper: true) != nil
             )
             XCTAssertEqual(
                 availability.canDeleteLeaf,

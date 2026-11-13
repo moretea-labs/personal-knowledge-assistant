@@ -2050,7 +2050,7 @@ struct MindMapCanvas: View {
 
     private func shiftedSource(deeper: Bool) -> String? {
         guard let selectedID else { return nil }
-        return MindMapOutline.shiftListSubtree(in: source, nodeID: selectedID, deeper: deeper)
+        return MindMapOutline.shiftNodeSubtree(in: source, nodeID: selectedID, deeper: deeper)
     }
 
     private func shiftSelected(deeper: Bool) {

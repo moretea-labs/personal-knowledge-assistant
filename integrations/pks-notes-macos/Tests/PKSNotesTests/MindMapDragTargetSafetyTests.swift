@@ -604,13 +604,13 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
             $0.title == "A"
         })?.id)
         let demoted = try XCTUnwrap(
-            MindMapOutline.shiftListSubtree(in: source, nodeID: nodeID, deeper: true)
+            MindMapOutline.shiftNodeSubtree(in: source, nodeID: nodeID, deeper: true)
         )
         XCTAssertTrue(demoted.contains("    [Textbook · p. 2](\(citation))"))
         XCTAssertTrue(demoted.contains("    > Keep this note attached."))
 
         let promoted = try XCTUnwrap(
-            MindMapOutline.shiftListSubtree(in: demoted, nodeID: nodeID, deeper: false)
+            MindMapOutline.shiftNodeSubtree(in: demoted, nodeID: nodeID, deeper: false)
         )
         XCTAssertEqual(promoted, source)
     }

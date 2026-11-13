@@ -156,26 +156,41 @@ enum MindMapOutline {
         return context.lines.count
     }
 
-    private static func canShiftListSubtree(_ context: EditContext, deeper: Bool) -> Bool {
+    private static func canShiftNodeSubtree(_ context: EditContext, deeper: Bool) -> Bool {
         let nodeID = context.node.id
-        guard isListLine(context.lines[nodeID]) else { return false }
         let endLine = shiftSubtreeEndLine(context)
-        let indent = context.lines[nodeID].prefix(while: { $0 == " " }).count
-        guard hasSafelyIndentedListContent(
-            context.lines, from: nodeID + 1, to: endLine, baseIndent: indent
-        ) else { return false }
 
-        if deeper {
-            guard context.position > 0 else { return false }
-            var previousStructural: MindMapNode?
-            for candidate in context.parsed[..<context.position].reversed() where candidate.depth <= context.node.depth {
-                previousStructural = candidate
-                break
+        if isListLine(context.lines[nodeID]) {
+            let indent = context.lines[nodeID].prefix(while: { $0 == " " }).count
+            guard hasSafelyIndentedListContent(
+                context.lines, from: nodeID + 1, to: endLine, baseIndent: indent
+            ) else { return false }
+
+            if deeper {
+                guard context.position > 0 else { return false }
+                let previousStructural = context.parsed[..<context.position].reversed()
+                    .first(where: { $0.depth <= context.node.depth })
+                return previousStructural?.depth == context.node.depth
             }
-            return previousStructural?.depth == context.node.depth
+            return indent >= 2
         }
 
-        return context.lines[nodeID].prefix(while: { $0 == " " }).count >= 2
+        guard let level = headingLevel(in: context.lines[nodeID]) else { return false }
+        let delta = deeper ? 1 : -1
+        for candidate in context.parsed where candidate.id >= nodeID && candidate.id < endLine {
+            guard let candidateLevel = headingLevel(in: context.lines[candidate.id]) else { continue }
+            guard (1...6).contains(candidateLevel + delta) else { return false }
+        }
+
+        if deeper {
+            guard context.position > 0,
+                  let previousStructural = context.parsed[..<context.position].reversed()
+                    .first(where: { $0.depth <= context.node.depth }),
+                  previousStructural.depth == context.node.depth,
+                  headingLevel(in: context.lines[previousStructural.id]) != nil else { return false }
+            return true
+        }
+        return level > 1
     }
 
     private static func canDeleteLeaf(_ context: EditContext) -> Bool {
@@ -199,8 +214,8 @@ enum MindMapOutline {
             return .init(canPromote: false, canDemote: false, canDeleteLeaf: false)
         }
         return .init(
-            canPromote: canShiftListSubtree(context, deeper: false),
-            canDemote: canShiftListSubtree(context, deeper: true),
+            canPromote: canShiftNodeSubtree(context, deeper: false),
+            canDemote: canShiftNodeSubtree(context, deeper: true),
             canDeleteLeaf: canDeleteLeaf(context)
         )
     }
@@ -1035,19 +1050,32 @@ extension MindMapOutline {
 
 
 extension MindMapOutline {
-    /// Reparent a pure Markdown list subtree by one indentation level.
-    /// Conservatively rejects prose/code inside the subtree to avoid corrupting Markdown.
-    static func shiftListSubtree(in source: String, nodeID: Int, deeper: Bool) -> String? {
+    /// Change one structural node's hierarchy using the canonical Markdown outline.
+    /// List subtrees move by indentation; heading sections move by changing their heading levels.
+    static func shiftNodeSubtree(in source: String, nodeID: Int, deeper: Bool) -> String? {
         guard let context = editContext(in: source, nodeID: nodeID),
-              canShiftListSubtree(context, deeper: deeper) else { return nil }
+              canShiftNodeSubtree(context, deeper: deeper) else { return nil }
         var lines = context.lines
         let endLine = shiftSubtreeEndLine(context)
-        let delta = deeper ? 2 : -2
-        for index in nodeID..<endLine where !lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
-            let currentIndent = lines[index].prefix(while: { $0 == " " }).count
-            let nextIndent = currentIndent + delta
-            guard nextIndent >= 0 else { return nil }
-            lines[index] = String(repeating: " ", count: nextIndent) + lines[index].dropFirst(currentIndent)
+
+        if isListLine(lines[nodeID]) {
+            let delta = deeper ? 2 : -2
+            for index in nodeID..<endLine where !lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
+                let currentIndent = lines[index].prefix(while: { $0 == " " }).count
+                let nextIndent = currentIndent + delta
+                guard nextIndent >= 0 else { return nil }
+                lines[index] = String(repeating: " ", count: nextIndent) + lines[index].dropFirst(currentIndent)
+            }
+            return lines.joined(separator: "\n")
+        }
+
+        let delta = deeper ? 1 : -1
+        for candidate in context.parsed where candidate.id >= nodeID && candidate.id < endLine {
+            guard let level = headingLevel(in: lines[candidate.id]),
+                  let updated = replacingHeadingLevel(in: lines[candidate.id], with: level + delta) else {
+                continue
+            }
+            lines[candidate.id] = updated
         }
         return lines.joined(separator: "\n")
     }
