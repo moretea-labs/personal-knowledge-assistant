@@ -169,6 +169,52 @@ extension MindMapOutlineTests {
         XCTAssertNil(MindMapOutline.rename(in: "# Root", nodeID: 0, to: ""))
     }
 
+    func testAddSiblingOnHeadingCreatesSameLevelAfterItsWholeSection() throws {
+        let source = """
+        # Root
+        Root introduction.
+        ## A
+        A introduction.
+        ### A1
+        A1 body.
+        - A1 claim
+        ## B
+        B body.
+        """
+        let nodes = MindMapOutline.nodes(in: source)
+        let a = try XCTUnwrap(nodes.first { $0.title == "A" })
+        let outcome = try XCTUnwrap(
+            MindMapOutline.addSiblingWithOutcome(in: source, nodeID: a.id)
+        )
+        XCTAssertEqual(outcome.source, """
+        # Root
+        Root introduction.
+        ## A
+        A introduction.
+        ### A1
+        A1 body.
+        - A1 claim
+        ## New idea
+        ## B
+        B body.
+        """)
+        let inserted = try XCTUnwrap(
+            MindMapOutline.nodes(in: outcome.source).first { $0.id == outcome.nodeID }
+        )
+        XCTAssertEqual(inserted.title, "New idea")
+        XCTAssertEqual(inserted.depth, a.depth)
+    }
+
+    func testAddSiblingOnListRemainsAtTheSameIndentAfterItsSubtree() throws {
+        let source = "# Root\n- A\n  - A1\n- B\n"
+        let nodes = MindMapOutline.nodes(in: source)
+        let a = try XCTUnwrap(nodes.first { $0.title == "A" })
+        let outcome = try XCTUnwrap(
+            MindMapOutline.addSiblingWithOutcome(in: source, nodeID: a.id)
+        )
+        XCTAssertEqual(outcome.source, "# Root\n- A\n  - A1\n- New idea\n- B\n")
+    }
+
     func testAddingChildPreservesHierarchy() {
         XCTAssertEqual(MindMapOutline.addChild(in: "# Root\n- Existing", parentID: 0), "# Root\n- New idea\n- Existing")
         XCTAssertEqual(MindMapOutline.addChild(in: "# Root\n- Existing", parentID: 1), "# Root\n- Existing\n  - New idea")

@@ -394,8 +394,8 @@ extension MindMapOutline {
         return lines.indices.contains(nodeID) && isListLine(lines[nodeID])
     }
 
-    /// Return/Enter creates a list sibling after the whole selected subtree.
-    /// On a heading it creates a child after section text and before descendants.
+    /// Return/Enter creates a sibling after the whole selected subtree.
+    /// Headings keep their level; list items keep their indentation.
     static func addSibling(in source: String, nodeID: Int, title: String = "New idea") -> String? {
         addSiblingWithOutcome(in: source, nodeID: nodeID, title: title)?.source
     }
@@ -408,14 +408,20 @@ extension MindMapOutline {
         var lines = source.components(separatedBy: "\n")
         guard lines.indices.contains(nodeID) else { return nil }
         let line = lines[nodeID]
-        guard isListLine(line) else {
-            return addChildWithOutcome(in: source, parentID: nodeID, title: title)
-        }
-
         let contentLineCount = lines.count - (source.hasSuffix("\n") ? 1 : 0)
         let insertion = subtreeEndLine(at: position, nodes: parsed, lineCount: contentLineCount)
-        let indent = line.prefix(while: { $0 == " " }).count
-        lines.insert(String(repeating: " ", count: indent) + "- " + title, at: insertion)
+
+        if isListLine(line) {
+            let indent = line.prefix(while: { $0 == " " }).count
+            lines.insert(String(repeating: " ", count: indent) + "- " + title, at: insertion)
+        } else {
+            guard let level = headingLevel(in: line) else { return nil }
+            let leading = String(line.prefix(while: \.isWhitespace))
+            lines.insert(
+                leading + String(repeating: "#", count: level) + " " + title,
+                at: insertion
+            )
+        }
         return (lines.joined(separator: "\n"), insertion)
     }
 
