@@ -518,4 +518,23 @@ extension PDFSourceAnchorControllerTests {
         }
         XCTAssertNil(PDFSourceAnchor.parse(fragment: String(repeating: "x", count: PDFSourceAnchor.maxFragmentBytes + 1)))
     }
+
+    func testSourceAnchorInitializerRejectsNegativeRectangleDimensionsBeforeStandardizing() {
+        let fingerprint = "0123456789abcdef"
+        XCTAssertNil(PDFSourceAnchor(
+            page: 1,
+            normalizedRects: [CGRect(x: 0.5, y: 0.2, width: -0.3, height: 0.04)],
+            fingerprint: fingerprint
+        ))
+        XCTAssertNil(PDFSourceAnchor(
+            page: 1,
+            normalizedRects: [CGRect(x: 0.1, y: 0.5, width: 0.3, height: -0.04)],
+            fingerprint: fingerprint
+        ))
+        XCTAssertNotNil(PDFSourceAnchor(
+            page: 1,
+            normalizedRects: [CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.04)],
+            fingerprint: fingerprint
+        ))
+    }
 }

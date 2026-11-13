@@ -63,14 +63,17 @@ struct PDFSourceAnchor: Equatable {
               cleanFingerprint.allSatisfy({ $0.isHexDigit })
         else { return nil }
 
-        let rects = normalizedRects.map(\.standardized)
-        guard rects.allSatisfy({ rect in
-            rect.minX.isFinite && rect.minY.isFinite
-                && rect.width.isFinite && rect.height.isFinite
-                && rect.width > 0 && rect.height > 0
-                && rect.minX >= 0 && rect.minY >= 0
-                && rect.maxX <= 1.000_01 && rect.maxY <= 1.000_01
+        guard normalizedRects.allSatisfy({ rect in
+            rect.origin.x.isFinite && rect.origin.y.isFinite
+                && rect.size.width.isFinite && rect.size.height.isFinite
+                && rect.size.width > 0 && rect.size.height > 0
+                && rect.origin.x >= 0 && rect.origin.y >= 0
+                && (rect.origin.x + rect.size.width).isFinite
+                && (rect.origin.y + rect.size.height).isFinite
+                && rect.origin.x + rect.size.width <= 1.000_01
+                && rect.origin.y + rect.size.height <= 1.000_01
         }) else { return nil }
+        let rects = normalizedRects
 
         self.page = page
         self.normalizedRects = rects
