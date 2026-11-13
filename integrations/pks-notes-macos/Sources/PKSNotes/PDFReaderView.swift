@@ -1000,6 +1000,7 @@ struct NativePDFPreview: View {
             .menuIndicator(.hidden)
             .disabled(controller.outline.isEmpty)
             .help(language.text("Document Outline"))
+            .accessibilityLabel(language.text("Document Outline"))
             .accessibilityIdentifier("pks-pdf-outline")
             // AppKit menus otherwise claim leftover toolbar width and
             // squeeze page/search controls at the split-pane threshold.
@@ -1024,6 +1025,7 @@ struct NativePDFPreview: View {
             .buttonStyle(.plain)
             .disabled(controller.currentPageIndex <= 0)
             .help(language.text("Previous Page"))
+            .accessibilityLabel(language.text("Previous Page"))
             .accessibilityIdentifier("pks-pdf-previous-page")
 
             TextField("", text: $pageText)
@@ -1042,6 +1044,8 @@ struct NativePDFPreview: View {
             Text("/ \(max(1, controller.pageCount))")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .accessibilityLabel(language.text("Total Pages"))
+                .accessibilityValue("\(max(1, controller.pageCount))")
                 .accessibilityIdentifier("pks-pdf-page-count")
 
             Button { controller.goNext() } label: {
@@ -1050,6 +1054,7 @@ struct NativePDFPreview: View {
             .buttonStyle(.plain)
             .disabled(controller.pageCount == 0 || controller.currentPageIndex >= controller.pageCount - 1)
             .help(language.text("Next Page"))
+            .accessibilityLabel(language.text("Next Page"))
             .accessibilityIdentifier("pks-pdf-next-page")
         }
     }
@@ -1083,6 +1088,9 @@ struct NativePDFPreview: View {
             .help(language.text(copiedPage == controller.referencePageForCurrentSelection() - 1
                                 ? "PDF page link copied"
                                 : "Copy PDF page link"))
+            .accessibilityLabel(language.text(copiedPage == controller.referencePageForCurrentSelection() - 1
+                                ? "PDF page link copied"
+                                : "Copy PDF page link"))
             .accessibilityIdentifier("pks-pdf-copy-page-link")
         }
     }
@@ -1091,6 +1099,7 @@ struct NativePDFPreview: View {
             HStack(spacing: 5) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 TextField(language.text("Find in PDF"), text: $searchText)
                     .focused($pdfSearchFocused)
                     .textFieldStyle(.plain)
@@ -1099,6 +1108,7 @@ struct NativePDFPreview: View {
                     .onChange(of: searchText) { _, value in
                         controller.invalidateSearchIfQueryChanged(value)
                     }
+                    .accessibilityLabel(language.text("Find in PDF"))
                     .accessibilityIdentifier("pks-pdf-search-field")
                 Button {
                     controller.search(searchText)
@@ -1108,6 +1118,7 @@ struct NativePDFPreview: View {
                 .buttonStyle(.plain)
                 .disabled(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .help(language.text("Search PDF"))
+                .accessibilityLabel(language.text("Search PDF"))
                 .accessibilityIdentifier("pks-pdf-search-submit")
                 if controller.isSearching {
                     ProgressView().controlSize(.small)
@@ -1115,6 +1126,8 @@ struct NativePDFPreview: View {
                     Text("\(controller.searchMatchIndex + 1)/\(controller.searchMatchCount)")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .accessibilityLabel(language.text("Search Result Position"))
+                        .accessibilityValue("\(controller.searchMatchIndex + 1) / \(controller.searchMatchCount)")
                         .accessibilityIdentifier("pks-pdf-search-count")
                 } else if !controller.completedSearchQuery.isEmpty,
                           controller.completedSearchQuery ==
@@ -1129,12 +1142,14 @@ struct NativePDFPreview: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(controller.searchMatchCount == 0)
+                .accessibilityLabel(language.text("Previous Search Match"))
                 .accessibilityIdentifier("pks-pdf-search-previous")
                 Button { controller.nextSearchMatch() } label: {
                     Image(systemName: "chevron.down")
                 }
                 .buttonStyle(.plain)
                 .disabled(controller.searchMatchCount == 0)
+                .accessibilityLabel(language.text("Next Search Match"))
                 .accessibilityIdentifier("pks-pdf-search-next")
             }
             .padding(.horizontal, 8)
@@ -1149,6 +1164,7 @@ struct NativePDFPreview: View {
             }
             .buttonStyle(.plain)
             .help(language.text("Zoom Out"))
+            .accessibilityLabel(language.text("Zoom Out"))
             .accessibilityIdentifier("pks-pdf-zoom-out")
 
             Button { controller.actualSize() } label: {
@@ -1158,6 +1174,7 @@ struct NativePDFPreview: View {
             }
             .buttonStyle(.plain)
             .help(language.text("Actual Size"))
+            .accessibilityLabel(language.text("Actual Size"))
             .accessibilityIdentifier("pks-pdf-actual-size")
             .accessibilityValue("\(controller.scalePercent)")
 
@@ -1166,6 +1183,7 @@ struct NativePDFPreview: View {
             }
             .buttonStyle(.plain)
             .help(language.text("Zoom In"))
+            .accessibilityLabel(language.text("Zoom In"))
             .accessibilityIdentifier("pks-pdf-zoom-in")
 
             Button { controller.fitWidth() } label: {
@@ -1173,6 +1191,7 @@ struct NativePDFPreview: View {
             }
             .buttonStyle(.plain)
             .help(language.text("Fit Width"))
+            .accessibilityLabel(language.text("Fit Width"))
             .accessibilityIdentifier("pks-pdf-fit-width")
         }
     }
