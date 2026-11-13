@@ -77,8 +77,12 @@ enum WorkspaceSearch {
                     }
                 }
             }
+            var contentTransliterationMatch: Range<String.Index>?
             let contentMatch = content.map { body in
-                terms.allSatisfy { contains(path, $0) || contains(body, $0) }
+                let literalMatch = terms.allSatisfy { contains(path, $0) || contains(body, $0) }
+                guard !literalMatch else { return true }
+                contentTransliterationMatch = transliteratedMatchRange(in: body, query: query)
+                return contentTransliterationMatch != nil
             } ?? false
             guard nameMatch || contentMatch else { continue }
             let rawNameTerms = terms.allSatisfy { contains(item.name, $0) }
@@ -101,7 +105,12 @@ enum WorkspaceSearch {
             let hit = SearchHit(
                 documentId: "workspace:" + item.url.path, chunkId: nil,
                 title: item.name, uri: item.url.path, sourceType: "local",
-                snippet: content.map { excerpt($0, terms: terms) }, score: nil, headingPath: nil
+                snippet: content.map { body in
+                    if let contentTransliterationMatch {
+                        return excerpt(body, matching: contentTransliterationMatch)
+                    }
+                    return excerpt(body, terms: terms)
+                }, score: nil, headingPath: nil
             )
             ranked.append((hit, rank, order))
         }
@@ -127,6 +136,54 @@ enum WorkspaceSearch {
     private struct TransliterationKey {
         let value: String
         let tokenStarts: Set<Int>
+    }
+
+    private static func transliterationToken(_ token: String) -> String? {
+        let latin = token.applyingTransform(.toLatin, reverse: false) ?? token
+        let folded = latin.folding(
+            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+            locale: .current
+        )
+        let normalized = String(folded.unicodeScalars.filter {
+            CharacterSet.alphanumerics.contains($0)
+        })
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    /// Returns the source range for a word-start pinyin match in the original text.
+    private static func transliteratedMatchRange(
+        in text: String,
+        query: String
+    ) -> Range<String.Index>? {
+        let needle = transliterationKey(query).value
+        guard needle.count >= 4 else { return nil }
+
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = text
+        var key = ""
+        var tokenStarts: [Int] = []
+        var tokenEnds: [Int] = []
+        var tokenRanges: [Range<String.Index>] = []
+
+        for range in tokenizer.tokens(for: text.startIndex..<text.endIndex) {
+            let token = String(text[range])
+            guard let normalized = transliterationToken(token) else { continue }
+            tokenStarts.append(key.count)
+            key.append(normalized)
+            tokenEnds.append(key.count)
+            tokenRanges.append(range)
+        }
+
+        for index in tokenStarts.indices {
+            let start = key.index(key.startIndex, offsetBy: tokenStarts[index])
+            guard key[start...].hasPrefix(needle) else { continue }
+            let targetEnd = tokenStarts[index] + needle.count
+            guard let endIndex = tokenEnds.firstIndex(where: { $0 >= targetEnd }) else {
+                return nil
+            }
+            return tokenRanges[index].lowerBound..<tokenRanges[endIndex].upperBound
+        }
+        return nil
     }
 
     /// Match transliteration only at word starts. This prevents a query such as
@@ -188,15 +245,7 @@ enum WorkspaceSearch {
         var tokenStarts = Set<Int>()
         for range in tokenizer.tokens(for: value.startIndex..<value.endIndex) {
             let token = String(value[range])
-            let latin = token.applyingTransform(.toLatin, reverse: false) ?? token
-            let folded = latin.folding(
-                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
-                locale: .current
-            )
-            let normalized = String(folded.unicodeScalars.filter {
-                CharacterSet.alphanumerics.contains($0)
-            })
-            guard !normalized.isEmpty else { continue }
+            guard let normalized = transliterationToken(token) else { continue }
             tokenStarts.insert(key.count)
             key.append(normalized)
         }
@@ -205,6 +254,18 @@ enum WorkspaceSearch {
 
     private static func contains(_ text: String, _ query: String) -> Bool {
         text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+
+    private static func excerpt(
+        _ text: String,
+        matching range: Range<String.Index>
+    ) -> String {
+        let start = text.index(range.lowerBound, offsetBy: -60, limitedBy: text.startIndex)
+            ?? text.startIndex
+        let end = text.index(range.upperBound, offsetBy: 180, limitedBy: text.endIndex)
+            ?? text.endIndex
+        return (start > text.startIndex ? "…" : "") + String(text[start..<end])
+            + (end < text.endIndex ? "…" : "")
     }
 
     private static func excerpt(_ text: String, terms: [String]) -> String {

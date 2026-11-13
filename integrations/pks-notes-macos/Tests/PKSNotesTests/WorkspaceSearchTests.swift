@@ -79,6 +79,36 @@ final class WorkspaceSearchTests: XCTestCase {
         XCTAssertNil(result.hits[0].snippet)
     }
 
+    func testPinyinBodySearchMatchesWordStartsAndShowsTheChineseExcerpt() throws {
+        let root = try fixture()
+        let piano = root.appendingPathComponent("Study.md")
+        let world = root.appendingPathComponent("World.md")
+        let middleMatch = root.appendingPathComponent("History.md")
+        let prefix = String(repeating: "前言内容。", count: 80)
+        try (prefix + "今天练习夜的钢琴曲五。").write(
+            to: piano, atomically: true, encoding: .utf8
+        )
+        try (prefix + "今天阅读世界地图。").write(
+            to: world, atomically: true, encoding: .utf8
+        )
+        try (prefix + "今天研究历史结构。").write(
+            to: middleMatch, atomically: true, encoding: .utf8
+        )
+
+        let pianoResult = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "ye de gang qin qu"
+        )
+        XCTAssertEqual(pianoResult.hits.map(\.uri), [piano.path])
+        XCTAssertTrue(pianoResult.hits[0].snippet?.contains("夜的钢琴曲五") == true)
+
+        let wordStartResult = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "shi jie"
+        )
+        XCTAssertEqual(wordStartResult.hits.map(\.uri), [world.path])
+        XCTAssertTrue(wordStartResult.hits[0].snippet?.contains("世界地图") == true)
+        XCTAssertFalse(wordStartResult.hits.contains { $0.uri == middleMatch.path })
+    }
+
     func testFilenameSearchAllowsOneTypoButDoesNotBroadenShortOrTwoEditTerms() throws {
         let root = try fixture()
         let file = root.appendingPathComponent("night-piano.md")
