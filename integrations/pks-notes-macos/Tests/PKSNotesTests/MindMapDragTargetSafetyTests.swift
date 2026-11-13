@@ -177,6 +177,45 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         XCTAssertEqual(rebaseCollapsed(collapsed, from: source, to: move.source), Set(newDuplicates.map(\.id)))
     }
 
+    func testCollapsedDuplicateNodeFollowsItsBodyWhenReparentedAcrossParents() throws {
+        let source = """
+        # Plan
+        - Parent
+          - Duplicate
+            Evidence alpha.
+            - Child
+          - Group
+            - Duplicate
+              Evidence beta.
+              - Child
+        """
+        let oldNodes = MindMapOutline.nodes(in: source)
+        let oldDuplicates = oldNodes.filter { $0.title == "Duplicate" }
+        let oldChildren = oldNodes.filter { $0.title == "Child" }
+        XCTAssertEqual(oldDuplicates.count, 2)
+        XCTAssertEqual(oldChildren.count, 2)
+
+        let move = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+            in: source, nodeID: oldDuplicates[1].id,
+            relativeTo: oldDuplicates[0].id, placement: .after
+        ))
+        let newNodes = MindMapOutline.nodes(in: move.source)
+        let newDuplicates = newNodes.filter { $0.title == "Duplicate" }
+        let newChildren = newNodes.filter { $0.title == "Child" }
+        XCTAssertEqual(newDuplicates.count, 2)
+        XCTAssertEqual(newChildren.count, 2)
+
+        let lineIndexMap = MindMapOutline.lineIndexMap(from: oldNodes, to: newNodes)
+        XCTAssertEqual(lineIndexMap[oldDuplicates[0].id], newDuplicates[0].id)
+        XCTAssertEqual(lineIndexMap[oldDuplicates[1].id], newDuplicates[1].id)
+        XCTAssertEqual(lineIndexMap[oldChildren[0].id], newChildren[0].id)
+        XCTAssertEqual(lineIndexMap[oldChildren[1].id], newChildren[1].id)
+        XCTAssertEqual(
+            rebaseCollapsed([oldDuplicates[1].id], from: source, to: move.source),
+            [newDuplicates[1].id]
+        )
+    }
+
     func testCollapsedDuplicateSiblingBranchesFollowTheirSubtreesAfterReorder() throws {
         let source = """
         # Plan

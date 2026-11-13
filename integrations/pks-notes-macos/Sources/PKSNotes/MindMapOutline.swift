@@ -498,6 +498,10 @@ extension MindMapOutline {
             let parentID: Int?
             let title: String
         }
+        struct TitleFingerprintKey: Hashable {
+            let title: String
+            let fingerprint: Int
+        }
         func parentIDs(for nodes: [MindMapNode]) -> [Int: Int] {
             var parents: [Int: Int] = [:]
             var ancestors: [MindMapNode] = []
@@ -573,6 +577,50 @@ extension MindMapOutline {
             let newID = oldMatches.count == 1 && newMatches.count == 1
                 ? newMatches[0].id
                 : newSiblings[occurrence].id
+            guard !mappedNewIDs.contains(newID) else { continue }
+            result[oldNode.id] = newID
+            mappedNewIDs.insert(newID)
+        }
+
+        // A node can be moved independently of its former parent. If its
+        // complete Markdown-derived subtree is unique for that title across
+        // both projections, retain its transient identity across the reparent.
+        // Identical duplicate subtrees remain deliberately unresolved.
+        let oldFingerprintGroups = Dictionary(grouping: oldNodes) {
+            TitleFingerprintKey(title: $0.title, fingerprint: oldFingerprints[$0.id] ?? 0)
+        }
+        let newFingerprintGroups = Dictionary(grouping: newNodes) {
+            TitleFingerprintKey(title: $0.title, fingerprint: newFingerprints[$0.id] ?? 0)
+        }
+        for oldNode in oldNodes where ambiguousTitles.contains(oldNode.title) && result[oldNode.id] == nil {
+            guard let fingerprint = oldFingerprints[oldNode.id] else { continue }
+            let key = TitleFingerprintKey(title: oldNode.title, fingerprint: fingerprint)
+            let oldMatches = oldFingerprintGroups[key] ?? []
+            let newMatches = newFingerprintGroups[key] ?? []
+            guard oldMatches.count == 1, newMatches.count == 1,
+                  let newNode = newMatches.first,
+                  !mappedNewIDs.contains(newNode.id) else { continue }
+            result[oldNode.id] = newNode.id
+            mappedNewIDs.insert(newNode.id)
+        }
+
+        // A unique moved parent may have become resolvable only in the pass
+        // above. Revisit its descendants within their now-mapped parent group.
+        for oldNode in oldNodes where ambiguousTitles.contains(oldNode.title) && result[oldNode.id] == nil {
+            let oldParentID = oldParents[oldNode.id]
+            let newParentID = oldParentID.flatMap { result[$0] }
+            if oldParentID != nil && newParentID == nil { continue }
+            let key = ParentTitleKey(parentID: oldParentID, title: oldNode.title)
+            let oldSiblings = oldGroups[key] ?? []
+            let newSiblings = newGroups[ParentTitleKey(parentID: newParentID, title: oldNode.title)] ?? []
+            guard oldSiblings.count == newSiblings.count,
+                  let occurrence = oldSiblings.firstIndex(where: { $0.id == oldNode.id }),
+                  newSiblings.indices.contains(occurrence) else { continue }
+            let fingerprint = oldFingerprints[oldNode.id]
+            let oldMatches = oldSiblings.filter { oldFingerprints[$0.id] == fingerprint }
+            let newMatches = newSiblings.filter { newFingerprints[$0.id] == fingerprint }
+            let newID = oldMatches.count == 1 && newMatches.count == 1
+                ? newMatches[0].id : newSiblings[occurrence].id
             guard !mappedNewIDs.contains(newID) else { continue }
             result[oldNode.id] = newID
             mappedNewIDs.insert(newID)
