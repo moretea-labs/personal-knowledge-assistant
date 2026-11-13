@@ -84,6 +84,34 @@ final class PDFSearchFlowTests: XCTestCase {
     }
 
 
+    func testEditingSubmittedQueryClearsStaleMatchesUntilNewSearchIsSubmitted() async throws {
+        let document = try makeDocument(text: "Alpha source evidence. Beta source evidence.")
+        let view = PDFView(frame: NSRect(x: 0, y: 0, width: 700, height: 800))
+        let controller = PDFReaderController()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pks-search-edit-\(UUID().uuidString).pdf")
+        controller.attach(view: view, document: document, url: url,
+                          requestedPage: nil, requestedAnchor: nil)
+
+        controller.search("alpha")
+        try await finishSearch(controller)
+        XCTAssertGreaterThan(controller.searchMatchCount, 0)
+        XCTAssertNotNil(view.currentSelection)
+
+        controller.invalidateSearchIfQueryChanged("beta")
+        XCTAssertFalse(controller.isSearching)
+        XCTAssertEqual(controller.completedSearchQuery, "")
+        XCTAssertEqual(controller.searchMatchCount, 0)
+        XCTAssertNil(view.currentSelection,
+                     "Editing the query must not leave a highlight for the previous search.")
+
+        controller.search("beta")
+        try await finishSearch(controller)
+        XCTAssertEqual(controller.completedSearchQuery, "beta")
+        XCTAssertGreaterThan(controller.searchMatchCount, 0)
+        controller.detach(view: view)
+    }
+
     func testCrossPageSearchUpdatesCanonicalPageIndex() async throws {
         let document = try makeDocument(pages: [
             "Opening evidence.",

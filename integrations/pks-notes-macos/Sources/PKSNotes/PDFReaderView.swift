@@ -620,6 +620,14 @@ final class PDFReaderController: ObservableObject {
         syncFromView()
     }
 
+    func invalidateSearchIfQueryChanged(_ query: String) {
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized != completedSearchQuery,
+              isSearching || !completedSearchQuery.isEmpty || searchMatchCount > 0
+        else { return }
+        cancelSearch()
+    }
+
     func search(_ query: String) {
         guard let document else { return }
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1060,7 +1068,7 @@ struct NativePDFPreview: View {
                     .frame(minWidth: 120, idealWidth: 180, maxWidth: 220)
                     .onSubmit { controller.search(searchText) }
                     .onChange(of: searchText) { _, value in
-                        if value.isEmpty { controller.search("") }
+                        controller.invalidateSearchIfQueryChanged(value)
                     }
                     .accessibilityIdentifier("pks-pdf-search-field")
                 Button {
