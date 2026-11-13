@@ -525,13 +525,19 @@ final class PDFReaderController: ObservableObject {
         return pageIndex.map { $0 + 1 }
     }
 
+    /// A selected passage is the source of truth for its reference page.
+    /// PDFView.currentPage can lag in continuous mode near page boundaries.
+    func referencePageForCurrentSelection() -> Int {
+        selectedSourcePage() ?? currentPageIndex + 1
+    }
+
     /// The dragged payload is the same portable Markdown citation as Add to Note.
     /// NSTextView can insert this plain text at its native drop position, preserving
     /// the existing draft binding, undo stack and autosave writer.
     func selectedCitationForDrag(pdf: URL, root: URL) -> String? {
         guard let text = selectedText() else { return nil }
         let anchor = selectedSourceAnchor()
-        let page = anchor?.page ?? selectedSourcePage() ?? currentPageIndex + 1
+        let page = anchor?.page ?? referencePageForCurrentSelection()
         guard let snippet = PDFPageReference.noteSnippet(
             for: pdf, page: page, root: root, selectedText: text, anchor: anchor
         ) else { return nil }
@@ -901,8 +907,7 @@ struct NativePDFPreview: View {
                         onQuoteToCurrentNote: onQuoteToCurrentNote.map { quote in
                             {
                                 let anchor = controller.selectedSourceAnchor()
-                                quote(anchor?.page ?? controller.selectedSourcePage()
-                                      ?? controller.currentPageIndex + 1,
+                                quote(anchor?.page ?? controller.referencePageForCurrentSelection(),
                                       controller.selectedText(), anchor)
                             }
                         }
@@ -1055,7 +1060,7 @@ struct NativePDFPreview: View {
                 let selectedText = controller.selectedText()
                 let anchor = controller.selectedSourceAnchor()
                 onAddPageToNote(
-                    anchor?.page ?? controller.selectedSourcePage() ?? controller.currentPageIndex + 1,
+                    anchor?.page ?? controller.referencePageForCurrentSelection(),
                     selectedText,
                     anchor
                 )
@@ -1071,11 +1076,11 @@ struct NativePDFPreview: View {
             Button {
                 copyCurrentPageReference()
             } label: {
-                Image(systemName: copiedPage == controller.currentPageIndex ? "checkmark" : "link.badge.plus")
+                Image(systemName: copiedPage == controller.referencePageForCurrentSelection() - 1 ? "checkmark" : "link.badge.plus")
             }
             .buttonStyle(.plain)
             .disabled(root == nil || controller.pageCount == 0)
-            .help(language.text(copiedPage == controller.currentPageIndex
+            .help(language.text(copiedPage == controller.referencePageForCurrentSelection() - 1
                                 ? "PDF page link copied"
                                 : "Copy PDF page link"))
             .accessibilityIdentifier("pks-pdf-copy-page-link")
@@ -1174,7 +1179,7 @@ struct NativePDFPreview: View {
 
     private func copyCurrentPageReference() {
         let anchor = controller.selectedSourceAnchor()
-        let page = anchor?.page ?? controller.currentPageIndex + 1
+        let page = anchor?.page ?? controller.referencePageForCurrentSelection()
         guard let root,
               let markdown = PDFPageReference.markdown(
                 for: url,
@@ -1184,7 +1189,7 @@ struct NativePDFPreview: View {
               ) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(markdown, forType: .string)
-        copiedPage = controller.currentPageIndex
+        copiedPage = page - 1
     }
 
     private var unavailableView: some View {

@@ -5,6 +5,43 @@ import XCTest
 
 final class PDFSourceAnchorControllerTests: XCTestCase {
     @MainActor
+    func testReferencePagePrefersSelectedSourcePageOverVisiblePage() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let firstText = NSTextView(frame: bounds)
+        firstText.string = "First visible page"
+        let secondText = NSTextView(frame: bounds)
+        secondText.string = "Second page selected evidence"
+        let first = try XCTUnwrap(PDFDocument(data: firstText.dataWithPDF(inside: bounds)))
+        let second = try XCTUnwrap(PDFDocument(data: secondText.dataWithPDF(inside: bounds)))
+        let document = PDFDocument()
+        document.insert(try XCTUnwrap(first.page(at: 0)), at: 0)
+        document.insert(try XCTUnwrap(second.page(at: 0)), at: 1)
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Reference-Page-\(UUID().uuidString).pdf")
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        defer {
+            controller.detach(view: view)
+            try? FileManager.default.removeItem(at: url)
+        }
+        XCTAssertTrue(document.write(to: url))
+        let reopened = try XCTUnwrap(PDFDocument(url: url))
+        controller.attach(view: view, document: reopened, url: url,
+                          requestedPage: 1, requestedAnchor: nil)
+        XCTAssertEqual(controller.currentPageIndex, 0)
+
+        view.currentSelection = try XCTUnwrap(
+            reopened.findString("Second page selected evidence", withOptions: []).first
+        )
+
+        XCTAssertEqual(controller.selectedSourcePage(), 2)
+        XCTAssertEqual(controller.referencePageForCurrentSelection(), 2)
+        XCTAssertEqual(controller.currentPageIndex, 0,
+                       "The reference must follow the selected source even if the visible page lags.")
+    }
+
+    @MainActor
     func testPDFKitSelectionAnchorCapturesAndRestoresTheExactSelection() throws {
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
         textView.string = """
