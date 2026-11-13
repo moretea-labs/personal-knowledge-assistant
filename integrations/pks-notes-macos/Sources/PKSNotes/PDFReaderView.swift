@@ -1203,6 +1203,23 @@ final class StudyPDFView: PDFView {
     }
 }
 
+/// Hit-test individual text-line bounds instead of the union rectangle for a
+/// multi-line selection. The union includes whitespace that should remain usable
+/// for native PDFView scrolling rather than starting a citation drag.
+enum PDFSelectionHitTesting {
+    private static let hitSlop: CGFloat = 3
+
+    static func contains(_ point: CGPoint, in selection: PDFSelection, on page: PDFPage) -> Bool {
+        let lineSelections = selection.selectionsByLine()
+        let candidates = lineSelections.isEmpty ? [selection] : lineSelections
+        return candidates.contains { line in
+            let bounds = line.bounds(for: page).standardized
+            guard !bounds.isNull, bounds.width > 0, bounds.height > 0 else { return false }
+            return bounds.insetBy(dx: -hitSlop, dy: -hitSlop).contains(point)
+        }
+    }
+}
+
 private struct PDFCanvas: NSViewRepresentable {
     let document: PDFDocument
     let url: URL
@@ -1234,8 +1251,11 @@ private struct PDFCanvas: NSViewRepresentable {
             let origin = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
             guard let page = view.page(for: origin, nearest: false),
                   selection.pages.contains(where: { $0 === page }) else { return false }
-            return selection.bounds(for: page).insetBy(dx: -3, dy: -3)
-                .contains(view.convert(origin, to: page))
+            return PDFSelectionHitTesting.contains(
+                view.convert(origin, to: page),
+                in: selection,
+                on: page
+            )
         }
 
         @objc func dragSelectedText(_ recognizer: NSPanGestureRecognizer) {

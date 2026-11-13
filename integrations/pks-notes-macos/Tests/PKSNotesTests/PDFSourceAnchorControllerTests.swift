@@ -297,6 +297,49 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         XCTAssertTrue(snippet.contains("> Second page evidence"))
     }
 
+    @MainActor
+    func testPDFSelectionHitTestingUsesIndividualLineBounds() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let textView = NSTextView(frame: bounds)
+        textView.string = "Top selection\n\n\n\nBottom selection"
+        let document = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: bounds)))
+        let page = try XCTUnwrap(document.page(at: 0))
+        let selection = try XCTUnwrap(document.findString("Top selection", withOptions: []).first)
+        selection.add(try XCTUnwrap(document.findString("Bottom selection", withOptions: []).first))
+
+        let lineBounds = selection.selectionsByLine().map { $0.bounds(for: page).standardized }
+            .filter { !$0.isNull && $0.width > 0 && $0.height > 0 }
+            .sorted { $0.midY < $1.midY }
+        XCTAssertGreaterThanOrEqual(lineBounds.count, 2)
+
+        let first = lineBounds[0]
+        let second = lineBounds[1]
+        XCTAssertLessThanOrEqual(first.maxY, second.minY, "The fixture must leave whitespace between the selected lines.")
+        let overlapMinX = max(first.minX, second.minX)
+        let overlapMaxX = min(first.maxX, second.maxX)
+        XCTAssertLessThan(overlapMinX, overlapMaxX)
+        let gapPoint = CGPoint(
+            x: (overlapMinX + overlapMaxX) / 2,
+            y: (first.maxY + second.minY) / 2
+        )
+
+        XCTAssertTrue(
+            selection.bounds(for: page).insetBy(dx: -3, dy: -3).contains(gapPoint),
+            "The old union-rectangle hit test incorrectly includes the blank gap."
+        )
+        XCTAssertFalse(PDFSelectionHitTesting.contains(gapPoint, in: selection, on: page))
+
+        for line in lineBounds {
+            XCTAssertTrue(
+                PDFSelectionHitTesting.contains(
+                    CGPoint(x: line.midX, y: line.midY),
+                    in: selection,
+                    on: page
+                )
+            )
+        }
+    }
+
     private func removeStoredReadingPosition(for url: URL) {
         var positions = UserDefaults.standard.dictionary(
             forKey: PDFReadingPositionStore.defaultsKey
