@@ -644,7 +644,9 @@ struct MindMapCanvas: View {
             }
         }
         .onChange(of: collapsed) { _, _ in
-            rebuildVisibleLayout()
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                rebuildVisibleLayout()
+            }
         }
         .onChange(of: mapStyleID) { _, _ in
             rebuildVisibleLayout()
@@ -1332,6 +1334,11 @@ struct MindMapCanvas: View {
                 .frame(width: placement.size.width, height: placement.size.height)
                 .position(placement.center)
                 .id(placement.id)
+                .transition(
+                    reduceMotion || exporting
+                        ? .identity
+                        : .opacity.combined(with: .scale(scale: 0.985, anchor: .leading))
+                )
         }
     }
 
