@@ -41,7 +41,8 @@ final class MarkdownEditingTests: XCTestCase {
             "  value  ",
             "   ",
             "\nvalue\n",
-            "😀 `single` and ``double``"
+            "😀 `single` and ``double``",
+            "`literal boundary`"
         ]
 
         for selected in selectedCases {
@@ -71,7 +72,7 @@ final class MarkdownEditingTests: XCTestCase {
         )
     }
 
-    func testInlineCodeUsesDelimiterLongerThanBacktickRunsInUnicodeSelection() {
+    func testInlineCodeUsesDelimiterLongerThanBacktickRunsInUnicodeSelection() throws {
         let selected = "😀 `single` and ``double``"
         let source = "before \(selected) after"
         let selection = (source as NSString).range(of: selected)
@@ -79,12 +80,14 @@ final class MarkdownEditingTests: XCTestCase {
 
         let result = MarkdownEditing.apply(.inlineCode, to: source, selection: selection)
 
-        XCTAssertEqual(result.text, "before \(delimiter)\(selected)\(delimiter) after")
+        XCTAssertEqual(result.text, "before \(delimiter) \(selected) \(delimiter) after")
         XCTAssertEqual(
             result.selection,
-            NSRange(location: selection.location + 3, length: selection.length)
+            NSRange(location: selection.location + 4, length: selection.length)
         )
         XCTAssertEqual((result.text as NSString).substring(with: result.selection), selected)
+        let rendered = try AttributedString(markdown: result.text)
+        XCTAssertEqual(String(rendered.characters), "before \(selected) after")
     }
 
     func testInlineCodeKeepsCaretInsideEmptyCodeSpan() {
@@ -92,6 +95,10 @@ final class MarkdownEditingTests: XCTestCase {
 
         XCTAssertEqual(result.text, "``")
         XCTAssertEqual(result.selection, NSRange(location: 1, length: 0))
+
+        let removed = MarkdownEditing.apply(.inlineCode, to: result.text, selection: result.selection)
+        XCTAssertEqual(removed.text, "")
+        XCTAssertEqual(removed.selection, NSRange(location: 0, length: 0))
     }
 
     func testInlineCodePreservesBoundarySpacesAndDoesNotPadWhitespaceOnlySelection() {

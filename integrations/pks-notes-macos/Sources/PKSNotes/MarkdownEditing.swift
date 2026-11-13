@@ -261,7 +261,7 @@ enum MarkdownEditing {
     private static func toggleInlineCode(_ text: String, range: NSRange) -> MarkdownEditResult {
         let ns = text as NSString
         let selected = ns.substring(with: range)
-        if !selected.isEmpty, let unwrapped = unwrapInlineCode(ns, range: range, selected: selected) {
+        if let unwrapped = unwrapInlineCode(ns, range: range, selected: selected) {
             return unwrapped
         }
         return wrapInlineCode(text, range: range)
@@ -319,8 +319,10 @@ enum MarkdownEditing {
             .replacingOccurrences(of: "\r\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
-        let padding = normalized.hasPrefix(" ") && normalized.hasSuffix(" ")
-            && normalized.contains(where: { $0 != " " }) ? " " : ""
+        let preservesBoundarySpaces = normalized.hasPrefix(" ") && normalized.hasSuffix(" ")
+            && normalized.contains(where: { $0 != " " })
+        let separatesBoundaryBackticks = selected.hasPrefix("`") || selected.hasSuffix("`")
+        let padding = preservesBoundarySpaces || separatesBoundaryBackticks ? " " : ""
         let replacement = delimiter + padding + selected + padding + delimiter
         let updated = ns.replacingCharacters(in: range, with: replacement)
         let selectionLocation = range.location + ((delimiter + padding) as NSString).length
