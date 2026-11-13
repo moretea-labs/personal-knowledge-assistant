@@ -105,4 +105,33 @@ final class MarkdownEditingTests: XCTestCase {
         XCTAssertEqual(result.selection, NSRange(location: 0, length: 6))
     }
 
+    func testHeadingCommandReplacesExistingLevelsAndPreservesBlankLines() {
+        let source = "# Title\n  \n### Child\nplain\n###\n    code\n"
+        let result = MarkdownEditing.apply(
+            .heading(2), to: source, selection: NSRange(location: 0, length: (source as NSString).length)
+        )
+        XCTAssertEqual(result.text, "## Title\n  \n## Child\n## plain\n## \n##     code\n")
+    }
+
+    func testQuoteCommandTogglesOffOneLevelIncludingNestedQuotes() {
+        let source = "> first\n  > > nested\n"
+        let result = MarkdownEditing.apply(
+            .quote, to: source, selection: NSRange(location: 0, length: (source as NSString).length)
+        )
+        XCTAssertEqual(result.text, "first\n  > nested\n")
+    }
+
+    func testQuoteCommandAddsOnlyMissingMarkersAndPreservesBlankSeparators() {
+        let source = "> existing\nplain\n    code\n  \nlast\n"
+        let result = MarkdownEditing.apply(
+            .quote, to: source, selection: NSRange(location: 0, length: (source as NSString).length)
+        )
+        XCTAssertEqual(result.text, "> existing\n> plain\n>     code\n  \n> last\n")
+    }
+
+    func testQuoteCommandCreatesAnEmptyBlockQuoteInAnEmptyDocument() {
+        let result = MarkdownEditing.apply(.quote, to: "", selection: NSRange(location: 0, length: 0))
+        XCTAssertEqual(result.text, "> ")
+    }
+
 }

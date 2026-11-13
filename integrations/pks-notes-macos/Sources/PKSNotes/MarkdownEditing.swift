@@ -66,13 +66,13 @@ enum MarkdownEditing {
             let urlLocation = range.location + (selected.isEmpty ? 8 : label.utf16.count + 3)
             return .init(text: updated, selection: NSRange(location: urlLocation, length: 3))
         case .heading(let level):
-            return prefixLines(text, range: range, prefix: String(repeating: "#", count: min(6, max(1, level))) + " ")
+            return setHeadingLevel(text, range: range, level: level)
         case .bullet:
             return toggleListLines(text, range: range, asTask: false)
         case .task:
             return toggleListLines(text, range: range, asTask: true)
         case .quote:
-            return prefixLines(text, range: range, prefix: "> ")
+            return toggleQuoteLines(text, range: range)
         case .table:
             let table = "| Column 1 | Column 2 |\n| --- | --- |\n| Cell | Cell |"
             let before = ns.substring(to: range.location)
@@ -261,15 +261,90 @@ enum MarkdownEditing {
         )
     }
 
-    private static func prefixLines(_ text: String, range: NSRange, prefix: String) -> MarkdownEditResult {
+    private static func setHeadingLevel(
+        _ text: String,
+        range: NSRange,
+        level: Int
+    ) -> MarkdownEditResult {
         let ns = text as NSString
         let lineRange = ns.lineRange(for: range)
         let original = ns.substring(with: lineRange)
         let hasTrailingNewline = original.hasSuffix("\n")
-        var lines = original.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        if hasTrailingNewline && lines.last == "" { lines.removeLast() }
-        let replacement = lines.map { prefix + $0 }.joined(separator: "\n") + (hasTrailingNewline ? "\n" : "")
+        var lines = original.components(separatedBy: "\n")
+        if hasTrailingNewline { lines.removeLast() }
+        let prefix = String(repeating: "#", count: min(6, max(1, level))) + " "
+
+        let formatted = lines.map { line -> String in
+            if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && lines.count > 1 {
+                return line
+            }
+            let indentation = String(line.prefix { $0 == " " })
+            guard indentation.count <= 3 else { return prefix + line }
+            let content = String(line.dropFirst(indentation.count))
+            let hashes = content.prefix { $0 == "#" }.count
+            guard (1...6).contains(hashes) else { return prefix + line }
+            let remainder = content.dropFirst(hashes)
+            if remainder.isEmpty {
+                return indentation + prefix
+            }
+            guard remainder.first == " " || remainder.first == "\t" else {
+                return prefix + line
+            }
+            let headingContent = remainder.drop(while: { $0 == " " || $0 == "\t" })
+            return indentation + prefix + headingContent
+        }
+
+        let replacement = formatted.joined(separator: "\n") + (hasTrailingNewline ? "\n" : "")
         let updated = ns.replacingCharacters(in: lineRange, with: replacement)
-        return .init(text: updated, selection: NSRange(location: lineRange.location, length: (replacement as NSString).length))
+        return .init(
+            text: updated,
+            selection: NSRange(location: lineRange.location, length: (replacement as NSString).length)
+        )
+    }
+
+    private static func toggleQuoteLines(_ text: String, range: NSRange) -> MarkdownEditResult {
+        let ns = text as NSString
+        let lineRange = ns.lineRange(for: range)
+        let original = ns.substring(with: lineRange)
+        let hasTrailingNewline = original.hasSuffix("\n")
+        var lines = original.components(separatedBy: "\n")
+        if hasTrailingNewline { lines.removeLast() }
+
+        let contentLines = lines.filter {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let removesQuote = !contentLines.isEmpty && contentLines.allSatisfy {
+            quoteLineContent($0) != nil
+        }
+
+        let formatted = lines.map { line -> String in
+            if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && lines.count > 1 {
+                return line
+            }
+            if let content = quoteLineContent(line) {
+                let indentation = String(line.prefix { $0 == " " })
+                return removesQuote ? indentation + content : line
+            }
+            return "> " + line
+        }
+
+        let replacement = formatted.joined(separator: "\n") + (hasTrailingNewline ? "\n" : "")
+        let updated = ns.replacingCharacters(in: lineRange, with: replacement)
+        return .init(
+            text: updated,
+            selection: NSRange(location: lineRange.location, length: (replacement as NSString).length)
+        )
+    }
+
+    private static func quoteLineContent(_ line: String) -> String? {
+        let indentation = line.prefix { $0 == " " }.count
+        guard indentation <= 3 else { return nil }
+        let content = line.dropFirst(indentation)
+        guard content.first == ">" else { return nil }
+        let remainder = content.dropFirst()
+        if remainder.first == " " || remainder.first == "\t" {
+            return String(remainder.dropFirst())
+        }
+        return String(remainder)
     }
 }
