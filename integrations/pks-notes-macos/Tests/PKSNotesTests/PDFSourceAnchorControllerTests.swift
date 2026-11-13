@@ -104,6 +104,41 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testPartialTextSelectionAnchorRestoresOnlyTheSelectedText() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let textView = NSTextView(frame: bounds)
+        textView.string = "Important fact from the reading"
+        let generated = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: bounds)))
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Partial-Anchor-\(UUID().uuidString).pdf")
+        XCTAssertTrue(generated.write(to: url))
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let document = try XCTUnwrap(PDFDocument(url: url))
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        controller.attach(view: view, document: document, url: url,
+                          requestedPage: nil, requestedAnchor: nil)
+        view.currentSelection = try XCTUnwrap(
+            document.findString("fact", withOptions: []).first
+        )
+        XCTAssertEqual(controller.selectedText(), "fact")
+
+        let anchor = try XCTUnwrap(controller.selectedSourceAnchor())
+        let restoredView = PDFView(frame: bounds)
+        let restoredController = PDFReaderController()
+        defer {
+            controller.detach(view: view)
+            restoredController.detach(view: restoredView)
+        }
+        restoredController.attach(view: restoredView, document: document, url: url,
+                                  requestedPage: nil, requestedAnchor: anchor)
+
+        XCTAssertFalse(restoredController.invalidRequestedSelection)
+        XCTAssertEqual(restoredView.currentSelection?.string, "fact")
+    }
+
+    @MainActor
     func testStalePDFSelectionAnchorNeverSelectsDifferentText() throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let originalTextView = NSTextView(frame: bounds)
