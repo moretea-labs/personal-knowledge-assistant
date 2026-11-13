@@ -355,8 +355,7 @@ struct MindMapCanvas: View {
     private var visibleNodeIDs: Set<Int> {
         let pinned = Set([selectedID, editingNodeID, dropTargetID].compactMap { $0 })
         return MindMapViewportGeometry.visibleNodeIDs(
-            in: mapLayout.placements,
-            mapSize: mapLayout.size,
+            in: mapLayout,
             viewport: viewportSize,
             offset: CGSize(
                 width: viewportOffset.width + canvasDrag.width,

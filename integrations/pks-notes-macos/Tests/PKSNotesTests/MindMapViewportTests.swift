@@ -21,9 +21,11 @@ final class MindMapViewportTests: XCTestCase {
             placement(5, x: 500, y: 100),
             placement(6, x: 500, y: 730)
         ]
+        let layout = MindMapLayoutSnapshot(
+            placements: placements, size: CGSize(width: 1_000, height: 1_000)
+        )
         let visible = MindMapViewportGeometry.visibleNodeIDs(
-            in: placements,
-            mapSize: CGSize(width: 1_000, height: 1_000),
+            in: layout,
             viewport: CGSize(width: 400, height: 300),
             offset: .zero,
             zoom: 1,
@@ -48,9 +50,11 @@ final class MindMapViewportTests: XCTestCase {
                 size: CGSize(width: 100, height: 60)
             )
         ]
+        let layout = MindMapLayoutSnapshot(
+            placements: placements, size: CGSize(width: 1_000, height: 1_000)
+        )
         let visible = MindMapViewportGeometry.visibleNodeIDs(
-            in: placements,
-            mapSize: CGSize(width: 1_000, height: 1_000),
+            in: layout,
             viewport: CGSize(width: 400, height: 300),
             offset: CGSize(width: 200, height: 0),
             zoom: 2,
@@ -77,10 +81,12 @@ final class MindMapViewportTests: XCTestCase {
             )
         ]
 
+        let layout = MindMapLayoutSnapshot(
+            placements: placements, size: CGSize(width: 1_000, height: 1_000)
+        )
         XCTAssertEqual(
             MindMapViewportGeometry.visibleNodeIDs(
-                in: placements,
-                mapSize: CGSize(width: 1_000, height: 1_000),
+                in: layout,
                 viewport: .zero,
                 offset: .zero,
                 zoom: 1
@@ -89,8 +95,7 @@ final class MindMapViewportTests: XCTestCase {
         )
         XCTAssertEqual(
             MindMapViewportGeometry.visibleNodeIDs(
-                in: placements,
-                mapSize: CGSize(width: 1_000, height: 1_000),
+                in: layout,
                 viewport: CGSize(width: 400, height: 300),
                 offset: .zero,
                 zoom: 0
@@ -108,9 +113,11 @@ final class MindMapViewportTests: XCTestCase {
                 size: CGSize(width: 210, height: 60)
             )
         }
+        let layout = MindMapLayoutSnapshot(
+            placements: placements, size: CGSize(width: 1_000, height: 60_000)
+        )
         let visible = MindMapViewportGeometry.visibleNodeIDs(
-            in: placements,
-            mapSize: CGSize(width: 1_000, height: 60_000),
+            in: layout,
             viewport: CGSize(width: 400, height: 300),
             offset: .zero,
             zoom: 1,
@@ -121,6 +128,83 @@ final class MindMapViewportTests: XCTestCase {
         XCTAssertLessThan(visible.count, 20)
         XCTAssertTrue(visible.contains(599))
         XCTAssertTrue(visible.contains(300))
+    }
+
+    func testLargeMapNodeIndexMatchesLinearViewportCulling() {
+        let placements = (0..<1_000).map { index in
+            let column = index % 24
+            let row = index / 24
+            return MindMapPlacement(
+                node: MindMapNode(id: index, depth: 0, title: "Node \(index)"),
+                parentID: nil,
+                center: CGPoint(
+                    x: 120 + CGFloat(column) * 520,
+                    y: 100 + CGFloat(row) * 150
+                ),
+                size: CGSize(width: 210, height: 60)
+            )
+        }
+        let layout = MindMapLayoutSnapshot(
+            placements: placements, size: CGSize(width: 13_000, height: 8_000)
+        )
+        let viewports: [(CGSize, CGSize, CGFloat, CGFloat, Set<Int>)] = [
+            (CGSize(width: 640, height: 480), .zero, 1, 120, [999]),
+            (CGSize(width: 520, height: 360), CGSize(width: -2_200, height: 800), 1.25, 200, []),
+            (CGSize(width: 900, height: 700), CGSize(width: 3_000, height: -1_400), 0.75, 100, [0, 512])
+        ]
+
+        for (viewport, offset, zoom, overscan, pinned) in viewports {
+            let rect = MindMapViewportGeometry.visibleRect(
+                mapSize: layout.size, viewport: viewport, offset: offset,
+                zoom: zoom, overscan: overscan
+            )
+            let expected = Set(placements.compactMap { placement -> Int? in
+                guard let rect else { return placement.id }
+                let bounds = CGRect(
+                    x: placement.center.x - placement.size.width / 2,
+                    y: placement.center.y - placement.size.height / 2,
+                    width: placement.size.width,
+                    height: placement.size.height
+                )
+                return bounds.intersects(rect) ? placement.id : nil
+            }).union(pinned)
+            XCTAssertEqual(
+                MindMapViewportGeometry.visibleNodeIDs(
+                    in: layout, viewport: viewport, offset: offset,
+                    zoom: zoom, overscan: overscan, pinnedIDs: pinned
+                ),
+                expected
+            )
+        }
+    }
+
+    func testNodeSpatialIndexKeepsOversizedAndUnrepresentableBoundsQueryable() {
+        let placements = [
+            MindMapPlacement(
+                node: MindMapNode(id: 1, depth: 0, title: "Oversized"),
+                parentID: nil,
+                center: CGPoint(x: 500_000, y: 100),
+                size: CGSize(width: 1_000_000, height: 60)
+            ),
+            MindMapPlacement(
+                node: MindMapNode(id: 2, depth: 0, title: "Unrepresentable"),
+                parentID: nil,
+                center: CGPoint(x: 1e20, y: 100),
+                size: CGSize(width: 1e10, height: 60)
+            )
+        ]
+        let layout = MindMapLayoutSnapshot(
+            placements: placements, size: CGSize(width: 1e20, height: 1_000)
+        )
+
+        XCTAssertTrue(
+            layout.visiblePlacementIDs(in: CGRect(x: 999_000, y: 0, width: 2_000, height: 200))
+                .contains(1)
+        )
+        XCTAssertTrue(
+            layout.visiblePlacementIDs(in: CGRect(x: 1e20, y: 0, width: 1e10, height: 200))
+                .contains(2)
+        )
     }
 
     func testConnectorCullingKeepsCrossingCurvesAndStrokeCaps() {

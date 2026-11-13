@@ -84,14 +84,14 @@ struct MindMapConnector: Equatable {
     }
 }
 
-private struct MindMapConnectorCell: Hashable {
+private struct MindMapSpatialCell: Hashable {
     let column: Int
     let row: Int
 }
 
 struct MindMapLayoutSnapshot: Equatable {
-    private static let connectorCellSize = CGSize(width: 640, height: 480)
-    private static let maxIndexedCellsPerConnector = 64
+    private static let spatialCellSize = CGSize(width: 640, height: 480)
+    private static let maxIndexedCellsPerItem = 64
 
     let placements: [MindMapPlacement]
     let size: CGSize
@@ -100,8 +100,10 @@ struct MindMapLayoutSnapshot: Equatable {
     let parentIDs: Set<Int>
     let branchByID: [Int: Int]
     let connectors: [MindMapConnector]
-    private let connectorIndicesByCell: [MindMapConnectorCell: [Int]]
+    private let connectorIndicesByCell: [MindMapSpatialCell: [Int]]
     private let unindexedConnectorIndices: [Int]
+    private let placementIndicesByCell: [MindMapSpatialCell: [Int]]
+    private let unindexedPlacementIndices: [Int]
 
     init(
         placements: [MindMapPlacement],
@@ -126,7 +128,7 @@ struct MindMapLayoutSnapshot: Equatable {
         }
         connectors = resolvedConnectors
 
-        var cellIndex: [MindMapConnectorCell: [Int]] = [:]
+        var cellIndex: [MindMapSpatialCell: [Int]] = [:]
         var unindexedIndices: [Int] = []
         for (index, connector) in resolvedConnectors.enumerated() {
             let bounds = connector.bounds
@@ -137,16 +139,16 @@ struct MindMapLayoutSnapshot: Equatable {
                 unindexedIndices.append(index)
                 continue
             }
-            guard let minColumn = Self.cellCoordinate(bounds.minX, size: Self.connectorCellSize.width),
-                  let maxColumn = Self.cellCoordinate(bounds.maxX, size: Self.connectorCellSize.width),
-                  let minRow = Self.cellCoordinate(bounds.minY, size: Self.connectorCellSize.height),
-                  let maxRow = Self.cellCoordinate(bounds.maxY, size: Self.connectorCellSize.height) else {
+            guard let minColumn = Self.cellCoordinate(bounds.minX, size: Self.spatialCellSize.width),
+                  let maxColumn = Self.cellCoordinate(bounds.maxX, size: Self.spatialCellSize.width),
+                  let minRow = Self.cellCoordinate(bounds.minY, size: Self.spatialCellSize.height),
+                  let maxRow = Self.cellCoordinate(bounds.maxY, size: Self.spatialCellSize.height) else {
                 unindexedIndices.append(index)
                 continue
             }
             let columnCount = Double(maxColumn) - Double(minColumn) + 1
             let rowCount = Double(maxRow) - Double(minRow) + 1
-            guard columnCount * rowCount <= Double(Self.maxIndexedCellsPerConnector) else {
+            guard columnCount * rowCount <= Double(Self.maxIndexedCellsPerItem) else {
                 // A long edge must not expand into millions of dictionary entries.
                 // Keep it in the existing linear fail-open candidate set instead.
                 unindexedIndices.append(index)
@@ -160,6 +162,48 @@ struct MindMapLayoutSnapshot: Equatable {
         }
         connectorIndicesByCell = cellIndex
         unindexedConnectorIndices = unindexedIndices
+
+        // Node-card culling runs on every pan/zoom frame. Index each bounded
+        // card once with the same grid used by connectors so the viewport only
+        // examines nearby nodes instead of scanning the complete outline.
+        var placementCellIndex: [MindMapSpatialCell: [Int]] = [:]
+        var unindexedPlacements: [Int] = []
+        for (index, placement) in placements.enumerated() {
+            guard placement.center.x.isFinite, placement.center.y.isFinite,
+                  placement.size.width.isFinite, placement.size.height.isFinite,
+                  placement.size.width > 0, placement.size.height > 0 else {
+                unindexedPlacements.append(index)
+                continue
+            }
+            let bounds = CGRect(
+                x: placement.center.x - placement.size.width / 2,
+                y: placement.center.y - placement.size.height / 2,
+                width: placement.size.width,
+                height: placement.size.height
+            )
+            guard bounds.minX.isFinite, bounds.maxX.isFinite,
+                  bounds.minY.isFinite, bounds.maxY.isFinite,
+                  let minColumn = Self.cellCoordinate(bounds.minX, size: Self.spatialCellSize.width),
+                  let maxColumn = Self.cellCoordinate(bounds.maxX, size: Self.spatialCellSize.width),
+                  let minRow = Self.cellCoordinate(bounds.minY, size: Self.spatialCellSize.height),
+                  let maxRow = Self.cellCoordinate(bounds.maxY, size: Self.spatialCellSize.height) else {
+                unindexedPlacements.append(index)
+                continue
+            }
+            let columnCount = Double(maxColumn) - Double(minColumn) + 1
+            let rowCount = Double(maxRow) - Double(minRow) + 1
+            guard columnCount * rowCount <= Double(Self.maxIndexedCellsPerItem) else {
+                unindexedPlacements.append(index)
+                continue
+            }
+            for row in minRow...maxRow {
+                for column in minColumn...maxColumn {
+                    placementCellIndex[.init(column: column, row: row), default: []].append(index)
+                }
+            }
+        }
+        placementIndicesByCell = placementCellIndex
+        unindexedPlacementIndices = unindexedPlacements
     }
 
     /// Resolve the viewport's small visible set without filtering the full
@@ -168,6 +212,47 @@ struct MindMapLayoutSnapshot: Equatable {
         guard let visibleIDs else { return placements }
         return visibleIDs.compactMap { placementsByID[$0] }.sorted {
             placementOrderByID[$0.id, default: .max] < placementOrderByID[$1.id, default: .max]
+        }
+    }
+
+    /// Query the node-card grid for a viewport, retaining active interaction
+    /// targets and conservatively checking oversized or unindexable placements.
+    func visiblePlacementIDs(in viewport: CGRect?, pinnedIDs: Set<Int> = []) -> Set<Int> {
+        guard let viewport = viewport?.standardized,
+              !viewport.isNull, !viewport.isEmpty,
+              viewport.minX.isFinite, viewport.maxX.isFinite,
+              viewport.minY.isFinite, viewport.maxY.isFinite else {
+            return Set(placements.map(\.id)).union(pinnedIDs)
+        }
+
+        guard let minColumn = Self.cellCoordinate(viewport.minX, size: Self.spatialCellSize.width),
+              let maxColumn = Self.cellCoordinate(viewport.maxX, size: Self.spatialCellSize.width),
+              let minRow = Self.cellCoordinate(viewport.minY, size: Self.spatialCellSize.height),
+              let maxRow = Self.cellCoordinate(viewport.maxY, size: Self.spatialCellSize.height) else {
+            return Self.linearVisiblePlacementIDs(in: placements, viewport: viewport, pinnedIDs: pinnedIDs)
+        }
+
+        let queriedCellCount = (Double(maxColumn) - Double(minColumn) + 1)
+            * (Double(maxRow) - Double(minRow) + 1)
+        guard queriedCellCount.isFinite,
+              queriedCellCount < Double(placementIndicesByCell.count) else {
+            return Self.linearVisiblePlacementIDs(in: placements, viewport: viewport, pinnedIDs: pinnedIDs)
+        }
+
+        var candidates = Set(unindexedPlacementIndices)
+        for row in minRow...maxRow {
+            for column in minColumn...maxColumn {
+                candidates.formUnion(
+                    placementIndicesByCell[.init(column: column, row: row)] ?? []
+                )
+            }
+        }
+        return candidates.reduce(into: pinnedIDs) { visible, index in
+            guard placements.indices.contains(index) else { return }
+            let placement = placements[index]
+            if Self.placementIntersects(placement, viewport: viewport) {
+                visible.insert(placement.id)
+            }
         }
     }
 
@@ -180,10 +265,10 @@ struct MindMapLayoutSnapshot: Equatable {
             return connectors
         }
 
-        guard let minColumn = Self.cellCoordinate(viewport.minX, size: Self.connectorCellSize.width),
-              let maxColumn = Self.cellCoordinate(viewport.maxX, size: Self.connectorCellSize.width),
-              let minRow = Self.cellCoordinate(viewport.minY, size: Self.connectorCellSize.height),
-              let maxRow = Self.cellCoordinate(viewport.maxY, size: Self.connectorCellSize.height) else {
+        guard let minColumn = Self.cellCoordinate(viewport.minX, size: Self.spatialCellSize.width),
+              let maxColumn = Self.cellCoordinate(viewport.maxX, size: Self.spatialCellSize.width),
+              let minRow = Self.cellCoordinate(viewport.minY, size: Self.spatialCellSize.height),
+              let maxRow = Self.cellCoordinate(viewport.maxY, size: Self.spatialCellSize.height) else {
             return connectors.filter { Self.intersects($0, viewport: viewport) }
         }
         let queriedCellCount = (Double(maxColumn) - Double(minColumn) + 1)
@@ -205,6 +290,38 @@ struct MindMapLayoutSnapshot: Equatable {
             let connector = connectors[index]
             return Self.intersects(connector, viewport: viewport) ? connector : nil
         }
+    }
+
+    private static func linearVisiblePlacementIDs(
+        in placements: [MindMapPlacement],
+        viewport: CGRect,
+        pinnedIDs: Set<Int>
+    ) -> Set<Int> {
+        var visible = pinnedIDs
+        for placement in placements where placementIntersects(placement, viewport: viewport) {
+            visible.insert(placement.id)
+        }
+        return visible
+    }
+
+    private static func placementIntersects(
+        _ placement: MindMapPlacement,
+        viewport: CGRect
+    ) -> Bool {
+        guard placement.center.x.isFinite, placement.center.y.isFinite,
+              placement.size.width.isFinite, placement.size.height.isFinite,
+              placement.size.width > 0, placement.size.height > 0 else {
+            return true
+        }
+        let bounds = CGRect(
+            x: placement.center.x - placement.size.width / 2,
+            y: placement.center.y - placement.size.height / 2,
+            width: placement.size.width,
+            height: placement.size.height
+        )
+        guard bounds.minX.isFinite, bounds.maxX.isFinite,
+              bounds.minY.isFinite, bounds.maxY.isFinite else { return true }
+        return bounds.intersects(viewport)
     }
 
     private static func cellCoordinate(_ value: CGFloat, size: CGFloat) -> Int? {

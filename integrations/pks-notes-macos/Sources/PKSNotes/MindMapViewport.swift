@@ -7,35 +7,21 @@ enum MindMapViewportGeometry {
     /// prefetch margin. Connectors remain in the single Canvas, so the full
     /// Markdown layout and infinite navigation geometry stay unchanged.
     static func visibleNodeIDs(
-        in placements: [MindMapPlacement],
-        mapSize: CGSize,
+        in layout: MindMapLayoutSnapshot,
         viewport: CGSize,
         offset: CGSize,
         zoom: CGFloat,
         overscan: CGFloat = 320,
         pinnedIDs: Set<Int> = []
     ) -> Set<Int> {
-        guard !placements.isEmpty else { return [] }
+        guard !layout.placements.isEmpty else { return [] }
         guard let visibleRect = visibleRect(
-            mapSize: mapSize, viewport: viewport, offset: offset,
+            mapSize: layout.size, viewport: viewport, offset: offset,
             zoom: zoom, overscan: overscan
         ) else {
-            return Set(placements.map(\.id))
+            return Set(layout.placements.map(\.id))
         }
-
-        var visible = pinnedIDs
-        for placement in placements {
-            let bounds = CGRect(
-                x: placement.center.x - placement.size.width / 2,
-                y: placement.center.y - placement.size.height / 2,
-                width: placement.size.width,
-                height: placement.size.height
-            )
-            if bounds.intersects(visibleRect) {
-                visible.insert(placement.id)
-            }
-        }
-        return visible
+        return layout.visiblePlacementIDs(in: visibleRect, pinnedIDs: pinnedIDs)
     }
 
     static func visibleRect(
