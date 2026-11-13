@@ -377,7 +377,10 @@ extension MindMapOutline {
     ) -> [Int: Int] {
         guard !oldNodes.isEmpty, !newNodes.isEmpty else { return [:] }
 
-        if oldNodes.map(\.title) == newNodes.map(\.title) {
+        if oldNodes.count == newNodes.count,
+           oldNodes.enumerated().allSatisfy({ index, node in
+               node.title == newNodes[index].title && node.depth == newNodes[index].depth
+           }) {
             return Dictionary(uniqueKeysWithValues: zip(oldNodes, newNodes).map {
                 ($0.id, $1.id)
             })
@@ -458,20 +461,57 @@ extension MindMapOutline {
         }
         for oldID in invalidatedMappings { result.removeValue(forKey: oldID) }
 
+        func subtreeFingerprints(for nodes: [MindMapNode]) -> [Int: Int] {
+            var childrenByID: [Int: [Int]] = [:]
+            var ancestors: [MindMapNode] = []
+            for node in nodes {
+                while let last = ancestors.last, last.depth >= node.depth { ancestors.removeLast() }
+                if let parent = ancestors.last {
+                    childrenByID[parent.id, default: []].append(node.id)
+                }
+                ancestors.append(node)
+            }
+
+            var fingerprints: [Int: Int] = [:]
+            fingerprints.reserveCapacity(nodes.count)
+            for node in nodes.reversed() {
+                // A transient, order-independent subtree fingerprint distinguishes
+                // same-title siblings without persisting a second node identity.
+                let children = (childrenByID[node.id] ?? [])
+                    .compactMap { fingerprints[$0] }
+                    .sorted()
+                var hasher = Hasher()
+                hasher.combine(node.title)
+                hasher.combine(children.count)
+                for child in children { hasher.combine(child) }
+                fingerprints[node.id] = hasher.finalize()
+            }
+            return fingerprints
+        }
+
         // Duplicate titles are identities only within a parent already mapped from Markdown.
         let oldGroups = siblingGroups(oldNodes, parents: oldParents)
         let newGroups = siblingGroups(newNodes, parents: newParents)
+        let oldFingerprints = subtreeFingerprints(for: oldNodes)
+        let newFingerprints = subtreeFingerprints(for: newNodes)
         var mappedNewIDs = Set(result.values)
         for oldNode in oldNodes where ambiguousTitles.contains(oldNode.title) && result[oldNode.id] == nil {
             let oldParentID = oldParents[oldNode.id]
             let newParentID = oldParentID.flatMap { result[$0] }
             if oldParentID != nil && newParentID == nil { continue }
-            let oldSiblings = oldGroups[ParentTitleKey(parentID: oldParentID, title: oldNode.title)] ?? []
+            let key = ParentTitleKey(parentID: oldParentID, title: oldNode.title)
+            let oldSiblings = oldGroups[key] ?? []
             let newSiblings = newGroups[ParentTitleKey(parentID: newParentID, title: oldNode.title)] ?? []
             guard oldSiblings.count == newSiblings.count,
                   let occurrence = oldSiblings.firstIndex(where: { $0.id == oldNode.id }),
                   newSiblings.indices.contains(occurrence) else { continue }
-            let newID = newSiblings[occurrence].id
+
+            let fingerprint = oldFingerprints[oldNode.id]
+            let oldMatches = oldSiblings.filter { oldFingerprints[$0.id] == fingerprint }
+            let newMatches = newSiblings.filter { newFingerprints[$0.id] == fingerprint }
+            let newID = oldMatches.count == 1 && newMatches.count == 1
+                ? newMatches[0].id
+                : newSiblings[occurrence].id
             guard !mappedNewIDs.contains(newID) else { continue }
             result[oldNode.id] = newID
             mappedNewIDs.insert(newID)
