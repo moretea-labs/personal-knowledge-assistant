@@ -88,6 +88,76 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
+    func testGlobalSearchWorkspaceNameLookupFindsPinyinInActiveWorkspace() async throws {
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
+        let previousBookmark = defaults.object(forKey: "PKSNotesWorkspaceBookmark")
+        defer {
+            if let previousWorkspace { defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousBookmark { defaults.set(previousBookmark, forKey: "PKSNotesWorkspaceBookmark") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("吉他谱", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let note = folder.appendingPathComponent("夜的钢琴曲五.md")
+        try "The body does not contain the pinyin query".write(to: note, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        let hits = await model.searchWorkspaceNames("ye de gang qin qu")
+
+        XCTAssertTrue(model.globalFileIndexReady)
+        XCTAssertEqual(hits.map(\.uri), [note.path])
+        XCTAssertNil(hits.first?.snippet)
+    }
+
+    @MainActor
+    func testGlobalSearchPinyinLookupScalesToLargeActiveWorkspace() async throws {
+        let defaults = UserDefaults.standard
+        let oldWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
+        let oldBookmark = defaults.object(forKey: "PKSNotesWorkspaceBookmark")
+        defaults.removeObject(forKey: "PKSNotesWorkspace")
+        defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark")
+        defer {
+            if let oldWorkspace { defaults.set(oldWorkspace, forKey: "PKSNotesWorkspace") } else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let oldBookmark { defaults.set(oldBookmark, forKey: "PKSNotesWorkspaceBookmark") } else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+        }
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        for index in 0..<1_000 {
+            let folder = root.appendingPathComponent(String(format: "Folder-%04d", index), isDirectory: true)
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            let name = index == 999 ? "夜的钢琴曲五.md" : "Deep.md"
+            try "Unrelated body".write(to: folder.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<1_000 where model.loadingFiles { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertFalse(model.loadingFiles)
+        let clock = ContinuousClock()
+        let indexStarted = clock.now
+        _ = await model.searchWorkspaceNames("no-match")
+        let indexElapsed = indexStarted.duration(to: clock.now)
+        let searchStarted = clock.now
+        let hits = await model.searchWorkspaceNames("ye de gang qin qu")
+        let searchElapsed = searchStarted.duration(to: clock.now)
+
+        XCTAssertTrue(model.globalFileIndexReady)
+        XCTAssertEqual(hits.map(\.uri), [root.appendingPathComponent("Folder-0999/夜的钢琴曲五.md").path])
+        XCTAssertNil(hits.first?.snippet)
+        XCTAssertLessThan(indexElapsed, .seconds(10))
+        XCTAssertLessThan(searchElapsed, .seconds(2))
+        print("PKS_PERF global_pinyin_active_workspace_1000 index=\(indexElapsed) warm_search=\(searchElapsed)")
+    }
+
+    @MainActor
     func testWorkspaceSearchFallsBackWhenRelatedKnowledgeServiceIsUnavailable() async throws {
         let defaults = UserDefaults.standard
         let previousWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
@@ -2251,16 +2321,47 @@ extension PKSNotesTests {
 
 extension PKSNotesTests {
     @MainActor
-    func testNativeMarkdownFormattingPreservesUnicodeSelectionInTextView() async throws {
+    func testMarkdownNativeCommandsPreserveActiveIMEComposition() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 180),
+            styleMask: [], backing: .buffered, defer: true
+        )
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 180))
+        window.contentView = textView
+        XCTAssertTrue(window.makeFirstResponder(textView))
+        textView.string = "中文"
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        textView.setMarkedText(
+            "拼",
+            selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: 2, length: 0)
+        )
+        XCTAssertTrue(textView.hasMarkedText())
+
+        let composedText = textView.string
+        let markedRange = textView.markedRange()
+        XCTAssertFalse(MarkdownNativeCommand.perform("bold", in: textView))
+        XCTAssertFalse(MarkdownNativeCommand.insertText("citation", at: 2, in: textView))
+        XCTAssertFalse(MarkdownNativeCommand.replaceSelection("![image](attachment.png)", in: textView))
+        XCTAssertEqual(textView.string, composedText)
+        XCTAssertTrue(textView.hasMarkedText())
+        XCTAssertEqual(textView.markedRange(), markedRange)
+    }
+
+    @MainActor
+    func testNativeMarkdownFormattingPreservesUnicodeSelectionBeforeReturning() {
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 180))
         textView.string = "中文测试"
         textView.setSelectedRange(NSRange(location: 2, length: 2))
 
         XCTAssertTrue(MarkdownNativeCommand.perform("bold", in: textView))
         XCTAssertEqual(textView.string, "中文**测试**")
-
-        try await Task.sleep(for: .milliseconds(20))
         XCTAssertEqual(textView.selectedRange(), NSRange(location: 4, length: 2))
+
+        // A keystroke immediately following the toolbar/shortcut action must
+        // replace the selected CJK text, not append at the temporary end caret.
+        textView.insertText("改", replacementRange: textView.selectedRange())
+        XCTAssertEqual(textView.string, "中文**改**")
     }
 
     func testMarkdownEditingWrapsSelectionAndPrefixesLines() {
@@ -2334,15 +2435,20 @@ extension PKSNotesTests {
         try "# Note".write(to: note, atomically: true, encoding: .utf8)
 
         let bytes = Data([0x89, 0x50, 0x4E, 0x47])
-        let first = WorkspaceFiles.storePastedPNG(bytes, for: note, in: root)
-        let second = WorkspaceFiles.storePastedPNG(bytes, for: note, in: root)
+        let first = WorkspaceFiles.storeAttachment(
+            bytes, for: note, in: root, stem: "pasted-image", fileExtension: "png"
+        )
+        let second = WorkspaceFiles.storeAttachment(
+            bytes, for: note, in: root, stem: "pasted-image", fileExtension: "png"
+        )
         XCTAssertEqual(first, "attachments/pasted-image.png")
         XCTAssertEqual(second, "attachments/pasted-image-2.png")
         XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(first!)), bytes)
         XCTAssertNil(
-            WorkspaceFiles.storePastedPNG(bytes,
-                                          for: fm.temporaryDirectory.appendingPathComponent("Outside.md"),
-                                          in: root)
+            WorkspaceFiles.storeAttachment(
+                bytes, for: fm.temporaryDirectory.appendingPathComponent("Outside.md"),
+                in: root, stem: "pasted-image", fileExtension: "png"
+            )
         )
     }
 
@@ -2913,6 +3019,7 @@ extension PKSNotesTests {
         let pdf = root.appendingPathComponent("Book.pdf")
         try "# Study\n".write(to: note, atomically: true, encoding: .utf8)
         try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+        let originalPDFData = try Data(contentsOf: pdf)
 
         let model = NotesModel()
         model.openWorkspace(root)
@@ -2929,6 +3036,7 @@ extension PKSNotesTests {
             to: note
         )
         XCTAssertTrue(appendedPageOnlyQuote)
+        XCTAssertEqual(try Data(contentsOf: pdf), originalPDFData, "Capturing a quote must never modify the source PDF.")
         let pageOnlyCapture = try String(contentsOf: note, encoding: .utf8)
         XCTAssertTrue(pageOnlyCapture.contains("[Book.pdf · p. 4](/Book.pdf#page=4)"))
         XCTAssertTrue(pageOnlyCapture.contains("> Unanchored quote"))
@@ -2956,6 +3064,7 @@ extension PKSNotesTests {
         let content = try String(contentsOf: note, encoding: .utf8)
         XCTAssertTrue(content.contains("My interpretation\n\n[Book.pdf · p. 4](/Book.pdf#\(anchor.fragment))"))
         XCTAssertTrue(content.contains("> Important fact\n> Second line"))
+        XCTAssertEqual(try Data(contentsOf: pdf), originalPDFData, "Appending both page-only and anchored citations must preserve the source PDF bytes.")
     }
 }
 
@@ -3505,21 +3614,21 @@ extension PKSNotesTests {
         textView.allowsUndo = true
         window.contentView = textView
         window.makeFirstResponder(textView)
-        textView.string = "before after"
-        textView.setSelectedRange((textView.string as NSString).range(of: "after"))
+        textView.string = "前文 🙂 后文"
+        textView.setSelectedRange((textView.string as NSString).range(of: "🙂"))
         textView.undoManager?.removeAllActions()
 
         let original = textView.string
-        let result = MarkdownEditing.insert(
+        let expected = MarkdownEditing.insert(
             "![](Attachments/photo.png)",
             into: original,
             selection: textView.selectedRange()
         )
-        MarkdownNativeCommand.apply(result, from: original, in: textView)
+        XCTAssertTrue(MarkdownNativeCommand.replaceSelection("![](Attachments/photo.png)", in: textView))
 
-        XCTAssertEqual(textView.string, "before ![](Attachments/photo.png)")
+        XCTAssertEqual(textView.string, expected.text)
         await Task.yield()
-        XCTAssertEqual(textView.selectedRange(), result.selection)
+        XCTAssertEqual(textView.selectedRange(), expected.selection)
 
         let undoManager = try XCTUnwrap(textView.undoManager)
         XCTAssertTrue(undoManager.canUndo)
@@ -3590,5 +3699,52 @@ extension PKSNotesTests {
             XCTAssertEqual(restored.height, original.height, accuracy: 0.00001)
         }
         XCTAssertEqual(model.selected, note.standardizedFileURL)
+    }
+}
+
+
+extension PKSNotesTests {
+    @MainActor
+    func testMoveToTrashCannotOverlapAnInFlightFolderCopy() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(
+            "LeafspanTrashRace-\(UUID().uuidString)", isDirectory: true
+        )
+        let source = root.appendingPathComponent("Source", isDirectory: true)
+        let copies = root.appendingPathComponent("Copies", isDirectory: true)
+        try fm.createDirectory(at: source, withIntermediateDirectories: true)
+        try fm.createDirectory(at: copies, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let note = source.appendingPathComponent("Note.md")
+        try "# Source".write(to: note, atomically: true, encoding: .utf8)
+        for index in 0..<250 {
+            try "# Index \(index)".write(
+                to: root.appendingPathComponent("Index-\(index).md"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        let copyTask = Task { await model.copyItem(source, to: copies) }
+        var observedInFlightOperation = false
+        for _ in 0..<500 {
+            if model.fileOperationInProgress?.standardizedFileURL == source.standardizedFileURL {
+                observedInFlightOperation = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertTrue(observedInFlightOperation, "Folder copy should expose its in-flight ownership before scanning/copying.")
+        XCTAssertNil(model.moveToTrash(source))
+        XCTAssertTrue(fm.fileExists(atPath: note.path), "Trash must not remove the source during copy preparation.")
+
+        let copied = await copyTask.value
+        let expectedCopy = copies.appendingPathComponent("Source")
+        XCTAssertEqual(copied?.resolvingSymlinksInPath().path, expectedCopy.resolvingSymlinksInPath().path)
+        XCTAssertTrue(fm.fileExists(atPath: expectedCopy.appendingPathComponent("Note.md").path))
+        XCTAssertNil(model.fileOperationInProgress, "The operation owner must be released after completion.")
     }
 }

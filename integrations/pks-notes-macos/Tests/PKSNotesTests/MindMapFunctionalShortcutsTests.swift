@@ -14,6 +14,20 @@ final class MindMapFunctionalShortcutsTests: XCTestCase {
         XCTAssertEqual(MindMapKeyboard.command(for: .return, modifiers: []), .addSibling)
     }
 
+    func testOptionArrowShortcutsPromoteAndDemoteWithoutChangingTextFieldEditing() {
+        XCTAssertEqual(
+            MindMapKeyboard.command(for: .leftArrow, modifiers: .option),
+            .promote
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.command(for: .rightArrow, modifiers: .option),
+            .demote
+        )
+        XCTAssertNil(MindMapKeyboard.command(for: "e", modifiers: .option))
+        XCTAssertNil(MindMapKeyboard.command(for: .leftArrow, modifiers: [.option, .shift]))
+        XCTAssertNil(MindMapKeyboard.command(for: .rightArrow, modifiers: [.option, .command]))
+    }
+
     func testNodeStyleShortcutsKeepOneCanonicalMarkdownWriter() throws {
         let original = "# Research\n- [Linked](Docs/Readme.md)\n- Important\n"
         let nodes = MindMapOutline.nodes(in: original)

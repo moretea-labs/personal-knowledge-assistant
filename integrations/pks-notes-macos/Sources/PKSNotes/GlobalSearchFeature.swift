@@ -148,45 +148,104 @@ enum GlobalSearchRanker {
     // matching content signals; never infer relatedness from names alone.
     static func shouldFindRelated(_ query: String) -> Bool {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.count >= 4 else { return false }
-        if text.unicodeScalars.filter({ (0x4E00...0x9FFF).contains($0.value) }).count >= 4 {
-            return true
+        let hanCount = text.unicodeScalars.filter {
+            (0x4E00...0x9FFF).contains($0.value)
+        }.count
+        if hanCount > 0 {
+            // Chinese generic search terms are not evidence of a substantive
+            // topic. Remove them before counting the remaining phrase.
+            let ignoredPhrases = [
+                "请帮我", "帮我", "找一下", "找找", "找",
+                "在哪里", "在哪儿", "在哪", "路径", "位置",
+                "文件夹", "我的", "所有", "全部", "文件", "资料", "笔记",
+                "相关", "搜索", "内容", "文档", "这个", "那个", "一个",
+                "怎么", "如何", "的", "以及", "与"
+            ]
+            let meaningful = ignoredPhrases.reduce(text) {
+                $0.replacingOccurrences(of: $1, with: "")
+            }
+            return meaningful.unicodeScalars.filter {
+                (0x4E00...0x9FFF).contains($0.value)
+            }.count >= 4
         }
         let ignored: Set<String> = [
-            "my", "the", "and", "about", "file", "files", "note", "notes",
-            "文件", "资料", "笔记", "相关"
+            "my", "the", "and", "about", "file", "files", "folder", "folders",
+            "document", "documents", "note", "notes", "markdown", "search",
+            "content", "pdf", "path", "paths", "location", "where", "find", "locate",
+            "please", "help", "all", "every", "from", "with", "this", "that", "your",
+            "for", "are", "was", "were", "into", "is", "to", "of", "in", "on", "at",
+            "by", "as", "or", "but", "how", "what", "when", "which", "who", "why",
+            "can", "could", "should", "would"
         ]
         let meaningful = text.lowercased().split { !$0.isLetter && !$0.isNumber }
             .filter { $0.count >= 2 && !ignored.contains(String($0)) }
         return meaningful.count >= 2
     }
 
+    /// Rank directory components independently from filenames and body text.
+    /// Exact/prefix/substring folder matches are useful global-search signals,
+    /// but must never outrank a direct filename match.
+    static func pathMatchRank(url: URL, for query: String) -> Int {
+        let term = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return 3 }
+        let folders = url.deletingLastPathComponent().pathComponents.map {
+            $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        }
+        if folders.contains(term) { return 0 }
+        if folders.contains(where: { $0.hasPrefix(term) }) { return 1 }
+        if folders.contains(where: { $0.contains(term) }) { return 2 }
+        return 3
+    }
+
     static func merge(apps: [GlobalSearchItem], documents: [GlobalSearchItem],
                       spotlight: [GlobalSearchItem],
                       related: [GlobalSearchItem] = [], query: String,
                       limit: Int = 45) -> [GlobalSearchItem] {
-        let term = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
         var seen = Set<String>()
         let unique = (apps + documents + spotlight + related).filter {
             seen.insert($0.url.standardizedFileURL.path).inserted
         }
         func weight(_ item: GlobalSearchItem) -> Int {
-            if item.isRelated { return 7 }
             let name = item.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             let isApp = item.kind == .application
             if name == term { return isApp ? 0 : 1 }
             if name.hasPrefix(term) { return isApp ? 2 : 3 }
             if name.contains(term) { return isApp ? 4 : 5 }
-            return 6 // content-only PKS match
+            if !isApp {
+                let pathRank = pathMatchRank(url: item.url, for: term)
+                if pathRank < 3 { return 6 + pathRank }
+            }
+            if !isApp, WorkspaceSearch.transliteratedContains(item.title, term) { return 9 }
+            if !isApp, WorkspaceSearch.transliteratedContains(
+                item.url.deletingLastPathComponent().path, term
+            ) { return 10 }
+            if !isApp, WorkspaceSearch.fuzzyContains(item.title, term) { return 11 }
+            if !isApp, WorkspaceSearch.fuzzyContains(
+                item.url.deletingLastPathComponent().path, term
+            ) { return 12 }
+            if item.isRelated { return 14 }
+            return 13 // body-only PKS/Spotlight match
         }
         let ranked = unique.sorted { left, right in
             let a = weight(left)
             let b = weight(right)
             if a != b { return a < b }
             if a >= 6 {
-                let leftScore = left.sourceHit?.score ?? left.spotlightRelevance
-                let rightScore = right.sourceHit?.score ?? right.spotlightRelevance
-                if leftScore != rightScore { return leftScore > rightScore }
+                if let leftHit = left.sourceHit, let rightHit = right.sourceHit {
+                    let leftScore = leftHit.score ?? -.infinity
+                    let rightScore = rightHit.score ?? -.infinity
+                    if leftScore != rightScore { return leftScore > rightScore }
+                } else if left.sourceHit != nil {
+                    // PKS carries a grounded snippet and canonical navigation; its score is not a Spotlight score.
+                    return true
+                } else if right.sourceHit != nil {
+                    return false
+                } else if left.spotlightRelevance != right.spotlightRelevance {
+                    return left.spotlightRelevance > right.spotlightRelevance
+                }
             }
             if left.title.count != right.title.count {
                 return left.title.count < right.title.count
@@ -214,10 +273,12 @@ final class GlobalSearchResults: ObservableObject {
     private var applications: [GlobalSearchItem] = []
     private let spotlight = GlobalSpotlightLookup()
     private var appHits: [GlobalSearchItem] = []
-    private var pksHits: [GlobalSearchItem] = []
+    private var pksHits: [SearchHit] = []
+    private var workspaceHits: [SearchHit] = []
     private var relatedHits: [GlobalSearchItem] = []
     private var spotlightHits: [GlobalSearchItem] = []
     private var searchTask: Task<Void, Never>?
+    private var workspaceSearchTask: Task<Void, Never>?
 
     func start() {
         if applications.isEmpty {
@@ -232,13 +293,20 @@ final class GlobalSearchResults: ObservableObject {
     func cancel() {
         searchTask?.cancel()
         searchTask = nil
+        workspaceSearchTask?.cancel()
+        workspaceSearchTask = nil
         spotlight.cancel()
     }
 
     private func publish() {
         let selectedID = selected?.id
+        let documentHits = WorkspaceSearch.merging(local: workspaceHits, remote: pksHits)
+        let documents = documentHits.compactMap { hit -> GlobalSearchItem? in
+            guard let file = hit.localFileURL else { return nil }
+            return GlobalSearchItem.file(hit, url: file)
+        }
         let combined = GlobalSearchRanker.merge(
-            apps: appHits, documents: pksHits, spotlight: spotlightHits,
+            apps: appHits, documents: documents, spotlight: spotlightHits,
             related: relatedHits, query: query
         )
         items = combined
@@ -256,6 +324,7 @@ final class GlobalSearchResults: ObservableObject {
         statusMessage = nil
         appHits = GlobalApplicationCatalog.matches(applications, query: text)
         pksHits = []
+        workspaceHits = []
         relatedHits = []
         spotlightHits = []
         publish()
@@ -279,6 +348,15 @@ final class GlobalSearchResults: ObservableObject {
                 self.searchTask = nil
                 return
             }
+            if let notesModel = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel {
+                self.workspaceSearchTask = Task { [weak self] in
+                    let hits = await notesModel.searchWorkspaceNames(text)
+                    guard let self, !Task.isCancelled,
+                          self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+                    self.workspaceHits = hits
+                    self.publish()
+                }
+            }
             do {
                 var url = URLComponents(string: "http://127.0.0.1:3217/api/search")!
                 url.queryItems = [
@@ -295,13 +373,14 @@ final class GlobalSearchResults: ObservableObject {
                 let hits = try JSONDecoder().decode([SearchHit].self, from: data)
                 guard !Task.isCancelled, self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 var seen = Set<String>()
-                self.pksHits = hits.compactMap { hit in
-                    guard let file = hit.localFileURL,
-                          seen.insert(file.path).inserted else { return nil }
-                    return GlobalSearchItem.file(hit, url: file)
+                self.pksHits = hits.filter { hit in
+                    guard let file = hit.localFileURL else { return false }
+                    return seen.insert(file.standardizedFileURL.path).inserted
                 }
-                self.publish()
                 self.statusMessage = nil
+                // Primary results are ready; optional related retrieval must not hold the main spinner.
+                self.loading = false
+                self.publish()
 
                 // Only request additional evidence-based suggestions for
                 // substantive queries when literal/content results are sparse.
@@ -462,13 +541,17 @@ final class GlobalSearchController: NSObject, ObservableObject {
     }
 
     func open(_ item: GlobalSearchItem) {
-        dismiss()
         switch item.kind {
         case .application:
-            NSWorkspace.shared.openApplication(at: item.url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
+            dismiss()
+            NSWorkspace.shared.openApplication(at: item.url, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
+                guard error != nil else { return }
+                Task { @MainActor in self?.reportOpenFailure() }
+            }
         case .file, .folder:
             if let hit = item.sourceHit,
                let model = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel {
+                dismiss()
                 // Reuse the sole note-navigation authority, including dirty-draft
                 // confirmation and exact Markdown match handling.
                 NSApp.activate(ignoringOtherApps: true)
@@ -477,9 +560,18 @@ final class GlobalSearchController: NSObject, ObservableObject {
                 })?.makeKeyAndOrderFront(nil)
                 model.openResult(hit)
             } else {
-                NSWorkspace.shared.open(item.url)
+                let opened = NSWorkspace.shared.open(item.url)
+                dismiss()
+                if !opened { reportOpenFailure() }
             }
         }
+    }
+
+    private func reportOpenFailure() {
+        guard let model = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) })?.makeKeyAndOrderFront(nil)
+        model.message = AppLanguage.current.text("Unable to open this item")
     }
 
     func reveal(_ item: GlobalSearchItem) {
@@ -527,43 +619,52 @@ private struct GlobalSearchPalette: View {
                                     .padding(.horizontal, 14)
                                     .padding(.top, 11)
                             }
-                            HStack(spacing: 12) {
-                                Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
-                                    .resizable()
-                                    .interpolation(.high)
-                                    .scaledToFit()
-                                    .frame(width: 24, height: 24)
-                                    .accessibilityHidden(true)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(item.title).lineLimit(1).font(.system(size: 14, weight: .medium))
-                                    Text(item.subtitle).lineLimit(1).font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                    if item.spotlightContentMatch {
-                                        Text(AppLanguage.current.resolved == .simplifiedChinese
-                                             ? "正文匹配" : "Content match")
-                                            .lineLimit(1).font(.system(size: 11))
+                            Button {
+                                GlobalSearchController.shared.open(item)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
+                                        .resizable()
+                                        .interpolation(.high)
+                                        .scaledToFit()
+                                        .frame(width: 24, height: 24)
+                                        .accessibilityHidden(true)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(item.title).lineLimit(1).font(.system(size: 14, weight: .medium))
+                                        Text(item.subtitle).lineLimit(1).font(.system(size: 11))
                                             .foregroundStyle(.secondary)
-                                    } else if let snippet = item.snippet, !snippet.isEmpty, snippet != item.subtitle {
-                                        Text(snippet).lineLimit(1).font(.system(size: 11))
-                                            .foregroundStyle(.secondary)
+                                        if item.spotlightContentMatch {
+                                            Text(AppLanguage.current.resolved == .simplifiedChinese
+                                                 ? "正文匹配" : "Content match")
+                                                .lineLimit(1).font(.system(size: 11))
+                                                .foregroundStyle(.secondary)
+                                        } else if let snippet = item.snippet, !snippet.isEmpty, snippet != item.subtitle {
+                                            Text(snippet).lineLimit(1).font(.system(size: 11))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer(minLength: 5)
+                                    if results.selectedIndex == index {
+                                        Text("↵").foregroundStyle(.secondary)
                                     }
                                 }
-                                Spacer(minLength: 5)
-                                if results.selectedIndex == index {
-                                    Text("↵").foregroundStyle(.secondary)
-                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 7)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(results.selectedIndex == index ? Color.accentColor.opacity(0.10) : .clear,
+                                            in: RoundedRectangle(cornerRadius: 8))
+                                .contentShape(Rectangle())
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 7)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(results.selectedIndex == index ? Color.accentColor.opacity(0.10) : .clear,
-                                        in: RoundedRectangle(cornerRadius: 8))
-                            .contentShape(Rectangle())
-                            .onTapGesture { GlobalSearchController.shared.open(item) }
+                            .buttonStyle(.plain)
                             .contextMenu {
-                                Button("打开") { GlobalSearchController.shared.open(item) }
-                                Button("在 Finder 中显示") { GlobalSearchController.shared.reveal(item) }
-                                Button("复制路径") { GlobalSearchController.shared.copyPath(item) }
+                                let chinese = AppLanguage.current.resolved == .simplifiedChinese
+                                Button(chinese ? "打开" : "Open") { GlobalSearchController.shared.open(item) }
+                                Button(chinese ? "在 Finder 中显示" : "Show in Finder") {
+                                    GlobalSearchController.shared.reveal(item)
+                                }
+                                Button(chinese ? "复制路径" : "Copy Path") {
+                                    GlobalSearchController.shared.copyPath(item)
+                                }
                             }
                             .id(item.id)
                             .accessibilityIdentifier("leafspan-global-result-\(index)")

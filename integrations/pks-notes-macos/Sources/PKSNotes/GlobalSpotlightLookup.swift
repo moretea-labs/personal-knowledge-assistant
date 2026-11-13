@@ -43,7 +43,18 @@ final class GlobalSpotlightLookup {
                     let name = result.value(forAttribute: NSMetadataItemFSNameKey) as? String
                         ?? url.lastPathComponent
                     let type = result.value(forAttribute: NSMetadataItemContentTypeKey) as? String
+                    let pathMatch = GlobalSearchRanker.pathMatchRank(url: url, for: term) < 3
+                    let transliteratedNameMatch = WorkspaceSearch.transliteratedContains(name, term)
+                    let transliteratedPathMatch = WorkspaceSearch.transliteratedContains(
+                        url.deletingLastPathComponent().path, term
+                    )
+                    let fuzzyNameMatch = WorkspaceSearch.fuzzyContains(name, term)
+                    let fuzzyPathMatch = WorkspaceSearch.fuzzyContains(
+                        url.deletingLastPathComponent().path, term
+                    )
                     let contentOnly = !name.localizedStandardContains(term)
+                        && !pathMatch && !transliteratedNameMatch && !transliteratedPathMatch
+                        && !fuzzyNameMatch && !fuzzyPathMatch
                     let relevance = (result.value(
                         forAttribute: NSMetadataQueryResultContentRelevanceAttribute
                     ) as? NSNumber)?.doubleValue ?? 0
@@ -64,12 +75,16 @@ final class GlobalSpotlightLookup {
     // broad, low-signal full-text searches.
     nonisolated static func searchPredicate(for term: String) -> NSPredicate {
         if term.count < 3 {
-            return NSPredicate(format: "%K CONTAINS[cd] %@",
-                               NSMetadataItemFSNameKey, term)
+            return NSPredicate(
+                format: "(%K CONTAINS[cd] %@) OR (%K CONTAINS[cd] %@)",
+                NSMetadataItemFSNameKey, term, NSMetadataItemPathKey, term
+            )
         }
         return NSPredicate(
-            format: "(%K CONTAINS[cd] %@) OR (%K CONTAINS[cd] %@)",
-            NSMetadataItemFSNameKey, term, "kMDItemTextContent", term
+            format: "(%K CONTAINS[cd] %@) OR (%K CONTAINS[cd] %@) OR (%K CONTAINS[cd] %@)",
+            NSMetadataItemFSNameKey, term,
+            "kMDItemTextContent", term,
+            NSMetadataItemPathKey, term
         )
     }
 
@@ -95,16 +110,36 @@ final class GlobalSpotlightLookup {
     /// Deterministic top-N projection; no local catalog or alternate index.
     nonisolated static func rank(_ entries: [GlobalSearchItem], for term: String, limit: Int = 35) -> [GlobalSearchItem] {
         let q = term.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        func nameRank(_ item: GlobalSearchItem) -> Int {
+            let name = item.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            if name == q { return 0 }
+            if name.hasPrefix(q) { return 1 }
+            if name.contains(q) { return 2 }
+            if WorkspaceSearch.transliteratedContains(item.title, q) { return 3 }
+            if WorkspaceSearch.fuzzyContains(item.title, q) { return 4 }
+            return 5
+        }
         return entries.sorted {
-            func rank(_ item: GlobalSearchItem) -> Int {
-                let name = item.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-                if name == q { return 0 }
-                if name.hasPrefix(q) { return 1 }
-                return 2
+            let leftName = nameRank($0)
+            let rightName = nameRank($1)
+            if leftName != rightName { return leftName < rightName }
+
+            let leftRawPath = GlobalSearchRanker.pathMatchRank(url: $0.url, for: q)
+            let rightRawPath = GlobalSearchRanker.pathMatchRank(url: $1.url, for: q)
+            let leftFolder = $0.url.deletingLastPathComponent().path
+            let rightFolder = $1.url.deletingLastPathComponent().path
+            let leftPath = leftRawPath < 3 ? leftRawPath
+                : WorkspaceSearch.transliteratedContains(leftFolder, q) ? 3
+                : WorkspaceSearch.fuzzyContains(leftFolder, q) ? 4 : 5
+            let rightPath = rightRawPath < 3 ? rightRawPath
+                : WorkspaceSearch.transliteratedContains(rightFolder, q) ? 3
+                : WorkspaceSearch.fuzzyContains(rightFolder, q) ? 4 : 5
+            if leftPath != rightPath { return leftPath < rightPath }
+
+            if leftName == 5, leftPath == 5,
+               $0.spotlightRelevance != $1.spotlightRelevance {
+                return $0.spotlightRelevance > $1.spotlightRelevance
             }
-            let left = rank($0)
-            let right = rank($1)
-            if left != right { return left < right }
             if $0.title.count != $1.title.count { return $0.title.count < $1.title.count }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }.prefix(max(0, limit)).map { $0 }

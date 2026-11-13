@@ -47,6 +47,7 @@ struct MarkdownPreviewSnapshot {
 struct MarkdownPreviewPane: View {
     @EnvironmentObject private var model: NotesModel
     @Environment(\.notesLanguage) private var language
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let source: String
     let revision: UInt64
     let live: Bool
@@ -204,7 +205,7 @@ struct MarkdownPreviewPane: View {
 
         lastAnchorJumpSequence = request.sequence
         model.message = nil
-        withAnimation(.easeInOut(duration: 0.18)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
             scroll.scrollTo(heading.sectionID, anchor: .top)
         }
         return true
@@ -216,7 +217,7 @@ struct MarkdownPreviewPane: View {
                   in: rendered.map(\.source), headingPath: hit.headingPath,
                   snippet: hit.snippet, query: model.matchedQuery
               ) else { return }
-        withAnimation(.easeInOut(duration: 0.18)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
             scroll.scrollTo(target, anchor: .top)
         }
     }

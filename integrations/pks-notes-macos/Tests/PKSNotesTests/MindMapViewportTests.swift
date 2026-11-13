@@ -3,6 +3,174 @@ import XCTest
 @testable import PKSNotes
 
 final class MindMapViewportTests: XCTestCase {
+    func testVisibleNodeCullingUsesViewportTransformAndScreenSpaceOverscan() {
+        func placement(_ id: Int, x: CGFloat, y: CGFloat) -> MindMapPlacement {
+            MindMapPlacement(
+                node: MindMapNode(id: id, depth: 0, title: "Node \(id)"),
+                parentID: nil,
+                center: CGPoint(x: x, y: y),
+                size: CGSize(width: 100, height: 60)
+            )
+        }
+
+        let placements = [
+            placement(1, x: 500, y: 500),
+            placement(2, x: 180, y: 500),
+            placement(3, x: 820, y: 500),
+            placement(4, x: 900, y: 500),
+            placement(5, x: 500, y: 100),
+            placement(6, x: 500, y: 730)
+        ]
+        let visible = MindMapViewportGeometry.visibleNodeIDs(
+            in: placements,
+            mapSize: CGSize(width: 1_000, height: 1_000),
+            viewport: CGSize(width: 400, height: 300),
+            offset: .zero,
+            zoom: 1,
+            overscan: 100
+        )
+
+        XCTAssertEqual(visible, Set([1, 2, 3, 6]))
+    }
+
+    func testVisibleNodeCullingTracksPanAndZoomAndPinsActiveNodes() {
+        let placements = [
+            MindMapPlacement(
+                node: MindMapNode(id: 1, depth: 0, title: "Near"),
+                parentID: nil,
+                center: CGPoint(x: 400, y: 500),
+                size: CGSize(width: 100, height: 60)
+            ),
+            MindMapPlacement(
+                node: MindMapNode(id: 2, depth: 0, title: "Far"),
+                parentID: nil,
+                center: CGPoint(x: 900, y: 900),
+                size: CGSize(width: 100, height: 60)
+            )
+        ]
+        let visible = MindMapViewportGeometry.visibleNodeIDs(
+            in: placements,
+            mapSize: CGSize(width: 1_000, height: 1_000),
+            viewport: CGSize(width: 400, height: 300),
+            offset: CGSize(width: 200, height: 0),
+            zoom: 2,
+            overscan: 0,
+            pinnedIDs: [2]
+        )
+
+        XCTAssertEqual(visible, Set([1, 2]))
+    }
+
+    func testInvalidViewportKeepsAllNodeCardsMounted() {
+        let placements = [
+            MindMapPlacement(
+                node: MindMapNode(id: 1, depth: 0, title: "One"),
+                parentID: nil,
+                center: CGPoint(x: 100, y: 100),
+                size: CGSize(width: 100, height: 60)
+            ),
+            MindMapPlacement(
+                node: MindMapNode(id: 2, depth: 0, title: "Two"),
+                parentID: nil,
+                center: CGPoint(x: 900, y: 900),
+                size: CGSize(width: 100, height: 60)
+            )
+        ]
+
+        XCTAssertEqual(
+            MindMapViewportGeometry.visibleNodeIDs(
+                in: placements,
+                mapSize: CGSize(width: 1_000, height: 1_000),
+                viewport: .zero,
+                offset: .zero,
+                zoom: 1
+            ),
+            Set([1, 2])
+        )
+        XCTAssertEqual(
+            MindMapViewportGeometry.visibleNodeIDs(
+                in: placements,
+                mapSize: CGSize(width: 1_000, height: 1_000),
+                viewport: CGSize(width: 400, height: 300),
+                offset: .zero,
+                zoom: 0
+            ),
+            Set([1, 2])
+        )
+    }
+
+    func testLargeMapCullingKeepsVisibleCardCountBoundedAndPreservesSelection() {
+        let placements = (0..<600).map { index in
+            MindMapPlacement(
+                node: MindMapNode(id: index, depth: 0, title: "Node \(index)"),
+                parentID: nil,
+                center: CGPoint(x: 500, y: 30 + CGFloat(index) * 100),
+                size: CGSize(width: 210, height: 60)
+            )
+        }
+        let visible = MindMapViewportGeometry.visibleNodeIDs(
+            in: placements,
+            mapSize: CGSize(width: 1_000, height: 60_000),
+            viewport: CGSize(width: 400, height: 300),
+            offset: .zero,
+            zoom: 1,
+            overscan: 320,
+            pinnedIDs: [599]
+        )
+
+        XCTAssertLessThan(visible.count, 20)
+        XCTAssertTrue(visible.contains(599))
+        XCTAssertTrue(visible.contains(300))
+    }
+
+    func testConnectorCullingKeepsCrossingCurvesAndStrokeCaps() {
+        let viewport = CGRect(x: 400, y: 200, width: 200, height: 200)
+
+        XCTAssertTrue(MindMapViewportGeometry.connectorIntersectsViewport(
+            start: CGPoint(x: 100, y: 300),
+            end: CGPoint(x: 900, y: 300),
+            control1: CGPoint(x: 250, y: 300),
+            control2: CGPoint(x: 750, y: 300),
+            viewport: viewport,
+            lineWidth: 2
+        ))
+        XCTAssertFalse(MindMapViewportGeometry.connectorIntersectsViewport(
+            start: CGPoint(x: 100, y: 700),
+            end: CGPoint(x: 900, y: 700),
+            control1: CGPoint(x: 250, y: 700),
+            control2: CGPoint(x: 750, y: 700),
+            viewport: viewport,
+            lineWidth: 2
+        ))
+        XCTAssertTrue(MindMapViewportGeometry.connectorIntersectsViewport(
+            start: CGPoint(x: 410, y: 189),
+            end: CGPoint(x: 600, y: 189),
+            control1: CGPoint(x: 450, y: 189),
+            control2: CGPoint(x: 550, y: 189),
+            viewport: viewport,
+            lineWidth: 24
+        ))
+    }
+
+    func testInvalidConnectorGeometryFailsOpenToPreserveDrawing() {
+        XCTAssertTrue(MindMapViewportGeometry.connectorIntersectsViewport(
+            start: CGPoint(x: CGFloat.nan, y: 10),
+            end: CGPoint(x: 100, y: 10),
+            control1: CGPoint(x: 20, y: 10),
+            control2: CGPoint(x: 80, y: 10),
+            viewport: CGRect(x: 0, y: 0, width: 200, height: 200),
+            lineWidth: 2
+        ))
+        XCTAssertTrue(MindMapViewportGeometry.connectorIntersectsViewport(
+            start: .zero,
+            end: CGPoint(x: 100, y: 10),
+            control1: CGPoint(x: 20, y: 10),
+            control2: CGPoint(x: 80, y: 10),
+            viewport: .zero,
+            lineWidth: 2
+        ))
+    }
+
     func testSelectionCanBeCenteredBeyondAnyCanvasEdge() {
         let map = CGSize(width: 4800, height: 9200)
         let node = CGPoint(x: 4770, y: 9140)

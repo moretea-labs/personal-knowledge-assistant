@@ -7,13 +7,23 @@ import UniformTypeIdentifiers
 enum MindMapKeyboard {
     enum Command: Equatable {
         case previous, next, parentOrCollapse, childOrExpand
-        case addChild, addSibling, promote, rename, toggleBranch
+        case addChild, addSibling, promote, demote, rename, toggleBranch
         case deleteLeaf, deleteBranch, boldTitle, italicTitle, toggleTask
         case fit, zoomIn, zoomOut, clearSelection
     }
 
     static func command(for key: KeyEquivalent, modifiers: EventModifiers) -> Command? {
-        guard !modifiers.contains(.control), !modifiers.contains(.option) else { return nil }
+        if modifiers.contains(.option) {
+            guard !modifiers.contains(.control),
+                  !modifiers.contains(.command),
+                  !modifiers.contains(.shift) else { return nil }
+            switch key {
+            case .leftArrow: return .promote
+            case .rightArrow: return .demote
+            default: return nil
+            }
+        }
+        guard !modifiers.contains(.control) else { return nil }
         if modifiers.contains(.command) {
             // Cmd+B / Cmd+I / Cmd+Return are owned by the app menu so they
             // work without relying on canvas first-responder focus. The menu
@@ -206,7 +216,8 @@ enum MindMapTitleEmphasis {
 
     static func display(_ title: String) -> AttributedString {
         guard title.contains("*") || title.contains("_") ||
-              title.contains("~") || title.utf8.contains(96) else {
+              title.contains("~") || title.utf8.contains(96) ||
+              title.contains("\\") || title.contains("&") else {
             return AttributedString(title)
         }
         let options = AttributedString.MarkdownParsingOptions(
@@ -230,10 +241,33 @@ enum MindMapExportBudget {
     }
 }
 
+struct MindMapNodeDragPayload: Codable, Transferable, Equatable, Sendable {
+    let canvasSessionID: UUID
+    let revision: UInt64
+    let nodeID: Int
+
+    func resolve(
+        in ids: Set<Int>,
+        target: Int,
+        canvasSessionID: UUID,
+        revision: UInt64
+    ) -> Int? {
+        guard self.canvasSessionID == canvasSessionID,
+              self.revision == revision,
+              ids.contains(nodeID),
+              ids.contains(target) else { return nil }
+        return nodeID
+    }
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .json)
+    }
+}
+
 /// An editable Markdown-backed mind-map canvas. Markdown remains the only document authority.
 struct MindMapCanvas: View {
     @Environment(\.notesLanguage) private var language
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(MindMapVisualStyle.defaultsKey) private var mapStyleID = MindMapVisualStyle.classic.rawValue
     @AppStorage(MindMapLayoutDensity.defaultsKey) private var layoutDensityID = MindMapLayoutDensity.standard.rawValue
     @Binding var source: String
@@ -244,7 +278,7 @@ struct MindMapCanvas: View {
     let connectSection: (Int) -> Void
     let createLinkedNote: (Int) -> Void
     let revealSource: (Int) -> Void
-    let importOutline: (String, String, [MindNodePackage.ImportedImage]) -> Bool
+    let importOutline: (String, String, [MindNodePackage.ImportedImage], [MindNodePackage.ImportedPDF]) -> Bool
     @State private var renameTitle = ""
     @State private var editingNodeID: Int?
     @State private var editingCreatedNodeID: Int?
@@ -263,6 +297,7 @@ struct MindMapCanvas: View {
     @State private var showingNodeDetails = true
     @State private var didInitializeViewport = false
     @State private var mapContentVersion = 0
+    @State private var dragSessionID = UUID()
     @State private var dropTargetID: Int?
     @State private var gestureBaseZoom: CGFloat?
     @State private var nodes: [MindMapNode] = []
@@ -270,6 +305,7 @@ struct MindMapCanvas: View {
     @State private var visible: [MindMapNode] = []
     @State private var mapLayout = MindMapSpatialLayout.layout([])
     @State private var projectionReady = false
+    @State private var projectedRevision: UInt64?
     @State private var canPromote = false
     @State private var canDemote = false
     @State private var canDeleteLeaf = false
@@ -284,6 +320,8 @@ struct MindMapCanvas: View {
         MindMapLayoutDensity(rawValue: layoutDensityID) ?? .standard
     }
 
+    private var projectionIsCurrent: Bool { projectedRevision == revision }
+
     /// The expensive node and connector tree does not change when the user pans
     /// or magnifies the viewport. Keep it out of those per-frame view updates.
     private struct MapContentKey: Equatable {
@@ -297,9 +335,11 @@ struct MindMapCanvas: View {
         let densityID: String
         let scheme: ColorScheme
         let language: AppLanguage
+        let projectionIsCurrent: Bool
+        let visibleNodeIDs: Set<Int>
     }
 
-    private struct MapContentSnapshot: View, Equatable {
+    private struct MapNodeCardsSnapshot: View, Equatable {
         let owner: MindMapCanvas
         let layout: MindMapLayoutSnapshot
         let key: MapContentKey
@@ -307,8 +347,24 @@ struct MindMapCanvas: View {
         static func == (lhs: Self, rhs: Self) -> Bool { lhs.key == rhs.key }
 
         var body: some View {
-            owner.spatialCanvas(layout)
+            owner.nodeCards(layout, visibleNodeIDs: key.visibleNodeIDs)
         }
+    }
+
+    private var visibleNodeIDs: Set<Int> {
+        let pinned = Set([selectedID, editingNodeID, dropTargetID].compactMap { $0 })
+        return MindMapViewportGeometry.visibleNodeIDs(
+            in: mapLayout.placements,
+            mapSize: mapLayout.size,
+            viewport: viewportSize,
+            offset: CGSize(
+                width: viewportOffset.width + canvasDrag.width,
+                height: viewportOffset.height + canvasDrag.height
+            ),
+            zoom: zoom,
+            overscan: 320,
+            pinnedIDs: pinned
+        )
     }
 
     private var mapContentKey: MapContentKey {
@@ -322,7 +378,9 @@ struct MindMapCanvas: View {
             styleID: mapStyleID,
             densityID: layoutDensityID,
             scheme: colorScheme,
-            language: language
+            language: language,
+            projectionIsCurrent: projectionIsCurrent,
+            visibleNodeIDs: visibleNodeIDs
         )
     }
 
@@ -376,10 +434,9 @@ struct MindMapCanvas: View {
                                 .accessibilityIdentifier("pks-mind-map-create")
                             }
                         } else {
-                            MapContentSnapshot(
-                                owner: self, layout: mapLayout, key: mapContentKey
-                            )
-                            .equatable()
+                            interactiveCanvas(mapLayout)
+                                .allowsHitTesting(projectionIsCurrent)
+                                .accessibilityHidden(!projectionIsCurrent)
                                 .scaleEffect(zoom)
                                 .position(
                                     x: viewport.size.width / 2 + viewportOffset.width + canvasDrag.width,
@@ -443,12 +500,12 @@ struct MindMapCanvas: View {
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .pksMindMapFit)) { _ in
                         guard fitToContent(viewport: viewport.size) else { return }
-                        withAnimation(.easeOut(duration: 0.18)) { viewportOffset = .zero }
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { viewportOffset = .zero }
                     }
                     .onChange(of: selectedID) { _, selected in
                         guard let selected,
                               let position = mapLayout.placements.first(where: { $0.id == selected }) else { return }
-                        withAnimation(.easeOut(duration: 0.16)) {
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
                             viewportOffset = MindMapViewportGeometry.centeredOffset(
                                 for: position.center, mapSize: mapLayout.size, zoom: zoom
                             )
@@ -467,8 +524,16 @@ struct MindMapCanvas: View {
                    let selectedID,
                    let node = nodes.first(where: { $0.id == selectedID }) {
                     Divider()
+                        .transition(reduceMotion ? .identity : .opacity)
                     nodeDetails(node)
                         .frame(width: 270)
+                        .allowsHitTesting(projectionIsCurrent)
+                        .accessibilityHidden(!projectionIsCurrent)
+                        .transition(
+                            reduceMotion
+                                ? .identity
+                                : .move(edge: .trailing).combined(with: .opacity)
+                        )
                 }
             }
         }
@@ -481,15 +546,16 @@ struct MindMapCanvas: View {
             titleVisibility: .visible
         ) {
             Button(language.text("Delete Branch"), role: .destructive) {
-                if let id = branchDeleteCandidateID,
+                if projectionIsCurrent,
+                   let id = branchDeleteCandidateID,
                    let updated = MindMapOutline.deleteListSubtree(in: source, nodeID: id) {
                     source = updated
                     selectedID = nil
-                    collapsed.removeAll()
                 }
                 branchDeleteCandidateID = nil
                 restoreCanvasFocusAfterMenu()
             }
+            .disabled(!projectionIsCurrent)
             Button(language.text("Cancel"), role: .cancel) {
                 branchDeleteCandidateID = nil
                 restoreCanvasFocusAfterMenu()
@@ -511,23 +577,69 @@ struct MindMapCanvas: View {
         .task(id: revision) {
             let input = source
             let sourceRevision = revision
+            let previousNodes = nodes
+            let createdSourceSnapshot = createdNodeDraftSnapshot
             if nodes.isEmpty { projectionReady = false }
 
             let parser = Task.detached(priority: .userInitiated) {
+                () -> (nodes: [MindMapNode], presentations: [Int: MindMapNodePresentation],
+                       lineIndexMap: [Int: Int], createdNodeLineIndexMap: [Int: Int])? in
                 let nodes = MindMapOutline.nodes(in: input)
+                guard !Task.isCancelled else { return nil }
                 let presentations = MindMapOutline.presentations(in: input, nodes: nodes)
-                return (nodes: nodes, presentations: presentations)
+                guard !Task.isCancelled else { return nil }
+                let lineIndexMap = MindMapOutline.lineIndexMap(from: previousNodes, to: nodes)
+                guard !Task.isCancelled else { return nil }
+                let createdNodeLineIndexMap = createdSourceSnapshot.map {
+                    MindMapOutline.lineIndexMap(from: MindMapOutline.nodes(in: $0), to: nodes)
+                } ?? [:]
+                guard !Task.isCancelled else { return nil }
+                return (nodes: nodes, presentations: presentations, lineIndexMap: lineIndexMap, createdNodeLineIndexMap: createdNodeLineIndexMap)
             }
-            defer { parser.cancel() }
-            let projection = await parser.value
-            guard !Task.isCancelled, revision == sourceRevision else { return }
+            let projection = await withTaskCancellationHandler {
+                await parser.value
+            } onCancel: {
+                parser.cancel()
+            }
+            guard let projection, !Task.isCancelled, revision == sourceRevision else { return }
+
+            let oldNodeIDs = Set(previousNodes.map(\.id))
+            let newNodeIDs = Set(projection.nodes.map(\.id))
+            func rebaseNodeID(_ id: Int?) -> Int? {
+                guard let id else { return nil }
+                if oldNodeIDs.contains(id) { return projection.lineIndexMap[id] }
+                return newNodeIDs.contains(id) ? id : nil
+            }
+
+            let rebasedCollapsed = Set(collapsed.compactMap { projection.lineIndexMap[$0] })
+            let rebasedCreatedNodeID = editingCreatedNodeID.flatMap { projection.createdNodeLineIndexMap[$0] }
+            let isEditingCreatedNode = editingCreatedNodeID != nil
+            let rebasedSelectedID = isEditingCreatedNode && selectedID == editingCreatedNodeID
+                ? rebasedCreatedNodeID : rebaseNodeID(selectedID)
+            let rebasedEditingNodeID = isEditingCreatedNode && editingNodeID == editingCreatedNodeID
+                ? rebasedCreatedNodeID : rebaseNodeID(editingNodeID)
+            let rebasedDeleteCandidateID = rebaseNodeID(branchDeleteCandidateID)
+            let rebasedDropTargetID = rebaseNodeID(dropTargetID)
 
             nodes = projection.nodes
             nodePresentations = projection.presentations
+            projectedRevision = sourceRevision
             projectionReady = true
-            rebuildVisibleLayout()
-            if let selectedID, !projection.nodes.contains(where: { $0.id == selectedID }) {
-                self.selectedID = nil
+            selectedID = rebasedSelectedID
+            editingNodeID = rebasedEditingNodeID
+            editingCreatedNodeID = rebasedCreatedNodeID
+            branchDeleteCandidateID = rebasedDeleteCandidateID
+            dropTargetID = rebasedDropTargetID
+            if editingNodeID == nil && editingCreatedNodeID == nil {
+                renameTitle = ""
+            }
+            if editingCreatedNodeID == nil {
+                createdNodeDraftSnapshot = nil
+            }
+            if rebasedCollapsed != collapsed {
+                collapsed = rebasedCollapsed
+            } else {
+                rebuildVisibleLayout()
             }
         }
         .onChange(of: collapsed) { _, _ in
@@ -601,6 +713,11 @@ struct MindMapCanvas: View {
             Text(language.text("Mind Map"))
                 .font(.headline)
                 .lineLimit(1)
+            if !projectionIsCurrent {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel(language.text("Preparing mind map…"))
+            }
             Spacer(minLength: 8)
             Button {
                 addChild()
@@ -636,7 +753,9 @@ struct MindMapCanvas: View {
             .accessibilityIdentifier("pks-mind-map-rename")
 
             Button {
-                showingNodeDetails.toggle()
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                    showingNodeDetails.toggle()
+                }
                 restoreCanvasFocusAfterMenu()
             } label: {
                 Image(systemName: showingNodeDetails ? "sidebar.right" : "info.circle")
@@ -849,6 +968,7 @@ struct MindMapCanvas: View {
         .controlSize(.small)
         .padding(.horizontal, 14)
         .frame(height: 46)
+        .disabled(!projectionIsCurrent)
     }
 
     private func nodeDetails(_ node: MindMapNode) -> some View {
@@ -860,7 +980,10 @@ struct MindMapCanvas: View {
                 Text(language.text("Node Details")).font(.headline)
                 Spacer()
                 Button {
-                    showingNodeDetails = false
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                        showingNodeDetails = false
+                    }
+                    requestCanvasFocus()
                 } label: {
                     Image(systemName: "xmark")
                 }
@@ -925,6 +1048,8 @@ struct MindMapCanvas: View {
         let rows: [(String, String)] = [
             ("↑ / ↓", "Select previous / next node"),
             ("← / →", "Parent / child; collapse / expand"),
+            ("⌥ ←", "Promote node"),
+            ("⌥ →", "Make child of previous sibling"),
             ("Tab", "Add Child"),
             ("Return", "Add Sibling"),
             ("E", "Rename node"),
@@ -960,7 +1085,7 @@ struct MindMapCanvas: View {
     }
 
     private func selectNode(_ nodeID: Int) {
-        guard editingNodeID != nodeID else { return }
+        guard projectionIsCurrent, editingNodeID != nodeID else { return }
         if editingNodeID != nil {
             finishRename(save: true)
             guard editingNodeID == nil else { return }
@@ -991,6 +1116,7 @@ struct MindMapCanvas: View {
 
     @discardableResult
     private func performShortcut(_ command: MindMapKeyboard.Command) -> Bool {
+        guard projectionIsCurrent else { return false }
         switch command {
         case .previous, .next:
             guard !visible.isEmpty else { return false }
@@ -1040,7 +1166,9 @@ struct MindMapCanvas: View {
         case .promote:
             guard let updated = shiftedSource(deeper: false) else { return false }
             source = updated
-            collapsed.removeAll()
+        case .demote:
+            guard let updated = shiftedSource(deeper: true) else { return false }
+            source = updated
         case .rename:
             guard selectedID != nil else { return false }
             beginRename()
@@ -1053,7 +1181,6 @@ struct MindMapCanvas: View {
         case .deleteLeaf:
             guard let selectedID, let updated = MindMapOutline.deleteLeaf(in: source, nodeID: selectedID)
             else { return false }
-            collapsed = MindMapOutline.rebasedLineIndexes(collapsed, afterDeletingLine: selectedID)
             source = updated
             self.selectedID = nil
         case .deleteBranch:
@@ -1070,76 +1197,148 @@ struct MindMapCanvas: View {
         return true
     }
 
+    /// The connector viewport changes on every pan/zoom update. Keep this
+    /// Canvas outside the equatable node-card snapshot so unchanged card sets
+    /// cannot leave connector clipping tied to an older viewport.
     @ViewBuilder
-    private func spatialCanvas(_ layout: MindMapLayoutSnapshot, exporting: Bool = false) -> some View {
-        let byID = Dictionary(uniqueKeysWithValues: layout.placements.map { ($0.id, $0) })
-        // Build once per rendered map. Never reparse the full Markdown for each card.
-        let allNodes = nodes
-        let branchByID = MindMapVisualStyle.branchIndices(allNodes)
-        let parentIDs = Set(allNodes.indices.dropLast().compactMap { index -> Int? in
-            allNodes[index + 1].depth > allNodes[index].depth ? allNodes[index].id : nil
-        })
+    private func interactiveCanvas(_ layout: MindMapLayoutSnapshot) -> some View {
         ZStack(alignment: .topLeading) {
-            ForEach(layout.placements) { placement in
-                if let parentID = placement.parentID, let parent = byID[parentID] {
-                    connector(from: parent, to: placement,
-                              branch: branchByID[placement.id] ?? 0)
-                }
-            }
-
-            ForEach(layout.placements) { placement in
-                nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id),
-                         branch: branchByID[placement.id] ?? 0,
-                         dropHeight: placement.size.height, exporting: exporting)
-                    .frame(width: placement.size.width, height: placement.size.height)
-                    .position(placement.center)
-                    .id(placement.id)
-            }
-
-            Color.clear
-                .frame(width: 1, height: 1)
-                .position(x: layout.size.width / 2, y: layout.size.height / 2)
-                .id("pks-mind-map-center")
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            connectorCanvas(layout)
+            MapNodeCardsSnapshot(owner: self, layout: layout, key: mapContentKey)
+                .equatable()
+            mapCenterAnchor(layout)
         }
         .frame(width: layout.size.width, height: layout.size.height, alignment: .topLeading)
     }
 
-    private func connector(from parent: MindMapPlacement, to child: MindMapPlacement,
-                           branch: Int) -> some View {
-        Path { path in
-            let start = CGPoint(
-                x: parent.center.x + parent.size.width / 2,
-                y: parent.center.y
+    @ViewBuilder
+    private func spatialCanvas(
+        _ layout: MindMapLayoutSnapshot,
+        exporting: Bool = false,
+        visibleNodeIDs: Set<Int>? = nil
+    ) -> some View {
+        ZStack(alignment: .topLeading) {
+            connectorCanvas(layout, exporting: exporting)
+            nodeCards(layout, visibleNodeIDs: visibleNodeIDs, exporting: exporting)
+            mapCenterAnchor(layout)
+        }
+        .frame(width: layout.size.width, height: layout.size.height, alignment: .topLeading)
+    }
+
+    /// One Canvas replaces one SwiftUI Shape view per edge. It reads the live
+    /// viewport transform while node-card identity remains independently cached.
+    private func connectorCanvas(
+        _ layout: MindMapLayoutSnapshot,
+        exporting: Bool = false
+    ) -> some View {
+        let byID = layout.placementsByID
+        let connectorViewport = !exporting
+            ? MindMapViewportGeometry.visibleRect(
+                mapSize: layout.size,
+                viewport: viewportSize,
+                offset: CGSize(
+                    width: viewportOffset.width + canvasDrag.width,
+                    height: viewportOffset.height + canvasDrag.height
+                ),
+                zoom: zoom,
+                overscan: 320
             )
-            let end = CGPoint(
-                x: child.center.x - child.size.width / 2,
-                y: child.center.y
-            )
-            path.move(to: start)
-            if mapStyle.angularConnectors {
-                let middleX = (start.x + end.x) / 2
-                path.addLine(to: CGPoint(x: middleX, y: start.y))
-                path.addLine(to: CGPoint(x: middleX, y: end.y))
-                path.addLine(to: end)
-            } else {
-                let bend = max(34, (end.x - start.x) * 0.48)
-                path.addCurve(
-                    to: end,
-                    control1: CGPoint(x: start.x + bend, y: start.y),
-                    control2: CGPoint(x: end.x - bend, y: end.y)
+            : nil
+        let branchByID = layout.branchByID
+        return Canvas { context, _ in
+            for placement in layout.placements {
+                guard let parentID = placement.parentID,
+                      let parent = byID[parentID] else { continue }
+                let start = CGPoint(
+                    x: parent.center.x + parent.size.width / 2,
+                    y: parent.center.y
+                )
+                let end = CGPoint(
+                    x: placement.center.x - placement.size.width / 2,
+                    y: placement.center.y
+                )
+                let control1: CGPoint
+                let control2: CGPoint
+                if mapStyle.angularConnectors {
+                    let middleX = (start.x + end.x) / 2
+                    control1 = CGPoint(x: middleX, y: start.y)
+                    control2 = CGPoint(x: middleX, y: end.y)
+                } else {
+                    let bend = max(34, (end.x - start.x) * 0.48)
+                    control1 = CGPoint(x: start.x + bend, y: start.y)
+                    control2 = CGPoint(x: end.x - bend, y: end.y)
+                }
+                if let connectorViewport,
+                   !MindMapViewportGeometry.connectorIntersectsViewport(
+                    start: start, end: end,
+                    control1: control1, control2: control2,
+                    viewport: connectorViewport,
+                    lineWidth: mapStyle.connectorWidth
+                   ) {
+                    continue
+                }
+
+                var path = Path()
+                path.move(to: start)
+                if mapStyle.angularConnectors {
+                    path.addLine(to: control1)
+                    path.addLine(to: control2)
+                    path.addLine(to: end)
+                } else {
+                    path.addCurve(to: end, control1: control1, control2: control2)
+                }
+                let branch = branchByID[placement.id] ?? 0
+                let color = mapStyle == .colorful
+                    ? mapStyle.branchColor(branch).opacity(0.67)
+                    : Color.secondary.opacity(mapStyle == .minimal ? 0.43 : 0.30)
+                context.stroke(
+                    path,
+                    with: .color(color),
+                    style: StrokeStyle(
+                        lineWidth: mapStyle.connectorWidth,
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
                 )
             }
         }
-        .stroke(
-            mapStyle == .colorful
-                ? mapStyle.branchColor(branch).opacity(0.67)
-                : Color.secondary.opacity(mapStyle == .minimal ? 0.43 : 0.30),
-            style: StrokeStyle(lineWidth: mapStyle.connectorWidth, lineCap: .round,
-                               lineJoin: .round)
-        )
+        .frame(width: layout.size.width, height: layout.size.height)
         .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func nodeCards(
+        _ layout: MindMapLayoutSnapshot,
+        visibleNodeIDs: Set<Int>? = nil,
+        exporting: Bool = false
+    ) -> some View {
+        let renderedPlacements = visibleNodeIDs.map { visibleIDs in
+            layout.placements.filter { visibleIDs.contains($0.id) }
+        } ?? layout.placements
+        // Disclosure state comes from the full outline; branch indices are cached with layout.
+        let allNodes = nodes
+        let branchByID = layout.branchByID
+        let parentIDs = Set(allNodes.indices.dropLast().compactMap { index -> Int? in
+            allNodes[index + 1].depth > allNodes[index].depth ? allNodes[index].id : nil
+        })
+        ForEach(renderedPlacements) { placement in
+            nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id),
+                     branch: branchByID[placement.id] ?? 0,
+                     dropHeight: placement.size.height, exporting: exporting)
+                .frame(width: placement.size.width, height: placement.size.height)
+                .position(placement.center)
+                .id(placement.id)
+        }
+    }
+
+    private func mapCenterAnchor(_ layout: MindMapLayoutSnapshot) -> some View {
+        Color.clear
+            .frame(width: 1, height: 1)
+            .position(x: layout.size.width / 2, y: layout.size.height / 2)
+            .id("pks-mind-map-center")
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -1328,9 +1527,23 @@ struct MindMapCanvas: View {
         .shadow(color: .black.opacity(mapStyle == .minimal ? 0 : (node.depth == 0 ? 0.08 : 0.045)),
                 radius: mapStyle == .minimal ? 0 : 8, y: mapStyle == .minimal ? 0 : 3)
         .contentShape(RoundedRectangle(cornerRadius: cardRadius))
-        .draggable(String(node.id))
-        .dropDestination(for: String.self) { items, location in
-            guard let raw = items.first, let draggedID = Int(raw) else { return false }
+        .draggable(MindMapNodeDragPayload(
+            canvasSessionID: dragSessionID,
+            revision: projectedRevision ?? revision,
+            nodeID: node.id
+        ))
+        .dropDestination(for: MindMapNodeDragPayload.self) { items, location in
+            // The canvas only accepts drops for its current projection; reuse it instead of reparsing Markdown on the main-thread drop path.
+            let ids = Set(nodes.map(\.id))
+            guard let payload = items.first,
+                  let draggedID = payload.resolve(
+                    in: ids, target: node.id,
+                    canvasSessionID: dragSessionID,
+                    revision: revision
+                  ) else {
+                dropTargetID = nil
+                return false
+            }
             guard draggedID != node.id else {
                 dropTargetID = nil
                 return true
@@ -1359,9 +1572,15 @@ struct MindMapCanvas: View {
                 dropTargetID = nil
                 return false
             }
+            // A child drop must reveal the newly attached node, but unrelated
+            // collapsed branches (including descendants) keep their state.
+            if placement == .child { collapsed.remove(node.id) }
             source = outcome.source
-            selectedID = outcome.movedNodeID
-            collapsed.removeAll()
+            // Selection still belongs to the previous projection here. The
+            // revision task maps this original ID to the moved node's new line
+            // index; assigning outcome.movedNodeID would map it a second time
+            // when that index collides with another old node.
+            selectedID = draggedID
             dropTargetID = nil
             return true
         } isTargeted: { targeted in
@@ -1485,7 +1704,8 @@ struct MindMapCanvas: View {
 
     @discardableResult
     private func toggleTitleEmphasis(nodeID: Int, marker: String) -> Bool {
-        guard editingNodeID == nil,
+        guard projectionIsCurrent,
+              editingNodeID == nil,
               let node = MindMapOutline.nodes(in: source).first(where: { $0.id == nodeID }),
               let updated = MindMapOutline.rename(
                 in: source, nodeID: nodeID,
@@ -1499,30 +1719,33 @@ struct MindMapCanvas: View {
 
     @discardableResult
     private func addChild() -> Bool {
-        guard let id = selectedID ?? nodes.first?.id else { return false }
+        guard projectionIsCurrent,
+              let id = selectedID ?? nodes.first?.id else { return false }
         guard let outcome = MindMapOutline.addChildWithOutcome(in: source, parentID: id) else {
             interchangeError = language.text(
                 "Cannot add a node here without changing attached Markdown. Use the editor."
             )
             return false
         }
+        collapsed.remove(id)
         source = outcome.source
-        collapsed.removeAll()
         startEditingNode(outcome.nodeID, title: "New idea", created: true)
         return true
     }
 
     @discardableResult
     private func addSibling() -> Bool {
-        guard let id = selectedID ?? nodes.first?.id else { return false }
+        guard projectionIsCurrent,
+              let id = selectedID ?? nodes.first?.id else { return false }
+        let createsChild = !MindMapOutline.isListNode(in: source, nodeID: id)
         guard let outcome = MindMapOutline.addSiblingWithOutcome(in: source, nodeID: id) else {
             interchangeError = language.text(
                 "Cannot add a node here without changing attached Markdown. Use the editor."
             )
             return false
         }
+        if createsChild { collapsed.remove(id) }
         source = outcome.source
-        collapsed.removeAll()
         startEditingNode(outcome.nodeID, title: "New idea", created: true)
         return true
     }
@@ -1564,16 +1787,16 @@ struct MindMapCanvas: View {
     private func importXMind() {
         let panel = NSOpenPanel()
         panel.title = language.text("Import XMind File")
-        panel.message = language.text("Import XMind topics and plain-text notes into an editable Markdown map. The original .xmind file remains unchanged; images, styling, tasks and connections are not converted.")
+        panel.message = language.text("Import XMind topics, notes, labels, marker IDs, web links, relationship descriptions and embedded PNG, JPEG and TIFF images into an editable Markdown map. Images are copied into the new note; styles, task behavior and connection geometry are not converted. The original .xmind file remains unchanged.")
         panel.allowedContentTypes = [UTType(filenameExtension: "xmind") ?? .zip]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let markdown = try withSecurityScopedAccess(to: url) {
-                try XMindPackage.importOutline(from: url)
+            let imported = try withSecurityScopedAccess(to: url) {
+                try XMindPackage.importDocument(from: url)
             }
-            if importOutline(markdown, url.deletingPathExtension().lastPathComponent, []) {
-                interchangeError = language.text("XMind topics and plain-text notes imported. Images, styling, tasks and cross-connections remain in the original file.")
+            if importOutline(imported.markdown, url.deletingPathExtension().lastPathComponent, imported.images, []) {
+                interchangeError = language.text("XMind topics, notes, labels, marker IDs, web links, relationship descriptions and embedded PNG, JPEG and TIFF images imported. Styles, task behavior and connection geometry remain in the original file.")
             }
         } catch {
             interchangeError = error.localizedDescription
@@ -1582,8 +1805,8 @@ struct MindMapCanvas: View {
 
     private func importMindNode() {
         let panel = NSOpenPanel()
-        panel.title = language.text("Import MindNode Package")
-        panel.message = language.text("Select a .mindnode package. Nodes, textual notes and supported PNG images are imported into a new note; the original stays unchanged.")
+        panel.title = language.text("Import MindNode Document")
+        panel.message = language.text("Select a MindNode Next package or a MindNode Classic package or single-file document. Node titles, notes and supported PNG images or PDF attachments become editable Markdown; the source stays unchanged.")
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = false
@@ -1593,8 +1816,11 @@ struct MindMapCanvas: View {
             let imported = try withSecurityScopedAccess(to: url) {
                 try MindNodePackage.importDocument(from: url)
             }
-            if importOutline(imported.markdown, url.deletingPathExtension().lastPathComponent, imported.images) {
-                interchangeError = language.text("MindNode topics and notes imported into editable Markdown. Supported PNG images are copied; original layout, styling, tasks and cross-connections remain in the source.")
+            if importOutline(
+                imported.markdown, url.deletingPathExtension().lastPathComponent,
+                imported.images, imported.pdfs
+            ) {
+                interchangeError = language.text("MindNode topics, notes and supported PDF attachments imported. Images and PDFs are copied into the new note; original layout, styling, tasks and cross-connections remain in the source.")
             }
         } catch {
             interchangeError = error.localizedDescription
@@ -1612,7 +1838,7 @@ struct MindMapCanvas: View {
                 try Data(contentsOf: url)
             }
             let text = try MindMapInterchange.importOPML(data)
-            _ = importOutline(text, url.deletingPathExtension().lastPathComponent, [])
+            _ = importOutline(text, url.deletingPathExtension().lastPathComponent, [], [])
         } catch {
             interchangeError = error.localizedDescription
         }
@@ -1725,7 +1951,7 @@ struct MindMapCanvas: View {
     private func centerSelectedNode() {
         guard let selectedID,
               let position = mapLayout.placements.first(where: { $0.id == selectedID }) else { return }
-        withAnimation(.easeOut(duration: 0.18)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
             viewportOffset = MindMapViewportGeometry.centeredOffset(
                 for: position.center, mapSize: mapLayout.size, zoom: zoom
             )
@@ -1769,7 +1995,8 @@ struct MindMapCanvas: View {
     }
 
     private func beginRename() {
-        guard let node = nodes.first(where: { $0.id == selectedID }) else { return }
+        guard projectionIsCurrent,
+              let node = nodes.first(where: { $0.id == selectedID }) else { return }
         startEditingNode(node.id, title: node.title)
     }
 
@@ -1784,7 +2011,7 @@ struct MindMapCanvas: View {
     }
 
     private func finishRename(save: Bool) {
-        guard let id = editingNodeID else { return }
+        guard let id = editingNodeID, !save || projectionIsCurrent else { return }
         if save {
             // Invalid titles stay in the inline editor instead of silently
             // committing the placeholder/original text.
@@ -1825,9 +2052,9 @@ struct MindMapCanvas: View {
     }
 
     private func shiftSelected(deeper: Bool) {
-        guard let updated = shiftedSource(deeper: deeper) else { return }
+        guard projectionIsCurrent,
+              let updated = shiftedSource(deeper: deeper) else { return }
         source = updated
-        collapsed.removeAll()
     }
 }
 

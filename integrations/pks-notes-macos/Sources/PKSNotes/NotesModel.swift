@@ -590,21 +590,44 @@ enum WorkspaceFiles {
         nextAvailableNoteName(basedOn: "Untitled", in: folder)
     }
 
-    static func storePastedPNG(_ data: Data, for note: URL, in root: URL, stem: String = "pasted-image") -> String? {
-        guard contains(note, in: root), ["md", "markdown"].contains(note.pathExtension.lowercased()),
-              !data.isEmpty else { return nil }
-        let folder = note.deletingLastPathComponent().appendingPathComponent("attachments", isDirectory: true)
-        guard contains(folder, in: root) else { return nil }
+    static func storeAttachment(
+        _ data: Data, for note: URL, in root: URL, stem: String, fileExtension: String
+    ) -> String? {
+        let ext = fileExtension.lowercased()
+        guard contains(note, in: root),
+              ["md", "markdown"].contains(note.pathExtension.lowercased()),
+              ["png", "pdf"].contains(ext), !data.isEmpty,
+              stem.range(of: #"^[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil else {
+            return nil
+        }
+        let folder = note.deletingLastPathComponent()
+            .appendingPathComponent("attachments", isDirectory: true)
 
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            guard contains(folder, in: root) else { return nil }
             for index in 1...10_000 {
                 let suffix = index == 1 ? "" : "-\(index)"
-                let filename = stem + suffix + ".png"
+                let filename = stem + suffix + "." + ext
                 let destination = folder.appendingPathComponent(filename)
-                if !FileManager.default.fileExists(atPath: destination.path) {
-                    try data.write(to: destination, options: .atomic)
+                let descriptor = destination.path.withCString {
+                    Darwin.open($0, O_WRONLY | O_CREAT | O_EXCL, mode_t(0o644))
+                }
+                if descriptor < 0 {
+                    if errno == EEXIST { continue }
+                    return nil
+                }
+                let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+                do {
+                    try handle.write(contentsOf: data)
+                    try handle.close()
                     return "attachments/" + filename
+                } catch {
+                    try? handle.close()
+                    if (try? Data(contentsOf: destination)) == data {
+                        try? FileManager.default.removeItem(at: destination)
+                    }
+                    return nil
                 }
             }
         } catch {
@@ -2296,6 +2319,7 @@ final class NotesModel: ObservableObject {
                  navigationDecision: UnsavedNoteDecision? = nil,
                  initialContent: String? = nil,
                  importedImages: [MindNodePackage.ImportedImage] = [],
+                 importedPDFs: [MindNodePackage.ImportedPDF] = [],
                  preservePDFPreview: Bool = false,
                  activateAfterCreation: Bool = true) -> URL? {
         guard let root else {
@@ -2338,21 +2362,30 @@ final class NotesModel: ObservableObject {
             message = AppLanguage.current.text("Cannot create note. The filename may already exist."); return nil
         }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        var createdImages: [(url: URL, data: Data)] = []
+        var createdAttachments: [(url: URL, data: Data)] = []
         do {
             var content = initialContent ?? (name == nil ? "" : "# \(url.deletingPathExtension().lastPathComponent)\n\n")
-            // Imported images are written by the same canonical note writer
-            // already used for pasted images. Resolve unique paths before
-            // committing the note body; never overwrite a preexisting asset.
+            // Imported files share the one workspace-local attachments writer.
+            // Resolve unique paths before committing the Markdown body.
             for image in importedImages {
                 guard content.contains(image.marker),
-                      let relative = WorkspaceFiles.storePastedPNG(
-                          image.png, for: url, in: root, stem: image.stem
+                      let relative = WorkspaceFiles.storeAttachment(
+                          image.png, for: url, in: root, stem: image.stem, fileExtension: "png"
                       ) else { throw CocoaError(.fileWriteUnknown) }
-                createdImages.append((
+                createdAttachments.append((
                     folder.appendingPathComponent(relative).standardizedFileURL, image.png
                 ))
                 content = content.replacingOccurrences(of: image.marker, with: relative)
+            }
+            for pdf in importedPDFs {
+                guard content.contains(pdf.marker),
+                      let relative = WorkspaceFiles.storeAttachment(
+                          pdf.data, for: url, in: root, stem: pdf.stem, fileExtension: "pdf"
+                      ) else { throw CocoaError(.fileWriteUnknown) }
+                createdAttachments.append((
+                    folder.appendingPathComponent(relative).standardizedFileURL, pdf.data
+                ))
+                content = content.replacingOccurrences(of: pdf.marker, with: relative)
             }
             try handle.write(contentsOf: Data(content.utf8))
             try handle.close()
@@ -2364,9 +2397,9 @@ final class NotesModel: ObservableObject {
         } catch {
             try? handle.close()
             // Delete only imported files we created and only if unchanged.
-            for image in createdImages {
-                if (try? Data(contentsOf: image.url)) == image.data {
-                    try? FileManager.default.removeItem(at: image.url)
+            for attachment in createdAttachments {
+                if (try? Data(contentsOf: attachment.url)) == attachment.data {
+                    try? FileManager.default.removeItem(at: attachment.url)
                 }
             }
             try? FileManager.default.removeItem(at: url)
@@ -2445,6 +2478,39 @@ final class NotesModel: ObservableObject {
         }
     }
 
+    func searchWorkspaceNames(_ query: String) async -> [SearchHit] {
+        await localWorkspaceSearch(query, searchBodies: false).hits
+    }
+
+    private func localWorkspaceSearch(
+        _ query: String, searchBodies: Bool
+    ) async -> WorkspaceSearch.Result {
+        guard let workspaceRoot = root,
+              await ensureGlobalFileIndex(), !Task.isCancelled else {
+            return WorkspaceSearch.Result()
+        }
+        // Reuse the complete-vault Quick Open projection; do not create another index.
+        let entries = globalQuickOpenEntries.map { WorkspaceSearch.Entry($0) }
+        let currentNote = selected
+        let currentDraft = draft
+        let localTask = Task.detached(priority: .userInitiated) {
+            WorkspaceSearch.search(
+                entries: entries, root: workspaceRoot, query: query,
+                draftURL: currentNote, draft: currentDraft,
+                searchBodies: searchBodies
+            )
+        }
+        let result = await withTaskCancellationHandler(operation: {
+            await localTask.value
+        }, onCancel: {
+            localTask.cancel()
+        })
+        guard !Task.isCancelled, root == workspaceRoot else {
+            return WorkspaceSearch.Result()
+        }
+        return result
+    }
+
     func search(using session: URLSession = .shared) {
         // The local workspace remains searchable without the optional related-knowledge service.
         searchTask?.cancel()
@@ -2463,33 +2529,7 @@ final class NotesModel: ObservableObject {
         searchTask = Task { [weak self] in
             guard let self else { return }
             let workspaceRoot = self.root
-            if workspaceRoot != nil {
-                guard await self.ensureGlobalFileIndex() else { return }
-            }
-            guard !Task.isCancelled,
-                  self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text,
-                  self.root == workspaceRoot else { return }
-
-            // Reuse the complete-vault Quick Open projection; search does not start
-            // another recursive directory scan or create a second file index.
-            let entries = self.globalQuickOpenEntries.map { WorkspaceSearch.Entry($0) }
-            let currentNote = self.selected
-            let currentDraft = self.draft
-            let localTask = Task.detached(priority: .userInitiated) {
-                guard let workspaceRoot else { return WorkspaceSearch.Result() }
-                return WorkspaceSearch.search(
-                    entries: entries,
-                    root: workspaceRoot,
-                    query: text,
-                    draftURL: currentNote,
-                    draft: currentDraft
-                )
-            }
-            let local = await withTaskCancellationHandler(operation: {
-                await localTask.value
-            }, onCancel: {
-                localTask.cancel()
-            })
+            let local = await self.localWorkspaceSearch(text, searchBodies: true)
             guard !Task.isCancelled,
                   self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text,
                   self.root == workspaceRoot else { return }
@@ -2687,6 +2727,10 @@ final class NotesModel: ObservableObject {
     /// Finder. Never call removeItem for user-owned documents.
     @discardableResult
     func moveToTrash(_ item: URL, navigationDecision: UnsavedNoteDecision? = nil) -> URL? {
+        guard fileOperationInProgress == nil else {
+            message = AppLanguage.current.text("Another file operation is still in progress.")
+            return nil
+        }
         let target = item.standardizedFileURL
         guard canManage(target) else {
             message = AppLanguage.current.text("Only existing files inside the notes folder can be moved to Trash.")
@@ -3249,7 +3293,9 @@ final class NotesModel: ObservableObject {
               let tiff = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiff),
               let png = bitmap.representation(using: .png, properties: [:]),
-              let relative = WorkspaceFiles.storePastedPNG(png, for: selected, in: root) else {
+              let relative = WorkspaceFiles.storeAttachment(
+                  png, for: selected, in: root, stem: "pasted-image", fileExtension: "png"
+              ) else {
             return nil
         }
         return "![Pasted image](\(relative))"

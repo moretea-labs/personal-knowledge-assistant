@@ -39,6 +39,103 @@ final class WorkspaceSearchTests: XCTestCase {
         XCTAssertEqual(result.coverage.readFiles, 0)
     }
 
+    func testPinyinAndChineseQueriesFindEachOtherInFilenamesWithoutReadingBinary() throws {
+        let root = try fixture()
+        let folder = root.appendingPathComponent("吉他谱", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let chinese = folder.appendingPathComponent("夜的钢琴曲五.pdf")
+        let romanized = root.appendingPathComponent("ye-de-gang-qin-qu-five.pdf")
+        try Data([0, 255, 0]).write(to: chinese)
+        try Data([1, 254, 1]).write(to: romanized)
+
+        let pinyinQuery = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "ye de gang qin qu"
+        )
+        XCTAssertEqual(Set(pinyinQuery.hits.map(\.uri)), Set([chinese.path, romanized.path]))
+        XCTAssertEqual(pinyinQuery.coverage.readFiles, 0)
+
+        let chineseQuery = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "夜的钢琴曲"
+        )
+        XCTAssertEqual(Set(chineseQuery.hits.map(\.uri)), Set([chinese.path, romanized.path]))
+        XCTAssertEqual(chineseQuery.coverage.readFiles, 0)
+    }
+
+    func testPinyinNameOnlySearchFindsMarkdownWithoutReadingBody() throws {
+        let root = try fixture()
+        let file = root.appendingPathComponent("夜的钢琴曲五.md")
+        try "The body does not contain any query terms".write(
+            to: file, atomically: true, encoding: .utf8
+        )
+
+        let result = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "ye de gang qin qu",
+            searchBodies: false
+        )
+
+        XCTAssertEqual(result.hits.map(\.uri), [file.path])
+        XCTAssertEqual(result.coverage.readFiles, 0)
+        XCTAssertEqual(result.coverage.skippedFiles, 0)
+        XCTAssertNil(result.hits[0].snippet)
+    }
+
+    func testFilenameSearchAllowsOneTypoButDoesNotBroadenShortOrTwoEditTerms() throws {
+        let root = try fixture()
+        let file = root.appendingPathComponent("night-piano.md")
+        try "A piano practice note".write(to: file, atomically: true, encoding: .utf8)
+
+        let oneEdit = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "nigjt piano"
+        )
+        XCTAssertEqual(oneEdit.hits.map(\.uri), [file.path])
+
+        let twoEdits = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "nigjjtt piano"
+        )
+        XCTAssertTrue(twoEdits.hits.isEmpty)
+
+        let short = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "nigt"
+        )
+        XCTAssertTrue(short.hits.isEmpty)
+    }
+
+    func testFilenameMatchesDoNotReadMarkdownBodies() throws {
+        let root = try fixture()
+        let file = root.appendingPathComponent("Research.md")
+        try "This body should not be read for a filename match".write(
+            to: file, atomically: true, encoding: .utf8
+        )
+
+        let result = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "Research"
+        )
+
+        XCTAssertEqual(result.hits.map(\.uri), [file.path])
+        XCTAssertEqual(result.coverage.readFiles, 0)
+        XCTAssertEqual(result.coverage.skippedFiles, 0)
+        XCTAssertNil(result.hits[0].snippet)
+    }
+
+    func testFolderAndFilenameTermsDoNotReadMarkdownBodies() throws {
+        let root = try fixture()
+        let folder = root.appendingPathComponent("Research Plans", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("notes.md")
+        try "This body is unrelated to the path query".write(
+            to: file, atomically: true, encoding: .utf8
+        )
+
+        let result = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "Research notes"
+        )
+
+        XCTAssertEqual(result.hits.map(\.uri), [file.path])
+        XCTAssertEqual(result.coverage.readFiles, 0)
+        XCTAssertEqual(result.coverage.skippedFiles, 0)
+        XCTAssertNil(result.hits[0].snippet)
+    }
+
     func testCurrentDraftSearchDoesNotWriteDraftToDisk() throws {
         let root = try fixture()
         let file = root.appendingPathComponent("Draft.md")
@@ -62,7 +159,7 @@ final class WorkspaceSearchTests: XCTestCase {
         let oversized = WorkspaceSearch.search(entries: entries(root), root: root, query: "A",
             limits: .init(files: 10, bytesPerFile: 2, totalBytes: 32, results: 50))
         XCTAssertEqual(oversized.hits.map(\.title), ["A"])
-        XCTAssertEqual(oversized.coverage.skippedFiles, 3)
+        XCTAssertEqual(oversized.coverage.skippedFiles, 2)
         XCTAssertEqual(oversized.coverage.readFiles, 0)
     }
 
@@ -104,5 +201,21 @@ final class WorkspaceSearchTests: XCTestCase {
                                uri: "notion://database", sourceType: "notion", snippet: "hash tables",
                                score: 0.2, headingPath: nil)
         XCTAssertEqual(WorkspaceSearch.merging(local: local, remote: [remote]).map(\.title), ["Plant", "Database"])
+    }
+}
+
+
+extension WorkspaceSearchTests {
+    func testPinyinSearchRespectsChineseWordStartBoundaries() throws {
+        let root = try fixture()
+        let expected = root.appendingPathComponent("世界.md")
+        let falsePositive = root.appendingPathComponent("历史结构.md")
+        try "".write(to: expected, atomically: true, encoding: .utf8)
+        try "".write(to: falsePositive, atomically: true, encoding: .utf8)
+        let result = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "shi jie", searchBodies: false
+        )
+        XCTAssertEqual(result.hits.map(\.uri), [expected.path])
+        XCTAssertEqual(result.coverage.readFiles, 0)
     }
 }

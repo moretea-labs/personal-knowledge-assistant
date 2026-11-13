@@ -2,6 +2,13 @@ import XCTest
 @testable import PKSNotes
 
 final class MindMapDragTargetSafetyTests: XCTestCase {
+    private func rebaseCollapsed(_ indexes: Set<Int>, from oldSource: String, to newSource: String) -> Set<Int> {
+        let oldNodes = MindMapOutline.nodes(in: oldSource)
+        let newNodes = MindMapOutline.nodes(in: newSource)
+        let lineIndexMap = MindMapOutline.lineIndexMap(from: oldNodes, to: newNodes)
+        return Set(indexes.compactMap { lineIndexMap[$0] })
+    }
+
     func testAddChildAndReparentPreserveAttachedMarkdownAtSafeBoundaries() throws {
         let cases: [(source: String, expectedMove: String, expectedAdd: String)] = [
             (
@@ -61,11 +68,119 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         let collapsed = Set([a.id, b.id])
 
         let updated = try XCTUnwrap(MindMapOutline.deleteLeaf(in: source, nodeID: deleted.id))
-        let rebased = MindMapOutline.rebasedLineIndexes(collapsed, afterDeletingLine: deleted.id)
+        let rebased = rebaseCollapsed(collapsed, from: source, to: updated)
         let updatedB = try XCTUnwrap(MindMapOutline.nodes(in: updated).first(where: { $0.title == "B" }))
 
         XCTAssertEqual(rebased, Set([a.id, updatedB.id]))
         XCTAssertEqual(updatedB.id, b.id - 1)
+    }
+
+    func testDragSelectionUsesOriginalNodeIDUntilProjectionRebasesIt() throws {
+        let source = "# Plan\n- A\n  - A1\n- B\n- C\n"
+        let oldNodes = MindMapOutline.nodes(in: source)
+        let dragged = try XCTUnwrap(oldNodes.first(where: { $0.title == "C" }))
+        let target = try XCTUnwrap(oldNodes.first(where: { $0.title == "A" }))
+
+        let outcome = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+            in: source, nodeID: dragged.id, relativeTo: target.id, placement: .child
+        ))
+        let newNodes = MindMapOutline.nodes(in: outcome.source)
+        let movedNode = try XCTUnwrap(newNodes.first(where: { $0.title == "C" }))
+        let lineIndexMap = MindMapOutline.lineIndexMap(from: oldNodes, to: newNodes)
+
+        XCTAssertEqual(outcome.movedNodeID, movedNode.id)
+        XCTAssertEqual(lineIndexMap[dragged.id], movedNode.id)
+        XCTAssertNotEqual(
+            lineIndexMap[outcome.movedNodeID],
+            outcome.movedNodeID,
+            "The new line index collides with the old A1 ID and must not be rebased twice."
+        )
+    }
+
+    func testDragReparentPreservesCollapsedBranchesAcrossForwardAndBackwardMoves() throws {
+        let source = """
+        # Plan
+        - A
+          - A1
+            - A1a
+        - B
+          - B1
+        - C
+          - C1
+        """
+        let nodes = MindMapOutline.nodes(in: source)
+        let collapsedTitles = ["A", "A1", "B", "C"]
+        let collapsed = Set(try collapsedTitles.map { title in
+            try XCTUnwrap(nodes.first(where: { $0.title == title })?.id)
+        })
+
+        let a = try XCTUnwrap(nodes.first(where: { $0.title == "A" }))
+        let c = try XCTUnwrap(nodes.first(where: { $0.title == "C" }))
+        let forward = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+            in: source, nodeID: c.id, relativeTo: a.id, placement: .child
+        ))
+        var forwardCollapsed = rebaseCollapsed(collapsed, from: source, to: forward.source)
+        forwardCollapsed.remove(a.id)
+        let forwardNodes = MindMapOutline.nodes(in: forward.source)
+        let expectedForward = Set(try ["A1", "B", "C"].map { title in
+            try XCTUnwrap(forwardNodes.first(where: { $0.title == title })?.id)
+        })
+        XCTAssertEqual(forwardCollapsed, expectedForward)
+        XCTAssertFalse(forwardCollapsed.contains(a.id), "The child-drop target must expand to reveal the moved branch.")
+
+        let backward = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+            in: source, nodeID: a.id, relativeTo: c.id, placement: .after
+        ))
+        let backwardCollapsed = rebaseCollapsed(collapsed, from: source, to: backward.source)
+        let backwardNodes = MindMapOutline.nodes(in: backward.source)
+        let expectedBackward = Set(try collapsedTitles.map { title in
+            try XCTUnwrap(backwardNodes.first(where: { $0.title == title })?.id)
+        })
+        XCTAssertEqual(backwardCollapsed, expectedBackward)
+    }
+
+    func testAddingNodesRebasesOnlyAffectedCollapsedBranches() throws {
+        let source = "# Plan\n- A\n  - A1\n- B\n  - B1\n- C\n  - C1\n"
+        let nodes = MindMapOutline.nodes(in: source)
+        let collapsed = Set(try ["A", "B", "C"].map { title in
+            try XCTUnwrap(nodes.first(where: { $0.title == title })?.id)
+        })
+        let a = try XCTUnwrap(nodes.first(where: { $0.title == "A" }))
+
+        let child = try XCTUnwrap(MindMapOutline.addChildWithOutcome(in: source, parentID: a.id))
+        var childCollapsed = rebaseCollapsed(collapsed, from: source, to: child.source)
+        childCollapsed.remove(a.id)
+        let childNodes = MindMapOutline.nodes(in: child.source)
+        let expectedChildCollapsed = Set(try ["B", "C"].map { title in
+            try XCTUnwrap(childNodes.first(where: { $0.title == title })?.id)
+        })
+        XCTAssertEqual(childCollapsed, expectedChildCollapsed)
+
+        let sibling = try XCTUnwrap(MindMapOutline.addSiblingWithOutcome(in: source, nodeID: a.id))
+        let siblingCollapsed = rebaseCollapsed(collapsed, from: source, to: sibling.source)
+        let siblingNodes = MindMapOutline.nodes(in: sibling.source)
+        let expectedSiblingCollapsed = Set(try ["A", "B", "C"].map { title in
+            try XCTUnwrap(siblingNodes.first(where: { $0.title == title })?.id)
+        })
+        XCTAssertEqual(siblingCollapsed, expectedSiblingCollapsed)
+    }
+
+    func testDeletingBranchRebasesOnlySurvivingCollapsedBranches() throws {
+        let source = "# Plan\n- A\n  - A1\n- B\n  - B1\n- C\n  - C1\n"
+        let nodes = MindMapOutline.nodes(in: source)
+        let collapsed = Set(try ["A", "B", "C"].map { title in
+            try XCTUnwrap(nodes.first(where: { $0.title == title })?.id)
+        })
+        let b = try XCTUnwrap(nodes.first(where: { $0.title == "B" }))
+
+        let updated = try XCTUnwrap(MindMapOutline.deleteListSubtree(in: source, nodeID: b.id))
+        let rebased = rebaseCollapsed(collapsed, from: source, to: updated)
+        let updatedNodes = MindMapOutline.nodes(in: updated)
+        let expected = Set(try ["A", "C"].map { title in
+            try XCTUnwrap(updatedNodes.first(where: { $0.title == title })?.id)
+        })
+        XCTAssertEqual(updated, "# Plan\n- A\n  - A1\n- C\n  - C1\n")
+        XCTAssertEqual(rebased, expected)
     }
 
     func testUnsafeUnindentedTextStillRejectsChildInsertionAndReparenting() throws {
@@ -216,5 +331,72 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
             MindMapOutline.moveListSubtree(in: source, nodeID: 1, asChildOf: 2),
             "# Plan\n- Target\n\n  - Move me\n  - Old child\n"
         )
+    }
+}
+
+
+extension MindMapDragTargetSafetyTests {
+    func testNodeDragPayloadRejectsStaleDraftForeignCanvasAndMissingNodes() throws {
+        let nodes = MindMapOutline.nodes(in: "# Plan\n- Move me\n- Target\n")
+        let moved = try XCTUnwrap(nodes.first(where: { $0.title == "Move me" }))
+        let target = try XCTUnwrap(nodes.first(where: { $0.title == "Target" }))
+        let ids = Set(nodes.map(\.id))
+        let canvasSessionID = UUID()
+        let otherCanvasSessionID = UUID()
+        let payload = MindMapNodeDragPayload(
+            canvasSessionID: canvasSessionID,
+            revision: 41,
+            nodeID: moved.id
+        )
+        XCTAssertEqual(
+            payload.resolve(
+                in: ids, target: target.id,
+                canvasSessionID: canvasSessionID, revision: 41
+            ),
+            moved.id
+        )
+        XCTAssertNil(payload.resolve(
+            in: ids, target: target.id,
+            canvasSessionID: canvasSessionID, revision: 42
+        ))
+        XCTAssertNil(payload.resolve(
+            in: ids, target: target.id,
+            canvasSessionID: otherCanvasSessionID, revision: 41
+        ), "A drag from another window must never mutate this canvas.")
+        XCTAssertNil(payload.resolve(
+            in: Set([target.id]), target: target.id,
+            canvasSessionID: canvasSessionID, revision: 41
+        ))
+        XCTAssertNil(payload.resolve(
+            in: Set([moved.id]), target: target.id,
+            canvasSessionID: canvasSessionID, revision: 41
+        ))
+    }
+
+    func testDragFromStaleProjectionIsRejectedWhenItsLineIndexNowNamesAnotherNode() throws {
+        let oldSource = "# Plan\n- A\n  - A1\n- B\n- C\n"
+        let newSource = "# Plan\n- A\n  - C\n  - A1\n- B\n"
+        let oldNodes = MindMapOutline.nodes(in: oldSource)
+        let currentNodes = MindMapOutline.nodes(in: newSource)
+        let staleNode = try XCTUnwrap(oldNodes.first(where: { $0.title == "A1" }))
+        let currentNodeAtSameLine = try XCTUnwrap(currentNodes.first(where: { $0.title == "C" }))
+        let currentTarget = try XCTUnwrap(currentNodes.first(where: { $0.title == "B" }))
+        let canvasSessionID = UUID()
+        let staleProjectionRevision: UInt64 = 41
+        let currentMarkdownRevision: UInt64 = 42
+
+        XCTAssertEqual(staleNode.id, currentNodeAtSameLine.id)
+
+        let payload = MindMapNodeDragPayload(
+            canvasSessionID: canvasSessionID,
+            revision: staleProjectionRevision,
+            nodeID: staleNode.id
+        )
+        XCTAssertNil(payload.resolve(
+            in: Set(currentNodes.map(\.id)),
+            target: currentTarget.id,
+            canvasSessionID: canvasSessionID,
+            revision: currentMarkdownRevision
+        ), "A stale card must not mutate the different node now occupying its old line index.")
     }
 }

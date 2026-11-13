@@ -59,8 +59,14 @@ final class GlobalSearchFeatureTests: XCTestCase {
             NSMetadataItemFSNameKey: "learning.md",
             "kMDItemTextContent": "Notes on OpenClaw commands"
         ]))
+        XCTAssertTrue(full.evaluate(with: [
+            NSMetadataItemFSNameKey: "learning.md",
+            NSMetadataItemPathKey: "/Users/test/OpenClaw Research/learning.md",
+            "kMDItemTextContent": "unrelated project"
+        ]))
         XCTAssertFalse(full.evaluate(with: [
             NSMetadataItemFSNameKey: "budget.pdf",
+            NSMetadataItemPathKey: "/Users/test/Budget/budget.pdf",
             "kMDItemTextContent": "unrelated project"
         ]))
         let short = GlobalSpotlightLookup.searchPredicate(for: "OA")
@@ -68,6 +74,51 @@ final class GlobalSearchFeatureTests: XCTestCase {
             NSMetadataItemFSNameKey: "learning.md",
             "kMDItemTextContent": "OA only in body"
         ]))
+        XCTAssertTrue(short.evaluate(with: [
+            NSMetadataItemFSNameKey: "learning.md",
+            NSMetadataItemPathKey: "/Users/test/OA/learning.md",
+            "kMDItemTextContent": ""
+        ]))
+    }
+
+    func testSpotlightRanksFolderPathMatchesAfterFilenamesAndBeforeBodyMatches() {
+        let filename = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Other/Research-plan.md"),
+            title: "Research-plan.md", isFolder: false
+        )
+        let exactFolder = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Research/meeting.pdf"),
+            title: "meeting.pdf", isFolder: false
+        )
+        let prefixFolder = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Research Archive/notes.pdf"),
+            title: "notes.pdf", isFolder: false
+        )
+        let body = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Other/body.pdf"),
+            title: "body.pdf", isFolder: false,
+            contentMatch: true, relevance: 0.99
+        )
+
+        let spotlight = GlobalSpotlightLookup.rank(
+            [body, prefixFolder, exactFolder, filename], for: "Research"
+        )
+        XCTAssertEqual(
+            spotlight.map(\.title),
+            ["Research-plan.md", "meeting.pdf", "notes.pdf", "body.pdf"]
+        )
+        XCTAssertFalse(spotlight[1].spotlightContentMatch)
+        XCTAssertFalse(spotlight[2].spotlightContentMatch)
+        XCTAssertTrue(spotlight[3].spotlightContentMatch)
+
+        let merged = GlobalSearchRanker.merge(
+            apps: [], documents: [], spotlight: [body, prefixFolder, exactFolder, filename],
+            query: "Research"
+        )
+        XCTAssertEqual(
+            merged.map(\.title),
+            ["Research-plan.md", "meeting.pdf", "notes.pdf", "body.pdf"]
+        )
     }
 
     func testDirectNameMatchesOutrankGlobalSpotlightBodyMatches() {
@@ -96,6 +147,55 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertEqual(found[1].spotlightRelevance, 0.85)
     }
 
+    func testPinyinFilenameMatchesRankAheadOfBodyOnlySpotlightResults() {
+        let chineseName = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/吉他谱/夜的钢琴曲五.pdf"),
+            title: "夜的钢琴曲五.pdf", isFolder: false
+        )
+        let bodyOnly = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Documents/lyrics.pdf"),
+            title: "lyrics.pdf", isFolder: false,
+            contentMatch: true, relevance: 0.99
+        )
+
+        XCTAssertEqual(
+            GlobalSpotlightLookup.rank([bodyOnly, chineseName], for: "ye de gang qin qu").map(\.title),
+            ["夜的钢琴曲五.pdf", "lyrics.pdf"]
+        )
+        XCTAssertEqual(
+            GlobalSearchRanker.merge(
+                apps: [], documents: [chineseName], spotlight: [bodyOnly],
+                query: "ye de gang qin qu"
+            ).map(\.title),
+            ["夜的钢琴曲五.pdf", "lyrics.pdf"]
+        )
+        XCTAssertFalse(WorkspaceSearch.transliteratedContains("夜的钢琴曲五.pdf", "ye"))
+    }
+
+    func testFuzzyFilenameMatchRanksBeforeBodyOnlyResults() {
+        let typoMatch = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Documents/night-piano.md"),
+            title: "night-piano.md", isFolder: false
+        )
+        let bodyOnly = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Documents/music.pdf"),
+            title: "music.pdf", isFolder: false,
+            contentMatch: true, relevance: 0.99
+        )
+
+        XCTAssertEqual(
+            GlobalSpotlightLookup.rank([bodyOnly, typoMatch], for: "nigjt").map(\.title),
+            ["night-piano.md", "music.pdf"]
+        )
+        XCTAssertEqual(
+            GlobalSearchRanker.merge(
+                apps: [], documents: [typoMatch], spotlight: [bodyOnly], query: "nigjt"
+            ).map(\.title),
+            ["night-piano.md", "music.pdf"]
+        )
+        XCTAssertFalse(WorkspaceSearch.fuzzyContains("night-piano.md", "nigt"))
+    }
+
     func testSpotlightRecoversICloudFilePathWithoutMetadataURL() {
         // A Spotlight result may have kMDItemPath but no kMDItemURL.
         let path = "/Users/example/Library/Mobile Documents/com~apple~CloudDocs/吉他谱/夜的钢琴曲五.pdf"
@@ -112,6 +212,28 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertNil(GlobalSpotlightLookup.fileURL(
             metadataURL: URL(string: "https://example.com/unavailable.pdf"), metadataPath: nil
         ))
+    }
+
+    func testSpotlightBodyMatchesUseContentRelevanceAfterFilenameMatches() {
+        let exact = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Documents/OpenClaw", isDirectory: true),
+            title: "OpenClaw", isFolder: true)
+        let prefix = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Documents/OpenClaw-guide.md"),
+            title: "OpenClaw-guide.md", isFolder: false)
+        let highRelevance = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Documents/z-body.pdf"),
+            title: "z-body.pdf", isFolder: false, contentMatch: true, relevance: 0.95)
+        let lowRelevance = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Documents/a-body.pdf"),
+            title: "a-body.pdf", isFolder: false, contentMatch: true, relevance: 0.15)
+
+        let ranked = GlobalSpotlightLookup.rank(
+            [lowRelevance, highRelevance, prefix, exact], for: "OpenClaw", limit: 3)
+
+        XCTAssertEqual(ranked.map(\.title), ["OpenClaw", "OpenClaw-guide.md", "z-body.pdf"])
+        XCTAssertTrue(ranked.last?.spotlightContentMatch == true)
+        XCTAssertEqual(ranked.last?.spotlightRelevance, 0.95)
     }
 
     func testSpotlightRankingAndFolderClassification() {
@@ -137,6 +259,15 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertEqual(item.sourceHit?.documentId, "doc-123")
         XCTAssertEqual(item.sourceHit?.chunkId, "chunk-456")
         XCTAssertNil(GlobalSearchItem.spotlight(url, title: "Study.md", isFolder: false).sourceHit)
+    }
+
+    func testRelatedSuggestionsSkipGenericChineseSearchTerms() {
+        XCTAssertFalse(GlobalSearchRanker.shouldFindRelated("我的文件"))
+        XCTAssertFalse(GlobalSearchRanker.shouldFindRelated("学习资料"))
+        XCTAssertFalse(GlobalSearchRanker.shouldFindRelated("相关笔记"))
+        XCTAssertFalse(GlobalSearchRanker.shouldFindRelated("文件夹搜索"))
+        XCTAssertTrue(GlobalSearchRanker.shouldFindRelated("夜的钢琴曲"))
+        XCTAssertTrue(GlobalSearchRanker.shouldFindRelated("腹膜透析治疗"))
     }
 
     func testRelatedSuggestionsRankAfterDirectMatches() {
@@ -185,6 +316,29 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertEqual(Set(results.map(\.url)).count, 53)
     }
 
+    func testCrossProviderScoresAreNotComparedAcrossUncalibratedScales() {
+        let pksURL = URL(fileURLWithPath: "/Users/test/PKS/notes.md")
+        let pksHit = SearchHit(documentId: "pks", chunkId: "pks-chunk", title: "PKS notes.md",
+                              uri: pksURL.path, sourceType: "local", snippet: "matching paragraph",
+                              score: 0.08, headingPath: nil)
+        let pks = GlobalSearchItem.file(pksHit, url: pksURL)
+        let spotlightURL = URL(fileURLWithPath: "/Users/test/Spotlight/commands.pdf")
+        let spotlight = GlobalSearchItem.spotlight(
+            spotlightURL, title: "commands.pdf", isFolder: false, contentMatch: true, relevance: 0.99
+        )
+        let merged = GlobalSearchRanker.merge(
+            apps: [], documents: [pks], spotlight: [spotlight], query: "topic"
+        )
+        XCTAssertEqual(merged.map(\.url), [pksURL, spotlightURL])
+    }
+
+    func testGenericSearchQueriesDoNotRequestRelatedSuggestions() {
+        for query in ["search folder", "document search", "how to find a file", "PDF files",
+                      "文件在哪里", "请帮我找一下文件"] {
+            XCTAssertFalse(GlobalSearchRanker.shouldFindRelated(query), query)
+        }
+        XCTAssertTrue(GlobalSearchRanker.shouldFindRelated("Kafka consumer event"))
+    }
     func testLocalFileSourceDoesNotInterpretOpaqueURI() {
         let hit = SearchHit(
             documentId: "opaque", chunkId: nil, title: "Notion page",
@@ -204,5 +358,26 @@ extension GlobalSearchFeatureTests {
         XCTAssertEqual(GlobalSearchShortcut.defaultChoice.modifiers, UInt32(controlKey | optionKey))
         XCTAssertNotEqual(GlobalSearchShortcut.optionSpace.modifiers,
                           GlobalSearchShortcut.defaultChoice.modifiers)
+    }
+}
+
+
+extension GlobalSearchFeatureTests {
+    func testUnifiedRankingTrimsQueryWhitespaceBeforeFilenameAndPathRanking() {
+        let exact = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Documents/Budget"), title: "Budget", isFolder: false
+        )
+        let prefix = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Documents/Budget plan.pdf"),
+            title: "Budget plan.pdf", isFolder: false
+        )
+        let folder = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Budget/notes.md"), title: "notes.md", isFolder: false
+        )
+
+        let ranked = GlobalSearchRanker.merge(
+            apps: [], documents: [], spotlight: [folder, prefix, exact], query: "  budget  "
+        )
+        XCTAssertEqual(ranked.map(\.title), ["Budget", "Budget plan.pdf", "notes.md"])
     }
 }

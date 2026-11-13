@@ -45,6 +45,15 @@ struct MindMapPlacement: Identifiable, Equatable {
 struct MindMapLayoutSnapshot: Equatable {
     let placements: [MindMapPlacement]
     let size: CGSize
+    let placementsByID: [Int: MindMapPlacement]
+    let branchByID: [Int: Int]
+
+    init(placements: [MindMapPlacement], size: CGSize) {
+        self.placements = placements
+        self.size = size
+        placementsByID = Dictionary(uniqueKeysWithValues: placements.map { ($0.id, $0) })
+        branchByID = MindMapVisualStyle.branchIndices(placements.map(\.node))
+    }
 }
 
 enum MindMapSpatialLayout {
@@ -116,67 +125,57 @@ enum MindMapSpatialLayout {
             nodeSizes[node.id] ?? .zero
         }
 
-        var heightCache: [Int: CGFloat] = [:]
-        func subtreeHeight(_ id: Int) -> CGFloat {
-            if let cached = heightCache[id] { return cached }
-            guard let node = nodeByID[id] else { return 0 }
-            let own = nodeSize(node).height
-            let children = childrenByID[id] ?? []
-            guard !children.isEmpty else {
-                heightCache[id] = own
-                return own
-            }
-            let childrenHeight = children.reduce(CGFloat.zero) { $0 + subtreeHeight($1) }
-                + siblingGap * CGFloat(max(0, children.count - 1))
-            let value = max(own, childrenHeight)
-            heightCache[id] = value
-            return value
+        // Nodes are in Markdown source order, so every child appears after
+        // its parent. A reverse pass computes subtree heights without recursive
+        // calls; deeply nested notes must not be able to exhaust the call stack.
+        var subtreeHeights: [Int: CGFloat] = [:]
+        subtreeHeights.reserveCapacity(nodes.count)
+        for node in nodes.reversed() {
+            let children = childrenByID[node.id] ?? []
+            let childrenHeight = children.reduce(CGFloat.zero) {
+                $0 + (subtreeHeights[$1] ?? 0)
+            } + siblingGap * CGFloat(max(0, children.count - 1))
+            subtreeHeights[node.id] = max(nodeSize(node).height, childrenHeight)
         }
 
         let roots = nodes.filter { (parentByID[$0.id] ?? nil) == nil }
         var placements: [MindMapPlacement] = []
+        var pending: [(id: Int, top: CGFloat)] = []
+        var top = margin
+        for root in roots {
+            pending.append((id: root.id, top: top))
+            top += (subtreeHeights[root.id] ?? nodeSize(root).height) + rootGap
+        }
 
-        @discardableResult
-        func place(_ id: Int, top: CGFloat) -> CGFloat? {
-            guard let node = nodeByID[id] else { return nil }
-            let children = childrenByID[id] ?? []
-            let ownSize = nodeSize(node)
-            let height = subtreeHeight(id)
-            var childCenters: [CGFloat] = []
-
-            if !children.isEmpty {
-                let childrenHeight = children.reduce(CGFloat.zero) { $0 + subtreeHeight($1) }
-                    + siblingGap * CGFloat(max(0, children.count - 1))
-                var childTop = top + max(0, (height - childrenHeight) / 2)
-                for child in children {
-                    let childHeight = subtreeHeight(child)
-                    if let childCenterY = place(child, top: childTop) {
-                        childCenters.append(childCenterY)
-                    }
-                    childTop += childHeight + siblingGap
-                }
+        // Every subtree is vertically centered inside its reserved height, so
+        // each node center is exactly top + subtreeHeight / 2. Carry child tops
+        // explicitly and walk the tree iteratively instead of recursing.
+        while let frame = pending.popLast() {
+            guard let node = nodeByID[frame.id] else { continue }
+            let children = childrenByID[node.id] ?? []
+            let ownSize = nodeSizes[node.id] ?? .zero
+            let height = subtreeHeights[node.id] ?? ownSize.height
+            let childrenHeight = children.reduce(CGFloat.zero) {
+                $0 + (subtreeHeights[$1] ?? 0)
+            } + siblingGap * CGFloat(max(0, children.count - 1))
+            var childTop = frame.top + max(0, (height - childrenHeight) / 2)
+            var childFrames: [(id: Int, top: CGFloat)] = []
+            childFrames.reserveCapacity(children.count)
+            for child in children {
+                childFrames.append((id: child, top: childTop))
+                childTop += (subtreeHeights[child] ?? 0) + siblingGap
+            }
+            for childFrame in childFrames.reversed() {
+                pending.append(childFrame)
             }
 
-            let centerY: CGFloat
-            if let first = childCenters.first, let last = childCenters.last {
-                centerY = (first + last) / 2
-            } else {
-                centerY = top + height / 2
-            }
             let centerX = margin + CGFloat(node.depth) * columnStride + ownSize.width / 2
             placements.append(.init(
                 node: node,
                 parentID: parentByID[node.id] ?? nil,
-                center: CGPoint(x: centerX, y: centerY),
+                center: CGPoint(x: centerX, y: frame.top + height / 2),
                 size: ownSize
             ))
-            return centerY
-        }
-
-        var top = margin
-        for root in roots {
-            place(root.id, top: top)
-            top += subtreeHeight(root.id) + rootGap
         }
 
         let order = Dictionary(uniqueKeysWithValues: nodes.enumerated().map { ($0.element.id, $0.offset) })

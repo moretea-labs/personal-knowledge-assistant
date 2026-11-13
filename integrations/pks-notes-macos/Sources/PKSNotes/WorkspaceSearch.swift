@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import NaturalLanguage
 
 /// An on-demand read of the existing workspace directory projection. No database,
 /// background hydration, or second document authority is introduced.
@@ -36,7 +37,8 @@ enum WorkspaceSearch {
 
     static func search(
         entries: [Entry], root: URL, query: String,
-        draftURL: URL? = nil, draft: String? = nil, limits: Limits = Limits()
+        draftURL: URL? = nil, draft: String? = nil,
+        searchBodies: Bool = true, limits: Limits = Limits()
     ) -> Result {
         let terms = query.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !terms.isEmpty, limits.results > 0 else { return Result() }
@@ -51,9 +53,11 @@ enum WorkspaceSearch {
             guard WorkspaceFiles.contains(item.url, in: root),
                   WorkspaceFiles.fileStamp(item.url) != nil else { continue }
             let path = String(item.url.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1))
-            let nameMatch = terms.allSatisfy { contains(path, $0) }
+            let nameMatch = terms.allSatisfy {
+                contains(path, $0) || fuzzyContains(path, $0)
+            } || transliteratedContains(path, query)
             var content: String?
-            if item.isMarkdown {
+            if searchBodies, !nameMatch, item.isMarkdown {
                 if item.url == draftURL, let draft {
                     content = draft
                 } else if WorkspaceFiles.isDataless(item.url) {
@@ -77,7 +81,23 @@ enum WorkspaceSearch {
                 terms.allSatisfy { contains(path, $0) || contains(body, $0) }
             } ?? false
             guard nameMatch || contentMatch else { continue }
-            let rank = contains(item.name, query) ? 0 : nameMatch ? 1 : 2
+            let rawNameTerms = terms.allSatisfy { contains(item.name, $0) }
+            let rawPathTerms = terms.allSatisfy { contains(path, $0) }
+            let fuzzyNameTerms = terms.allSatisfy {
+                contains(item.name, $0) || fuzzyContains(item.name, $0)
+            }
+            let fuzzyPathTerms = terms.allSatisfy {
+                contains(path, $0) || fuzzyContains(path, $0)
+            }
+            let rank: Int
+            if contains(item.name, query) { rank = 0 }
+            else if rawNameTerms { rank = 1 }
+            else if rawPathTerms { rank = 2 }
+            else if transliteratedContains(item.name, query) { rank = 3 }
+            else if transliteratedContains(path, query) { rank = 4 }
+            else if fuzzyNameTerms { rank = 5 }
+            else if fuzzyPathTerms { rank = 6 }
+            else { rank = 7 }
             let hit = SearchHit(
                 documentId: "workspace:" + item.url.path, chunkId: nil,
                 title: item.name, uri: item.url.path, sourceType: "local",
@@ -102,6 +122,85 @@ enum WorkspaceSearch {
                 guard let path = hit.localFileURL?.path else { return true }
                 return !localPaths.contains(path)
             }
+    }
+
+    private struct TransliterationKey {
+        let value: String
+        let tokenStarts: Set<Int>
+    }
+
+    /// Match transliteration only at word starts. This prevents a query such as
+    /// "shi jie" from matching the middle of the different words "历史结构".
+    static func transliteratedContains(_ text: String, _ query: String) -> Bool {
+        let needle = transliterationKey(query).value
+        guard needle.count >= 4 else { return false }
+        let candidate = transliterationKey(text)
+        return candidate.tokenStarts.contains { offset in
+            let start = candidate.value.index(candidate.value.startIndex, offsetBy: offset)
+            return candidate.value[start...].hasPrefix(needle)
+        }
+    }
+
+    /// Conservative filename typo tolerance: one edit in a token of at least
+    /// five characters. Exact substring matching remains the path for short terms.
+    static func fuzzyContains(_ text: String, _ query: String) -> Bool {
+        let needle = Array(query.folding(
+            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+            locale: .current
+        ))
+        guard needle.count >= 5 else { return false }
+        let tokens = text.split { !$0.isLetter && !$0.isNumber }
+        return tokens.contains { token in
+            let candidate = Array(String(token).folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                locale: .current
+            ))
+            guard abs(candidate.count - needle.count) <= 1 else { return false }
+            var left = 0
+            var right = 0
+            var edits = 0
+            while left < candidate.count, right < needle.count {
+                if candidate[left] == needle[right] {
+                    left += 1
+                    right += 1
+                } else {
+                    edits += 1
+                    if edits > 1 { return false }
+                    if candidate.count > needle.count {
+                        left += 1
+                    } else if candidate.count < needle.count {
+                        right += 1
+                    } else {
+                        left += 1
+                        right += 1
+                    }
+                }
+            }
+            if left < candidate.count || right < needle.count { edits += 1 }
+            return edits <= 1
+        }
+    }
+
+    private static func transliterationKey(_ value: String) -> TransliterationKey {
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = value
+        var key = ""
+        var tokenStarts = Set<Int>()
+        for range in tokenizer.tokens(for: value.startIndex..<value.endIndex) {
+            let token = String(value[range])
+            let latin = token.applyingTransform(.toLatin, reverse: false) ?? token
+            let folded = latin.folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                locale: .current
+            )
+            let normalized = String(folded.unicodeScalars.filter {
+                CharacterSet.alphanumerics.contains($0)
+            })
+            guard !normalized.isEmpty else { continue }
+            tokenStarts.insert(key.count)
+            key.append(normalized)
+        }
+        return TransliterationKey(value: key, tokenStarts: tokenStarts)
     }
 
     private static func contains(_ text: String, _ query: String) -> Bool {

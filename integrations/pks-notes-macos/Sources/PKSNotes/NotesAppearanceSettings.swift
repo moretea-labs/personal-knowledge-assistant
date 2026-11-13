@@ -4,6 +4,7 @@ import MarkdownUI
 /// Native application Settings. Appearance, language and reading style use independent
 /// persisted keys so one preference never becomes an authority for another.
 struct NotesAppearanceSettings: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(AppAppearance.defaultsKey) private var appearanceID = AppAppearance.system.rawValue
     @AppStorage(AppLanguage.defaultsKey) private var languageID = AppLanguage.system.rawValue
     @AppStorage("PKSNotesReadingTheme") private var themeID = NotesTheme.system.rawValue
@@ -70,7 +71,7 @@ struct NotesAppearanceSettings: View {
 
             settingsGroup(title: language.text("Reading Theme")) {
                 preferenceChoices(NotesTheme.allCases, selected: theme) { option in
-                    withAnimation(.easeOut(duration: 0.15)) {
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
                         themeID = option.rawValue
                     }
                 } label: { option in

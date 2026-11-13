@@ -18,6 +18,26 @@ final class MindMapLayoutDensityTests: XCTestCase {
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Spacious"), "宽松")
     }
 
+    func testLayoutSnapshotCachesConnectorLookupsAndStableBranchIndicesAfterCollapse() throws {
+        let nodes = MindMapOutline.nodes(in: """
+        # Research
+        - Alpha
+          - Alpha child
+        - Beta
+        - Gamma
+        """)
+        let collapsedNodes = nodes.filter { $0.title != "Alpha child" }
+        let layout = MindMapSpatialLayout.layout(collapsedNodes)
+        let fullBranchIndices = MindMapVisualStyle.branchIndices(nodes)
+
+        XCTAssertEqual(layout.placementsByID.count, layout.placements.count)
+        for placement in layout.placements {
+            XCTAssertEqual(layout.placementsByID[placement.id], placement)
+            XCTAssertEqual(layout.branchByID[placement.id], fullBranchIndices[placement.id])
+        }
+        XCTAssertNil(layout.placementsByID[nodes.first(where: { $0.title == "Alpha child" })?.id ?? -1])
+    }
+
     func testLongChineseAndEnglishTitlesGrowCardHeightWithoutOverlaps() throws {
         let longChinese = String(repeating: "跨文档关联和搜索结果需要保持准确且容易理解", count: 6)
         let longEnglish = String(repeating: "Knowledge graph navigation and research context ", count: 6)
@@ -57,6 +77,23 @@ final class MindMapLayoutDensityTests: XCTestCase {
             }
         }
         XCTAssertEqual(MindMapOutline.nodes(in: markdown), nodes)
+    }
+
+    func testSpatialLayoutHandlesDeepOutlineWithoutRecursiveTraversal() {
+        let nodes = (0..<4_096).map { depth in
+            MindMapNode(id: depth, depth: depth, title: "n")
+        }
+
+        let layout = MindMapSpatialLayout.layout(nodes)
+
+        XCTAssertEqual(layout.placements.count, nodes.count)
+        XCTAssertNil(layout.placements.first?.parentID)
+        XCTAssertEqual(layout.placements.last?.parentID, nodes.count - 2)
+        XCTAssertTrue(layout.placements.allSatisfy {
+            $0.center.x.isFinite && $0.center.y.isFinite
+                && $0.size.width.isFinite && $0.size.height.isFinite
+        })
+        XCTAssertGreaterThan(layout.size.width, 1_000_000)
     }
 
     func testPNGExportBudgetCountsPhysicalPixelsAtRendererScale() {

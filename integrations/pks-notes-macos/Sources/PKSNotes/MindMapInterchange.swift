@@ -36,8 +36,12 @@ enum MindMapInterchange {
                 depthStack.removeLast()
                 output += String(repeating: "  ", count: depthStack.count + 2) + "</outline>\n"
             }
+            let escapedTitle = MindMapOutline.escapeInlineText(node.title)
+            let title = escapedTitle == node.title
+                ? node.title
+                : String(try AttributedString(markdown: escapedTitle).characters)
             output += String(repeating: "  ", count: depthStack.count + 2)
-                + "<outline text=\"\(xmlAttribute(node.title))\">\n"
+                + "<outline text=\"\(xmlAttribute(title))\">\n"
             depthStack.append(node.depth)
         }
         while !depthStack.isEmpty {
@@ -63,12 +67,15 @@ enum MindMapInterchange {
         else { throw Failure.invalid }
 
         let items = collector.entries
+        func markdownTitle(_ item: OutlineCollector.Entry) -> String {
+            MindMapOutline.escapeInlineText(item.text)
+        }
         // A forest gets one synthetic Markdown root so every OPML topic survives.
         let roots = items.filter { $0.depth == 0 }.count
         let prefix: String
         let indentAdjustment: Int
         if roots == 1 {
-            prefix = "# \(items[0].text)\n"
+            prefix = "# \(markdownTitle(items[0]))\n"
             indentAdjustment = 1
         } else {
             prefix = "# Mind Map\n"
@@ -77,7 +84,7 @@ enum MindMapInterchange {
         var lines = [prefix.trimmingCharacters(in: .newlines)]
         for item in items.dropFirst(roots == 1 ? 1 : 0) {
             let indentation = item.depth - indentAdjustment
-            lines.append(String(repeating: "  ", count: indentation) + "- " + item.text)
+            lines.append(String(repeating: "  ", count: indentation) + "- " + markdownTitle(item))
         }
         return lines.joined(separator: "\n") + "\n"
     }

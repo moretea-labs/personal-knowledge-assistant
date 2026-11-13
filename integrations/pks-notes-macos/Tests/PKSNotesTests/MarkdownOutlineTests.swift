@@ -43,6 +43,24 @@ final class MarkdownOutlineTests: XCTestCase {
         XCTAssertNil(MarkdownOutline.lineRange(in: source, lineIndex: 99))
     }
 
+    func testCachedHeadingOffsetRebasesAndRejectsStaleOutlineRows() {
+        let original = MarkdownOutline.headings(in: "# First\n# Second")
+        let second = original[1]
+        let edited = "Intro 😀\n# First\nBody\n# Second"
+        let current = MarkdownOutline.headings(in: edited)
+
+        XCTAssertEqual(
+            MarkdownOutline.currentUTF16Offset(for: second, in: edited),
+            current[1].utf16Offset
+        )
+        XCTAssertNil(
+            MarkdownOutline.currentUTF16Offset(for: second, in: "# First\n# Replaced")
+        )
+        XCTAssertNil(
+            MarkdownOutline.currentUTF16Offset(for: second, in: "# Second\n# First")
+        )
+    }
+
     func testHeadingFragmentMatchesExactAndSlugWithoutSeeingFencedHeadings() {
         let source = "# Overview\n## Café & 数据\n\n~~~markdown\n## Hidden Heading\n~~~"
         XCTAssertEqual(

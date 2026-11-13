@@ -1,6 +1,7 @@
 import AppKit
 import PDFKit
 import SwiftUI
+import UniformTypeIdentifiers
 import MarkdownUI
 
 @MainActor
@@ -295,6 +296,28 @@ enum MarkdownNativeCommand {
     }
 
     @discardableResult
+    static func insertText(_ value: String, at location: Int, in textView: NSTextView) -> Bool {
+        guard textView.isEditable, !textView.isFieldEditor,
+              !textView.hasMarkedText(), !value.isEmpty else { return false }
+        let original = textView.string
+        let length = (original as NSString).length
+        let range = NSRange(location: min(max(location, 0), length), length: 0)
+        let result = MarkdownEditing.insert(value, into: original, selection: range)
+        apply(result, from: original, in: textView)
+        return true
+    }
+
+    @discardableResult
+    static func replaceSelection(_ value: String, in textView: NSTextView) -> Bool {
+        guard textView.isEditable, !textView.isFieldEditor,
+              !textView.hasMarkedText(), !value.isEmpty else { return false }
+        let original = textView.string
+        let result = MarkdownEditing.insert(value, into: original, selection: textView.selectedRange())
+        apply(result, from: original, in: textView)
+        return true
+    }
+
+    @discardableResult
     static func perform(_ value: String) -> Bool {
         perform(value, in: activeTextView())
     }
@@ -302,6 +325,7 @@ enum MarkdownNativeCommand {
     @discardableResult
     static func perform(_ value: String, in textView: NSTextView?) -> Bool {
         guard let textView, textView.isEditable, !textView.isFieldEditor,
+              !textView.hasMarkedText(),
               let command = editCommand(for: value) else { return false }
         let original = textView.string
         let result = MarkdownEditing.apply(command, to: original, selection: textView.selectedRange())
@@ -309,14 +333,15 @@ enum MarkdownNativeCommand {
         return true
     }
 
-    static func apply(_ result: MarkdownEditResult, from original: String, in textView: NSTextView) {
+    private static func apply(_ result: MarkdownEditResult, from original: String, in textView: NSTextView) {
         guard let replacement = MarkdownEditing.minimalChange(from: original, to: result.text) else { return }
         textView.insertText(replacement.text, replacementRange: replacement.range)
         textView.didChangeText()
-        DispatchQueue.main.async {
-            textView.setSelectedRange(result.selection)
-            textView.scrollRangeToVisible(result.selection)
-        }
+        // Selection is part of the same native edit transaction. Deferring it
+        // to the next main-queue turn lets a fast follow-up keystroke use the
+        // insertion-end caret instead of replacing the formatted selection.
+        textView.setSelectedRange(result.selection)
+        textView.scrollRangeToVisible(result.selection)
     }
 
     private static func editCommand(for value: String) -> MarkdownEditCommand? {
@@ -334,6 +359,139 @@ enum MarkdownNativeCommand {
         case "table": .table
         default: nil
         }
+    }
+}
+
+@MainActor
+final class PDFCitationDropTarget {
+    private weak var textView: NSTextView?
+    private weak var window: NSWindow?
+    private let note: URL
+    private let draftRevision: UInt64
+    let insertionIndex: Int
+
+    static func window(at screenPoint: NSPoint, in orderedWindows: [NSWindow]) -> NSWindow? {
+        orderedWindows.first { $0.frame.contains(screenPoint) }
+    }
+
+    static func editableTextView(at screenPoint: NSPoint, in window: NSWindow) -> NSTextView? {
+        guard let contentView = window.contentView else { return nil }
+        let windowPoint = window.convertPoint(fromScreen: screenPoint)
+        let contentPoint = contentView.convert(windowPoint, from: nil)
+        var candidate = contentView.hitTest(contentPoint)
+        while let view = candidate {
+            if let textView = view as? NSTextView,
+               textView.isEditable, !textView.isFieldEditor,
+               !textView.isHiddenOrHasHiddenAncestor,
+               textView.window === window {
+                return textView
+            }
+            candidate = view.superview
+        }
+        return nil
+    }
+
+    init?(screenPoint: NSPoint, note: URL, draftRevision: UInt64, textView: NSTextView) {
+        guard textView.isEditable, !textView.isFieldEditor,
+              let window = textView.window else { return nil }
+        let windowPoint = window.convertPoint(fromScreen: screenPoint)
+        let textPoint = textView.convert(windowPoint, from: nil)
+        let insertionIndex = textView.characterIndexForInsertion(at: textPoint)
+        guard insertionIndex != NSNotFound,
+              !MindMapOutline.isInsideCode(in: textView.string, at: insertionIndex) else { return nil }
+
+        self.textView = textView
+        self.window = window
+        self.note = note
+        self.draftRevision = draftRevision
+        self.insertionIndex = insertionIndex
+    }
+
+    /// A drop on any structural node title attaches to that node's body rather than
+    /// splitting its title at the pointer. Drops in ordinary body text keep the
+    /// exact pointer-derived insertion offset.
+    nonisolated static func citationInsertionOffset(in markdown: String, at offset: Int) -> Int {
+        let source = markdown as NSString
+        let safeOffset = min(max(0, offset), source.length)
+        guard let nodeID = MindMapOutline.nodeID(atUTF16Offset: safeOffset, in: markdown) else {
+            return safeOffset
+        }
+        let lineIndex = source.substring(to: safeOffset).reduce(into: 0) { index, character in
+            if character == "\n" { index += 1 }
+        }
+        // List and heading titles are both structural node labels. Attach a
+        // citation to their body rather than splitting the title at the pointer.
+        guard nodeID == lineIndex else { return safeOffset }
+
+        var lineStart = 0
+        var lineEnd = 0
+        var contentsEnd = 0
+        source.getLineStart(
+            &lineStart,
+            end: &lineEnd,
+            contentsEnd: &contentsEnd,
+            for: NSRange(location: safeOffset, length: 0)
+        )
+        return contentsEnd
+    }
+
+    nonisolated static func citationForInsertion(_ citation: String, in markdown: String, at offset: Int) -> String {
+        let source = markdown as NSString
+        let safeOffset = min(max(0, offset), source.length)
+        guard let nodeID = MindMapOutline.nodeID(atUTF16Offset: safeOffset, in: markdown),
+              MindMapOutline.isListNode(in: markdown, nodeID: nodeID) else {
+            return citation
+        }
+
+        let lines = markdown.components(separatedBy: "\n")
+        let currentLineIndex = source.substring(to: safeOffset).reduce(into: 0) { index, character in
+            if character == "\n" { index += 1 }
+        }
+        guard lines.indices.contains(nodeID), lines.indices.contains(currentLineIndex) else {
+            return citation
+        }
+
+        let structuralIndent = lines[nodeID].prefix(while: { $0 == " " }).count
+        let continuationIndent = structuralIndent + 2
+        let currentLine = lines[currentLineIndex]
+        let currentLineIndent = currentLine.prefix(while: { $0 == " " }).count
+        let blankContinuation = currentLineIndex > nodeID
+            && currentLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && lines[(nodeID + 1)..<currentLineIndex].allSatisfy {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || $0.prefix(while: { $0 == " " }).count >= continuationIndent
+            }
+        // Only indent on the list item, an indented continuation, or a blank
+        // line still bounded by that item's indented content. Root-level blocks
+        // and unindented code remain outside the earlier list item.
+        guard currentLineIndex == nodeID
+                || currentLineIndent >= continuationIndent
+                || blankContinuation else {
+            return citation
+        }
+
+        return citation.components(separatedBy: "\n").map { line in
+            line.isEmpty ? line : String(repeating: " ", count: continuationIndent) + line
+        }.joined(separator: "\n")
+    }
+
+    @discardableResult
+    func insert(
+        _ citation: String,
+        currentNote: URL?,
+        currentDraftRevision: UInt64,
+        canEdit: Bool
+    ) -> Bool {
+        guard canEdit,
+              currentNote == note,
+              currentDraftRevision == draftRevision,
+              let textView,
+              let window,
+              textView.window === window,
+              window.makeFirstResponder(textView) else { return false }
+        let targetIndex = Self.citationInsertionOffset(in: textView.string, at: insertionIndex)
+        let formatted = Self.citationForInsertion(citation, in: textView.string, at: targetIndex)
+        return MarkdownNativeCommand.insertText(formatted, at: targetIndex, in: textView)
     }
 }
 
@@ -518,8 +676,6 @@ struct NotesWindow: View {
                 if auxiliaryListPresentation != "sheet" && (showingOutline || showingBacklinks) {
                     auxiliaryListPanel
                         .frame(width: 312)
-                        .shadow(color: .black.opacity(colorScheme == .dark ? 0.10 : 0.04),
-                                radius: 10, x: -2)
                 }
             }
             .sheet(isPresented: Binding(
@@ -760,21 +916,19 @@ struct NotesWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.paste)) { _ in
             handlePaste()
         }
-        .task(id: model.previewPDF?.standardizedFileURL.path ?? "") {
+        .task(id: "\(model.previewPDF?.standardizedFileURL.path ?? "")#\(model.previewPDFReloadSequence)") {
             guard let requestedURL = model.previewPDF?.standardizedFileURL else {
                 loadedPDFDocument = nil
                 loadedPDFURL = nil
                 return
             }
-            if loadedPDFURL?.standardizedFileURL == requestedURL {
-                return
-            }
-
+            let generation = model.previewPDFReloadSequence
             loadedPDFDocument = nil
             loadedPDFURL = nil
             let loaded = await PDFDocumentLoading.load(requestedURL)
             guard !Task.isCancelled,
-                  model.previewPDF?.standardizedFileURL == requestedURL else { return }
+                  model.previewPDF?.standardizedFileURL == requestedURL,
+                  model.previewPDFReloadSequence == generation else { return }
             loadedPDFDocument = loaded
             loadedPDFURL = requestedURL
         }
@@ -872,6 +1026,8 @@ struct NotesWindow: View {
         }
         .onChange(of: model.previewPDF) { _, pdf in
             guard pdf != nil else { return }
+            showingOutline = false
+            outlineHeadings = []
             compactStudyShowsStudyPane = showingMindMap
         }
         .onChange(of: model.loadingNote) { _, loading in
@@ -891,7 +1047,9 @@ struct NotesWindow: View {
                 }
             }
             showingBacklinks = false
+            showingOutline = false
             outgoingLinks = []
+            outlineHeadings = []
             if let note, let root = model.root {
                 let ancestors = NoteTreePresentation.ancestorPaths(for: note, in: root)
                 expandedFolderPaths.formUnion(ancestors)
@@ -972,6 +1130,7 @@ struct NotesWindow: View {
                 if let folder = folderTrashCandidate { _ = model.moveToTrash(folder) }
                 folderTrashCandidate = nil
             }
+            .disabled(model.fileOperationInProgress != nil)
             Button(language.text("Cancel"), role: .cancel) { folderTrashCandidate = nil }
         } message: {
             Text(language.text("The folder and all of its contents will move to the macOS Trash, where they can be restored."))
@@ -1100,21 +1259,25 @@ struct NotesWindow: View {
         do {
             let markdown: String
             let images: [MindNodePackage.ImportedImage]
+            let pdfs: [MindNodePackage.ImportedPDF]
             if ext == "mindnode" {
                 let imported = try MindNodePackage.importDocument(from: url)
                 markdown = imported.markdown
                 images = imported.images
+                pdfs = imported.pdfs
             } else {
-                markdown = try XMindPackage.importOutline(from: url)
-                images = []
+                let imported = try XMindPackage.importDocument(from: url)
+                markdown = imported.markdown
+                images = imported.images
+                pdfs = []
             }
             let sourceName = url.deletingPathExtension().lastPathComponent
             guard let created = model.newNote(
                 named: sourceName, in: url.deletingLastPathComponent(),
-                initialContent: markdown, importedImages: images
+                initialContent: markdown, importedImages: images, importedPDFs: pdfs
             ) else { return }
             pendingMindMapOpen = created
-            model.message = language.text("Imported editable content without altering the original map. Unsupported native formatting and connections remain in the source.")
+            model.message = language.text("Imported editable content and supported attachments without altering the original map. Unsupported native formatting and connections remain in the source.")
         } catch {
             model.message = error.localizedDescription
         }
@@ -1871,7 +2034,7 @@ struct NotesWindow: View {
                     }
                     .onChange(of: quickOpenIndex) { _, index in
                         guard matches.indices.contains(index) else { return }
-                        withAnimation(.easeOut(duration: 0.12)) {
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) {
                             proxy.scrollTo(index, anchor: .center)
                         }
                     }
@@ -1888,7 +2051,7 @@ struct NotesWindow: View {
             )
         )
         .background(Color(nsColor: .windowBackgroundColor))
-        .animation(.easeOut(duration: 0.16), value: matches.isEmpty)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: matches.isEmpty)
         .onChange(of: quickOpenQuery) { _, _ in quickOpenIndex = 0 }
         .onAppear {
             if pdfCaptureRequest != nil {
@@ -2312,15 +2475,6 @@ struct NotesWindow: View {
     private var sidebar: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
-                Image(nsImage: NSApp.applicationIconImage)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
-                    .frame(width: 32, height: 32)
-                    .accessibilityLabel("Leafspan")
-                    .padding(.top, 13)
-                    .padding(.bottom, 25)
-
                 VStack(spacing: 5) {
                     railButton(.notes, symbol: "square.stack", title: language.text("All Notes"))
                     railButton(.recent, symbol: "clock", title: language.text("Recent"))
@@ -2328,7 +2482,9 @@ struct NotesWindow: View {
                     railButton(.search, symbol: "magnifyingglass", title: language.text("Search"))
                 }
                 .padding(.horizontal, 5)
-                .padding(.vertical, 7)
+                // Align the first navigation control with the adjacent title row.
+                .padding(.top, 11)
+                .padding(.bottom, 7)
 
                 Spacer(minLength: 12)
                 Button(action: openQuickPicker) {
@@ -2497,7 +2653,7 @@ struct NotesWindow: View {
                 }
                 .onChange(of: treeRevealRequest) { _, path in
                     guard let path else { return }
-                    withAnimation(.easeOut(duration: 0.16)) {
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
                         proxy.scrollTo(path, anchor: .center)
                     }
                     treeRevealRequest = nil
@@ -2563,7 +2719,7 @@ struct NotesWindow: View {
     private func railButton(_ tab: SidebarTab, symbol: String, title: String) -> some View {
         let selected = sidebarTab == tab
         return Button {
-            withAnimation(.easeOut(duration: 0.14)) { sidebarTab = tab }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) { sidebarTab = tab }
         } label: {
             Image(systemName: symbol)
                 .font(.system(size: 16, weight: selected ? .semibold : .medium))
@@ -2669,6 +2825,7 @@ struct NotesWindow: View {
             } label: {
                 Label(language.text("Move to Trash"), systemImage: "trash")
             }
+            .disabled(model.fileOperationInProgress != nil)
         }
     }
 
@@ -2729,7 +2886,54 @@ struct NotesWindow: View {
         return nil
     }
 
-    /// A newly mounted/reloaded TextEditor must not inherit AppKit undo operations
+    @MainActor
+    private func handlePDFCitationDrop(_ providers: [NSItemProvider]) -> Bool {
+        let dropScreenPoint = NSEvent.mouseLocation
+        let typeIdentifier = PDFCitationPasteboard.type.rawValue
+        guard let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(typeIdentifier)
+        }),
+              let note = model.selected,
+              model.externalBody == nil,
+              !model.loadingNote,
+              let window = PDFCitationDropTarget.window(
+                at: dropScreenPoint,
+                in: NSApp.orderedWindows
+              ),
+              let textView = PDFCitationDropTarget.editableTextView(
+                at: dropScreenPoint,
+                in: window
+              ),
+              let target = PDFCitationDropTarget(
+                screenPoint: dropScreenPoint,
+                note: note,
+                draftRevision: model.draftRevision,
+                textView: textView
+              ) else { return false }
+
+        // Snapshot the actual editor, note revision and insertion caret before
+        // asynchronous provider loading. Never retarget a late payload to a
+        // different note or insert at a stale cursor position.
+        provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
+            guard let citation = PDFCitationPasteboard.markdown(from: item) else { return }
+
+            Task { @MainActor in
+                let canEdit = model.externalBody == nil
+                    && !model.loadingNote
+                    && !showingMindMap
+                    && mode != .read
+                _ = target.insert(
+                    citation,
+                    currentNote: model.selected,
+                    currentDraftRevision: model.draftRevision,
+                    canEdit: canEdit
+                )
+            }
+        }
+        return true
+    }
+
+    /// A newly mounted/reloaded TextEditor must not inherit undo operations
     /// recorded while its visible string represented another draft/view state.
     private func resetNativeEditorUndoBaseline() {
         Task { @MainActor in
@@ -2775,20 +2979,22 @@ struct NotesWindow: View {
     }
 
     private func insertClipboardImage(into textView: NSTextView) {
+        // Image insertion is also a Markdown mutation; leave active IME composition intact.
+        guard !textView.hasMarkedText() else { return }
         guard let markdown = model.importClipboardImage() else {
             model.message = language.text("Could not save the pasted image inside this notes workspace.")
             return
         }
-        let original = textView.string
-        let selection = textView.selectedRange()
-        let result = MarkdownEditing.insert(markdown, into: original, selection: selection)
         NSApp.keyWindow?.makeFirstResponder(textView)
-        // Use the same native edit path as formatting commands so the TextEditor
-        // binding updates the canonical draft and AppKit keeps image insertion undoable.
-        MarkdownNativeCommand.apply(result, from: original, in: textView)
+        _ = MarkdownNativeCommand.replaceSelection(markdown, in: textView)
     }
 
     private func jumpToOutlineHeading(_ heading: MarkdownOutlineHeading) {
+        guard MarkdownOutline.currentUTF16Offset(for: heading, in: model.draft) != nil else {
+            showingOutline = false
+            outlineHeadings = []
+            return
+        }
         showingMindMap = false
         mode = .edit
         Task { @MainActor in
@@ -2796,10 +3002,18 @@ struct NotesWindow: View {
             // A read-only preview must first mount the native TextEditor before
             // its NSTextView can become first responder.
             try? await Task.sleep(for: .milliseconds(40))
-            guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
-            let length = (textView.string as NSString).length
-            let location = min(max(0, heading.utf16Offset), length)
-            let range = NSRange(location: location, length: 0)
+            guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView,
+                  let location = MarkdownOutline.currentUTF16Offset(
+                    for: heading, in: textView.string
+                  ) else {
+                showingOutline = false
+                outlineHeadings = []
+                return
+            }
+            let range = NSRange(
+                location: min(max(0, location), (textView.string as NSString).length),
+                length: 0
+            )
             textView.setSelectedRange(range)
             textView.scrollRangeToVisible(range)
         }
@@ -3073,7 +3287,7 @@ struct NotesWindow: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.thinMaterial)
+        .background(.ultraThinMaterial)
         .accessibilityIdentifier("pks-auxiliary-list-panel")
     }
 
@@ -3292,10 +3506,10 @@ struct NotesWindow: View {
             connectSection: { nodeID in beginMindMapLink(nodeID: nodeID, section: true) },
             createLinkedNote: { nodeID in createLinkedNoteFromMindMap(nodeID: nodeID) },
             revealSource: { line in revealMarkdownLine(line) },
-            importOutline: { markdown, name, images in
+            importOutline: { markdown, name, images, pdfs in
                 // Import into a new note rather than overwriting the active note.
                 guard model.newNote(named: name, initialContent: markdown,
-                                    importedImages: images) != nil else {
+                                    importedImages: images, importedPDFs: pdfs) != nil else {
                     return false
                 }
                 showingMindMap = true
@@ -3338,8 +3552,10 @@ struct NotesWindow: View {
                         mode = .edit
                         editorFocused = true
                     }
-                }
+                },
+            onReload: { model.reloadPreviewPDF() }
         )
+        .id(model.previewPDFReloadSequence)
     }
 
     private func studyNotePane(_ note: URL) -> some View {
@@ -3436,52 +3652,122 @@ struct NotesWindow: View {
                 }
                 // The old draft remains intact until an off-main file load succeeds.
                 .disabled(model.loadingNote)
+                .onDrop(
+                    of: [UTType(exportedAs: PDFCitationPasteboard.type.rawValue, conformingTo: .plainText)],
+                    isTargeted: nil
+                ) { providers, _ in
+                    handlePDFCitationDrop(providers)
+                }
                 .accessibilityIdentifier("pks-markdown-editor")
                 .onAppear { resetNativeEditorUndoBaseline() }
         }
+        .frame(maxWidth: theme.typography.pageWidth + widthAdjustment + 56)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.canvas)
     }
 
     private var markdownFormattingToolbar: some View {
-        HStack(spacing: 7) {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 7) {
+                Menu {
+                    Button(language.text("Heading 1")) { applyMarkdownFormatting("h1") }
+                    Button(language.text("Heading 2")) { applyMarkdownFormatting("h2") }
+                    Button(language.text("Heading 3")) { applyMarkdownFormatting("h3") }
+                } label: {
+                    Label(language.text("Heading"), systemImage: "textformat.size")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help(language.text("Heading"))
+                .accessibilityIdentifier("pks-markdown-format-heading")
+
+                markdownCommandButton("bold", title: "Bold", symbol: "bold",
+                                      identifier: "pks-markdown-format-bold")
+                markdownCommandButton("italic", title: "Italic", symbol: "italic",
+                                      identifier: "pks-markdown-format-italic")
+
+                Menu {
+                    Button(language.text("Bullet List")) { applyMarkdownFormatting("bullet") }
+                    Button(language.text("Task")) { applyMarkdownFormatting("task") }
+                } label: {
+                    Label(language.text("List"), systemImage: "list.bullet")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help(language.text("List"))
+                .accessibilityIdentifier("pks-markdown-format-list")
+
+                markdownCommandButton("quote", title: "Quote", symbol: "text.quote",
+                                      identifier: "pks-markdown-format-quote")
+                markdownCommandButton("link", title: "Link", symbol: "link",
+                                      identifier: "pks-markdown-format-link")
+                markdownCommandButton("code", title: "Inline Code",
+                                      symbol: "chevron.left.forwardslash.chevron.right",
+                                      identifier: "pks-markdown-format-code")
+
+                Menu {
+                    Button(language.text("Insert Table"), systemImage: "tablecells") {
+                        applyMarkdownFormatting("table")
+                    }
+                    Button(language.text("Paste Image from Clipboard"), systemImage: "photo") {
+                        pasteImageFromClipboard()
+                    }
+                } label: {
+                    Label(language.text("Insert"), systemImage: "plus")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help(language.text("Insert"))
+                .accessibilityIdentifier("pks-markdown-format-insert")
+
+                Spacer(minLength: 0)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            compactMarkdownFormattingToolbar
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .buttonStyle(.plain)
+        .controlSize(.small)
+        .padding(.horizontal, 28)
+        .frame(height: 36)
+        .background(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
+        .accessibilityIdentifier("pks-markdown-formatting-toolbar")
+    }
+
+    private var compactMarkdownFormattingToolbar: some View {
+        HStack(spacing: 8) {
+            markdownCompactCommandButton(
+                "bold", title: "Bold", symbol: "bold",
+                identifier: "pks-markdown-format-bold"
+            )
+            markdownCompactCommandButton(
+                "italic", title: "Italic", symbol: "italic",
+                identifier: "pks-markdown-format-italic"
+            )
+
             Menu {
                 Button(language.text("Heading 1")) { applyMarkdownFormatting("h1") }
                 Button(language.text("Heading 2")) { applyMarkdownFormatting("h2") }
                 Button(language.text("Heading 3")) { applyMarkdownFormatting("h3") }
-            } label: {
-                Label(language.text("Heading"), systemImage: "textformat.size")
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .help(language.text("Heading"))
-            .accessibilityIdentifier("pks-markdown-format-heading")
-
-            markdownCommandButton("bold", title: "Bold", symbol: "bold",
-                                  identifier: "pks-markdown-format-bold")
-            markdownCommandButton("italic", title: "Italic", symbol: "italic",
-                                  identifier: "pks-markdown-format-italic")
-
-            Menu {
+                Divider()
                 Button(language.text("Bullet List")) { applyMarkdownFormatting("bullet") }
                 Button(language.text("Task")) { applyMarkdownFormatting("task") }
+                Button(language.text("Quote")) { applyMarkdownFormatting("quote") }
+                Button(language.text("Link")) { applyMarkdownFormatting("link") }
+                Button(language.text("Inline Code")) { applyMarkdownFormatting("code") }
             } label: {
-                Label(language.text("List"), systemImage: "list.bullet")
-                    .font(.system(size: 11, weight: .medium))
+                Image(systemName: "textformat")
+                    .frame(width: 24, height: 24)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .help(language.text("List"))
-            .accessibilityIdentifier("pks-markdown-format-list")
-
-            markdownCommandButton("quote", title: "Quote", symbol: "text.quote",
-                                  identifier: "pks-markdown-format-quote")
-            markdownCommandButton("link", title: "Link", symbol: "link",
-                                  identifier: "pks-markdown-format-link")
-            markdownCommandButton("code", title: "Inline Code",
-                                  symbol: "chevron.left.forwardslash.chevron.right",
-                                  identifier: "pks-markdown-format-code")
+            .help(language.text("Markdown formatting toolbar"))
+            .accessibilityLabel(language.text("Markdown formatting toolbar"))
+            .accessibilityIdentifier("pks-markdown-format-compact")
 
             Menu {
                 Button(language.text("Insert Table"), systemImage: "tablecells") {
@@ -3491,22 +3777,35 @@ struct NotesWindow: View {
                     pasteImageFromClipboard()
                 }
             } label: {
-                Label(language.text("Insert"), systemImage: "plus")
-                    .font(.system(size: 11, weight: .medium))
+                Image(systemName: "plus")
+                    .frame(width: 24, height: 24)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .help(language.text("Insert"))
+            .accessibilityLabel(language.text("Insert"))
             .accessibilityIdentifier("pks-markdown-format-insert")
 
             Spacer(minLength: 0)
         }
+    }
+
+    private func markdownCompactCommandButton(
+        _ command: String,
+        title: String,
+        symbol: String,
+        identifier: String
+    ) -> some View {
+        Button {
+            applyMarkdownFormatting(command)
+        } label: {
+            Image(systemName: symbol)
+                .frame(width: 24, height: 24)
+        }
         .buttonStyle(.plain)
-        .controlSize(.small)
-        .padding(.horizontal, 16)
-        .frame(height: 36)
-        .background(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
-        .accessibilityIdentifier("pks-markdown-formatting-toolbar")
+        .help(language.text(title))
+        .accessibilityLabel(language.text(title))
+        .accessibilityIdentifier(identifier)
     }
 
     private func markdownCommandButton(

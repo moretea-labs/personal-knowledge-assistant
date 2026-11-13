@@ -3,6 +3,96 @@ import SwiftUI
 
 /// Geometry only: the Markdown layout is never rewritten for viewport moves.
 enum MindMapViewportGeometry {
+    /// Return only node cards that intersect the viewport plus a screen-space
+    /// prefetch margin. Connectors remain in the single Canvas, so the full
+    /// Markdown layout and infinite navigation geometry stay unchanged.
+    static func visibleNodeIDs(
+        in placements: [MindMapPlacement],
+        mapSize: CGSize,
+        viewport: CGSize,
+        offset: CGSize,
+        zoom: CGFloat,
+        overscan: CGFloat = 320,
+        pinnedIDs: Set<Int> = []
+    ) -> Set<Int> {
+        guard !placements.isEmpty else { return [] }
+        guard let visibleRect = visibleRect(
+            mapSize: mapSize, viewport: viewport, offset: offset,
+            zoom: zoom, overscan: overscan
+        ) else {
+            return Set(placements.map(\.id))
+        }
+
+        var visible = pinnedIDs
+        for placement in placements {
+            let bounds = CGRect(
+                x: placement.center.x - placement.size.width / 2,
+                y: placement.center.y - placement.size.height / 2,
+                width: placement.size.width,
+                height: placement.size.height
+            )
+            if bounds.intersects(visibleRect) {
+                visible.insert(placement.id)
+            }
+        }
+        return visible
+    }
+
+    static func visibleRect(
+        mapSize: CGSize,
+        viewport: CGSize,
+        offset: CGSize,
+        zoom: CGFloat,
+        overscan: CGFloat = 320
+    ) -> CGRect? {
+        guard mapSize.width > 0, mapSize.height > 0,
+              viewport.width > 0, viewport.height > 0,
+              mapSize.width.isFinite, mapSize.height.isFinite,
+              viewport.width.isFinite, viewport.height.isFinite,
+              offset.width.isFinite, offset.height.isFinite,
+              zoom > 0, zoom.isFinite else { return nil }
+
+        let margin = (overscan.isFinite ? max(0, overscan) : 0) / zoom
+        return CGRect(
+            x: mapSize.width / 2 + (-viewport.width / 2 - offset.width) / zoom - margin,
+            y: mapSize.height / 2 + (-viewport.height / 2 - offset.height) / zoom - margin,
+            width: viewport.width / zoom + margin * 2,
+            height: viewport.height / zoom + margin * 2
+        )
+    }
+
+    /// Conservative bounds test for a cubic or orthogonal connector. The
+    /// control-point rectangle contains the complete path; stroke width is
+    /// included so visible edge caps are never clipped.
+    static func connectorIntersectsViewport(
+        start: CGPoint,
+        end: CGPoint,
+        control1: CGPoint,
+        control2: CGPoint,
+        viewport: CGRect,
+        lineWidth: CGFloat
+    ) -> Bool {
+        guard viewport.width > 0, viewport.height > 0,
+              viewport.minX.isFinite, viewport.minY.isFinite,
+              viewport.maxX.isFinite, viewport.maxY.isFinite,
+              start.x.isFinite, start.y.isFinite,
+              end.x.isFinite, end.y.isFinite,
+              control1.x.isFinite, control1.y.isFinite,
+              control2.x.isFinite, control2.y.isFinite else {
+            return true
+        }
+
+        // Avoid allocating point/map arrays for every edge on every pan frame.
+        let minX = min(min(start.x, end.x), min(control1.x, control2.x))
+        let maxX = max(max(start.x, end.x), max(control1.x, control2.x))
+        let minY = min(min(start.y, end.y), min(control1.y, control2.y))
+        let maxY = max(max(start.y, end.y), max(control1.y, control2.y))
+        let margin = (lineWidth.isFinite ? max(0, lineWidth) : 0) / 2
+        let bounds = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+            .insetBy(dx: -margin, dy: -margin)
+        return bounds.intersects(viewport)
+    }
+
     static func fittingZoom(mapSize: CGSize, viewport: CGSize) -> CGFloat {
         guard mapSize.width > 0, mapSize.height > 0,
               viewport.width > 36, viewport.height > 36,

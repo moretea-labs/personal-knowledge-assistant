@@ -68,6 +68,22 @@ enum MarkdownOutline {
         return headings
     }
 
+    /// Resolve a cached outline row against the current Markdown revision.
+    /// Heading order/title/level must still identify the same entry; offsets
+    /// are recalculated because edits before a heading shift its UTF-16 position.
+    static func currentUTF16Offset(
+        for heading: MarkdownOutlineHeading,
+        in source: String
+    ) -> Int? {
+        let current = headings(in: source)
+        guard current.indices.contains(heading.id) else { return nil }
+        let candidate = current[heading.id]
+        guard candidate.title == heading.title, candidate.level == heading.level else {
+            return nil
+        }
+        return candidate.utf16Offset
+    }
+
     /// One UTF-16 line-position authority for native editor navigation.
     static func lineRange(in source: String, lineIndex: Int) -> NSRange? {
         guard lineIndex >= 0 else { return nil }
