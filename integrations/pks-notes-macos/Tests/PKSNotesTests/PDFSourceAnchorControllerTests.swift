@@ -139,6 +139,60 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testPartialMultiLineSelectionAnchorRestoresOnlyTheSelectedPassage() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let textView = NSTextView(frame: bounds)
+        textView.string = "Prefix fact from\nreading the source suffix"
+        let generated = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: bounds)))
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Partial-Multiline-Anchor-\(UUID().uuidString).pdf")
+        XCTAssertTrue(generated.write(to: url))
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let sourceDocument = try XCTUnwrap(PDFDocument(url: url))
+        let selection = try XCTUnwrap(sourceDocument.findString("fact from", withOptions: []).first)
+        selection.add(try XCTUnwrap(sourceDocument.findString("reading the", withOptions: []).first))
+        let selectedText = try XCTUnwrap(selection.string)
+        let normalized = selectedText.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        XCTAssertEqual(normalized, "fact from reading the")
+
+        let sourceView = PDFView(frame: bounds)
+        let sourceController = PDFReaderController()
+        sourceController.attach(view: sourceView, document: sourceDocument, url: url,
+                                requestedPage: nil, requestedAnchor: nil)
+        sourceView.currentSelection = selection
+        XCTAssertEqual(sourceController.selectedText(), selectedText)
+
+        let anchor = try XCTUnwrap(sourceController.selectedSourceAnchor())
+        XCTAssertEqual(anchor.normalizedRects.count, 2)
+        let citation = try XCTUnwrap(sourceController.selectedCitationForDrag(
+            pdf: url, root: url.deletingLastPathComponent()
+        ))
+        XCTAssertTrue(citation.contains(anchor.fragment))
+        XCTAssertTrue(citation.contains("> fact from\n> reading the"))
+
+        let restoredDocument = try XCTUnwrap(PDFDocument(url: url))
+        let restoredView = PDFView(frame: bounds)
+        let restoredController = PDFReaderController()
+        defer {
+            sourceController.detach(view: sourceView)
+            restoredController.detach(view: restoredView)
+        }
+        restoredController.attach(view: restoredView, document: restoredDocument, url: url,
+                                  requestedPage: nil, requestedAnchor: anchor)
+
+        XCTAssertFalse(restoredController.invalidRequestedSelection)
+        let restoredText = try XCTUnwrap(restoredView.currentSelection?.string)
+        XCTAssertEqual(
+            restoredText.split(whereSeparator: \.isWhitespace).joined(separator: " "),
+            "fact from reading the"
+        )
+        XCTAssertTrue(anchor.matches(text: restoredText))
+        XCTAssertFalse(restoredText.contains("Prefix"))
+        XCTAssertFalse(restoredText.contains("suffix"))
+    }
+
+    @MainActor
     func testStalePDFSelectionAnchorNeverSelectsDifferentText() throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let originalTextView = NSTextView(frame: bounds)
