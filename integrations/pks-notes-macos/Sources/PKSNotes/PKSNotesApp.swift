@@ -2978,6 +2978,28 @@ struct NotesWindow: View {
         insertClipboardImage(into: textView)
     }
 
+    private func chooseImageFile() {
+        guard model.selected != nil,
+              model.externalBody == nil,
+              let window = NSApp.keyWindow,
+              let textView = markdownTextView(in: window.contentView),
+              !textView.hasMarkedText() else { return }
+
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = language.text("Insert")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let markdown = model.importImage(from: url) else {
+            model.message = language.text("Could not import the selected image into this notes workspace.")
+            return
+        }
+        window.makeFirstResponder(textView)
+        _ = MarkdownNativeCommand.replaceSelection(markdown, in: textView)
+    }
+
     private func insertClipboardImage(into textView: NSTextView) {
         // Image insertion is also a Markdown mutation; leave active IME composition intact.
         guard !textView.hasMarkedText() else { return }
@@ -3711,6 +3733,9 @@ struct NotesWindow: View {
                     Button(language.text("Insert Table"), systemImage: "tablecells") {
                         applyMarkdownFormatting("table")
                     }
+                    Button(language.text("Choose Image…"), systemImage: "photo.on.rectangle") {
+                        chooseImageFile()
+                    }
                     Button(language.text("Paste Image from Clipboard"), systemImage: "photo") {
                         pasteImageFromClipboard()
                     }
@@ -3772,6 +3797,9 @@ struct NotesWindow: View {
             Menu {
                 Button(language.text("Insert Table"), systemImage: "tablecells") {
                     applyMarkdownFormatting("table")
+                }
+                Button(language.text("Choose Image…"), systemImage: "photo.on.rectangle") {
+                    chooseImageFile()
                 }
                 Button(language.text("Paste Image from Clipboard"), systemImage: "photo") {
                     pasteImageFromClipboard()

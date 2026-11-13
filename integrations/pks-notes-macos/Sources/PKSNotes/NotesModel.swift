@@ -3280,7 +3280,7 @@ final class NotesModel: ObservableObject {
     }
 
     func importClipboardImage() -> String? {
-        guard let root, let selected else { return nil }
+        guard root != nil, selected != nil else { return nil }
         let pasteboard = NSPasteboard.general
         let image: NSImage?
         if let data = pasteboard.data(forType: .png) {
@@ -3288,17 +3288,32 @@ final class NotesModel: ObservableObject {
         } else {
             image = NSImage(pasteboard: pasteboard)
         }
+        guard let image else { return nil }
+        return importImage(image, stem: "pasted-image", altText: "Pasted image")
+    }
 
-        guard let image,
+    func importImage(from sourceURL: URL) -> String? {
+        guard root != nil, selected != nil, sourceURL.isFileURL else { return nil }
+        let acquiredScope = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if acquiredScope { sourceURL.stopAccessingSecurityScopedResource() }
+        }
+        guard let data = try? Data(contentsOf: sourceURL),
+              let image = NSImage(data: data) else { return nil }
+        return importImage(image, stem: "image", altText: "Image")
+    }
+
+    private func importImage(_ image: NSImage, stem: String, altText: String) -> String? {
+        guard let root, let selected,
               let tiff = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiff),
               let png = bitmap.representation(using: .png, properties: [:]),
               let relative = WorkspaceFiles.storeAttachment(
-                  png, for: selected, in: root, stem: "pasted-image", fileExtension: "png"
+                  png, for: selected, in: root, stem: stem, fileExtension: "png"
               ) else {
             return nil
         }
-        return "![Pasted image](\(relative))"
+        return "![\(altText)](\(relative))"
     }
 
     func copySource(_ value: String) {

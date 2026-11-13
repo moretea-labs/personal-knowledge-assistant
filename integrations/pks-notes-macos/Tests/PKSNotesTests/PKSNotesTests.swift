@@ -2453,6 +2453,51 @@ extension PKSNotesTests {
     }
 
     @MainActor
+    func testImportImageFileCreatesMarkdownAttachmentInSelectedNote() async throws {
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
+        let previousBookmark = defaults.object(forKey: "PKSNotesWorkspaceBookmark")
+        defer {
+            if let previousWorkspace { defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousBookmark { defaults.set(previousBookmark, forKey: "PKSNotesWorkspaceBookmark") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+        }
+
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("Workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let note = root.appendingPathComponent("Note.md")
+        try "# Note".write(to: note, atomically: true, encoding: .utf8)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        bitmap.setColor(NSColor(calibratedRed: 1, green: 0, blue: 0, alpha: 1), atX: 0, y: 0)
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let source = base.appendingPathComponent("source.png")
+        try png.write(to: source)
+        let invalid = base.appendingPathComponent("not-an-image.txt")
+        try "not an image".write(to: invalid, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(note)
+        await waitForNote(model, note)
+
+        let markdown = try XCTUnwrap(model.importImage(from: source))
+        XCTAssertEqual(markdown, "![Image](attachments/image.png)")
+        let attachment = root.appendingPathComponent("attachments/image.png")
+        XCTAssertNotNil(NSImage(contentsOf: attachment))
+        XCTAssertNil(model.importImage(from: invalid))
+        XCTAssertEqual(model.selected, note)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "# Note")
+    }
+
+    @MainActor
     func testCopyAndMoveItemsStayInsideWorkspaceAndRebaseOpenNote() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")
