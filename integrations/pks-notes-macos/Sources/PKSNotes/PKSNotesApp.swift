@@ -3619,6 +3619,7 @@ struct NotesWindow: View {
                 return true
             }
         )
+        .id(model.selected?.standardizedFileURL.path ?? "")
     }
 
     private func pdfReader(_ url: URL) -> some View {
