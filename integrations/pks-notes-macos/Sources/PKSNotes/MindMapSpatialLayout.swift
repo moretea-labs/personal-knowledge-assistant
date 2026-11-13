@@ -84,7 +84,14 @@ struct MindMapConnector: Equatable {
     }
 }
 
+private struct MindMapConnectorCell: Hashable {
+    let column: Int
+    let row: Int
+}
+
 struct MindMapLayoutSnapshot: Equatable {
+    private static let connectorCellSize = CGSize(width: 640, height: 480)
+
     let placements: [MindMapPlacement]
     let size: CGSize
     let placementsByID: [Int: MindMapPlacement]
@@ -92,6 +99,8 @@ struct MindMapLayoutSnapshot: Equatable {
     let parentIDs: Set<Int>
     let branchByID: [Int: Int]
     let connectors: [MindMapConnector]
+    private let connectorIndicesByCell: [MindMapConnectorCell: [Int]]
+    private let unindexedConnectorIndices: [Int]
 
     init(
         placements: [MindMapPlacement],
@@ -108,12 +117,37 @@ struct MindMapLayoutSnapshot: Equatable {
         parentIDs = Set(placements.compactMap(\.parentID))
         let branches = MindMapVisualStyle.branchIndices(placements.map(\.node))
         branchByID = branches
-        connectors = placements.compactMap { child in
+        let resolvedConnectors: [MindMapConnector] = placements.compactMap { child -> MindMapConnector? in
             guard let parentID = child.parentID, let parent = byID[parentID] else { return nil }
             return MindMapConnector(
                 parent: parent, child: child, style: style, branch: branches[child.id] ?? 0
             )
         }
+        connectors = resolvedConnectors
+
+        var cellIndex: [MindMapConnectorCell: [Int]] = [:]
+        var unindexedIndices: [Int] = []
+        for (index, connector) in resolvedConnectors.enumerated() {
+            let bounds = connector.bounds
+            let points = [connector.start, connector.end, connector.control1, connector.control2]
+            guard points.allSatisfy({ $0.x.isFinite && $0.y.isFinite }),
+                  bounds.minX.isFinite, bounds.maxX.isFinite,
+                  bounds.minY.isFinite, bounds.maxY.isFinite else {
+                unindexedIndices.append(index)
+                continue
+            }
+            let minColumn = Int(floor(bounds.minX / Self.connectorCellSize.width))
+            let maxColumn = Int(floor(bounds.maxX / Self.connectorCellSize.width))
+            let minRow = Int(floor(bounds.minY / Self.connectorCellSize.height))
+            let maxRow = Int(floor(bounds.maxY / Self.connectorCellSize.height))
+            for row in minRow...maxRow {
+                for column in minColumn...maxColumn {
+                    cellIndex[.init(column: column, row: row), default: []].append(index)
+                }
+            }
+        }
+        connectorIndicesByCell = cellIndex
+        unindexedConnectorIndices = unindexedIndices
     }
 
     /// Resolve the viewport's small visible set without filtering the full
@@ -123,6 +157,51 @@ struct MindMapLayoutSnapshot: Equatable {
         return visibleIDs.compactMap { placementsByID[$0] }.sorted {
             placementOrderByID[$0.id, default: .max] < placementOrderByID[$1.id, default: .max]
         }
+    }
+
+    /// Query nearby cells; broad viewports and invalid geometry fail open.
+    func visibleConnectors(in viewport: CGRect?) -> [MindMapConnector] {
+        guard let viewport = viewport?.standardized else { return connectors }
+        guard !viewport.isNull, !viewport.isEmpty,
+              viewport.minX.isFinite, viewport.maxX.isFinite,
+              viewport.minY.isFinite, viewport.maxY.isFinite else {
+            return connectors
+        }
+
+        let minColumn = Int(floor(viewport.minX / Self.connectorCellSize.width))
+        let maxColumn = Int(floor(viewport.maxX / Self.connectorCellSize.width))
+        let minRow = Int(floor(viewport.minY / Self.connectorCellSize.height))
+        let maxRow = Int(floor(viewport.maxY / Self.connectorCellSize.height))
+        let queriedCellCount = Double(maxColumn - minColumn + 1)
+            * Double(maxRow - minRow + 1)
+        guard queriedCellCount < Double(connectorIndicesByCell.count) else {
+            return connectors.filter { Self.intersects($0, viewport: viewport) }
+        }
+
+        var candidates = Set(unindexedConnectorIndices)
+        for row in minRow...maxRow {
+            for column in minColumn...maxColumn {
+                candidates.formUnion(
+                    connectorIndicesByCell[.init(column: column, row: row)] ?? []
+                )
+            }
+        }
+        return candidates.sorted().compactMap { index in
+            let connector = connectors[index]
+            return Self.intersects(connector, viewport: viewport) ? connector : nil
+        }
+    }
+
+    private static func intersects(_ connector: MindMapConnector, viewport: CGRect) -> Bool {
+        guard connector.start.x.isFinite, connector.start.y.isFinite,
+              connector.end.x.isFinite, connector.end.y.isFinite,
+              connector.control1.x.isFinite, connector.control1.y.isFinite,
+              connector.control2.x.isFinite, connector.control2.y.isFinite,
+              connector.bounds.minX.isFinite, connector.bounds.maxX.isFinite,
+              connector.bounds.minY.isFinite, connector.bounds.maxY.isFinite else {
+            return true
+        }
+        return connector.bounds.intersects(viewport)
     }
 }
 

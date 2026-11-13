@@ -152,6 +152,65 @@ final class MindMapViewportTests: XCTestCase {
         ))
     }
 
+    func testConnectorSpatialIndexQueriesVisibleCellsAndDeduplicatesLongEdges() throws {
+        func placement(_ id: Int, parentID: Int?, x: CGFloat, y: CGFloat) -> MindMapPlacement {
+            MindMapPlacement(
+                node: MindMapNode(id: id, depth: parentID == nil ? 0 : 1, title: "Node \(id)"),
+                parentID: parentID,
+                center: CGPoint(x: x, y: y),
+                size: CGSize(width: 100, height: 60)
+            )
+        }
+
+        let layout = MindMapLayoutSnapshot(
+            placements: [
+                placement(1, parentID: nil, x: 100, y: 100),
+                placement(2, parentID: 1, x: 1_500, y: 100),
+                placement(3, parentID: nil, x: 4_000, y: 100),
+                placement(4, parentID: 3, x: 4_500, y: 100)
+            ],
+            size: CGSize(width: 5_000, height: 1_000)
+        )
+
+        let visible = layout.visibleConnectors(
+            in: CGRect(x: 300, y: 0, width: 1_000, height: 300)
+        )
+        let connector = try XCTUnwrap(visible.first)
+        XCTAssertEqual(visible.count, 1)
+        XCTAssertEqual(connector.end.x, 1_450, accuracy: 0.001)
+        XCTAssertEqual(layout.visibleConnectors(in: nil).count, 2)
+        XCTAssertEqual(
+            layout.visibleConnectors(in: CGRect(x: 0, y: 0, width: 5_000, height: 1_000)).count,
+            2
+        )
+    }
+
+    func testConnectorSpatialIndexKeepsInvalidGeometryVisible() {
+        func placement(_ id: Int, parentID: Int?, x: CGFloat) -> MindMapPlacement {
+            MindMapPlacement(
+                node: MindMapNode(id: id, depth: parentID == nil ? 0 : 1, title: "Node \(id)"),
+                parentID: parentID,
+                center: CGPoint(x: x, y: 100),
+                size: CGSize(width: 100, height: 60)
+            )
+        }
+
+        let layout = MindMapLayoutSnapshot(
+            placements: [
+                placement(1, parentID: nil, x: .nan),
+                placement(2, parentID: 1, x: 5_000),
+                placement(3, parentID: nil, x: 5_000),
+                placement(4, parentID: 3, x: 7_000)
+            ],
+            size: CGSize(width: 8_000, height: 1_000)
+        )
+
+        XCTAssertEqual(
+            layout.visibleConnectors(in: CGRect(x: 0, y: 0, width: 200, height: 200)).count,
+            1
+        )
+    }
+
     func testInvalidConnectorGeometryFailsOpenToPreserveDrawing() {
         XCTAssertTrue(MindMapViewportGeometry.connectorIntersectsViewport(
             start: CGPoint(x: CGFloat.nan, y: 10),

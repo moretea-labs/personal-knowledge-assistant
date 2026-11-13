@@ -1255,11 +1255,9 @@ struct MindMapCanvas: View {
                 overscan: 320
             )
             : nil
+        let visibleConnectors = layout.visibleConnectors(in: connectorViewport)
         return Canvas { context, _ in
-            for connector in layout.connectors {
-                if let connectorViewport, !connector.bounds.intersects(connectorViewport) {
-                    continue
-                }
+            for connector in visibleConnectors {
                 var path = Path()
                 path.move(to: connector.start)
                 if connector.angular {
