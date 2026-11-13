@@ -46,13 +46,28 @@ struct MindMapLayoutSnapshot: Equatable {
     let placements: [MindMapPlacement]
     let size: CGSize
     let placementsByID: [Int: MindMapPlacement]
+    let placementOrderByID: [Int: Int]
+    let parentIDs: Set<Int>
     let branchByID: [Int: Int]
 
     init(placements: [MindMapPlacement], size: CGSize) {
         self.placements = placements
         self.size = size
         placementsByID = Dictionary(uniqueKeysWithValues: placements.map { ($0.id, $0) })
+        placementOrderByID = Dictionary(
+            uniqueKeysWithValues: placements.enumerated().map { ($0.element.id, $0.offset) }
+        )
+        parentIDs = Set(placements.compactMap(\.parentID))
         branchByID = MindMapVisualStyle.branchIndices(placements.map(\.node))
+    }
+
+    /// Resolve the viewport's small visible set without filtering the full
+    /// placement array on every pan/zoom update. Preserve Markdown source order.
+    func visiblePlacements(for visibleIDs: Set<Int>?) -> [MindMapPlacement] {
+        guard let visibleIDs else { return placements }
+        return visibleIDs.compactMap { placementsByID[$0] }.sorted {
+            placementOrderByID[$0.id, default: .max] < placementOrderByID[$1.id, default: .max]
+        }
     }
 }
 

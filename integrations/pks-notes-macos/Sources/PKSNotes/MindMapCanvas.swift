@@ -1325,15 +1325,10 @@ struct MindMapCanvas: View {
         visibleNodeIDs: Set<Int>? = nil,
         exporting: Bool = false
     ) -> some View {
-        let renderedPlacements = visibleNodeIDs.map { visibleIDs in
-            layout.placements.filter { visibleIDs.contains($0.id) }
-        } ?? layout.placements
-        // Disclosure state comes from the full outline; branch indices are cached with layout.
-        let allNodes = nodes
+        let renderedPlacements = layout.visiblePlacements(for: visibleNodeIDs)
+        // Disclosure and branch metadata are derived once with the layout snapshot.
         let branchByID = layout.branchByID
-        let parentIDs = Set(allNodes.indices.dropLast().compactMap { index -> Int? in
-            allNodes[index + 1].depth > allNodes[index].depth ? allNodes[index].id : nil
-        })
+        let parentIDs = layout.parentIDs
         ForEach(renderedPlacements) { placement in
             nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id),
                      branch: branchByID[placement.id] ?? 0,

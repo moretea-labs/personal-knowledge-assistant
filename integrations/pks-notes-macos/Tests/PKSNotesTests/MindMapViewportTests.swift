@@ -237,6 +237,20 @@ final class MindMapViewportTests: XCTestCase {
         ), 1.25)
     }
 
+    func testVisiblePlacementsPreserveSourceOrderAndReuseLayoutRelationships() {
+        let layout = MindMapSpatialLayout.layout([
+            MindMapNode(id: 20, depth: 0, title: "Root"),
+            MindMapNode(id: 8, depth: 1, title: "First child"),
+            MindMapNode(id: 11, depth: 2, title: "Nested child"),
+            MindMapNode(id: 3, depth: 1, title: "Second child")
+        ])
+
+        XCTAssertEqual(layout.parentIDs, Set([20, 8]))
+        XCTAssertEqual(layout.visiblePlacements(for: Set([3, 999, 11])).map(\.id), [11, 3])
+        XCTAssertEqual(layout.visiblePlacements(for: Set<Int>()).map(\.id), [])
+        XCTAssertEqual(layout.visiblePlacements(for: nil).map(\.id), [20, 8, 11, 3])
+    }
+
     func testNodeDetailsUseOnlyAttachedMarkdownBody() throws {
         let source = """
         # Parent
