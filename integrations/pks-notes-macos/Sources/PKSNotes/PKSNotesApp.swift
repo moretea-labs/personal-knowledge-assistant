@@ -3059,6 +3059,7 @@ struct NotesWindow: View {
             return
         }
         window.makeFirstResponder(textView)
+        editorFocused = true
         _ = MarkdownNativeCommand.replaceSelection(markdown, in: textView)
     }
 
@@ -3069,7 +3070,8 @@ struct NotesWindow: View {
             model.message = language.text("Could not save the pasted image inside this notes workspace.")
             return
         }
-        NSApp.keyWindow?.makeFirstResponder(textView)
+        textView.window?.makeFirstResponder(textView)
+        editorFocused = true
         _ = MarkdownNativeCommand.replaceSelection(markdown, in: textView)
     }
 
