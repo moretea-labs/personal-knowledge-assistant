@@ -11,7 +11,7 @@ final class MindMapInterchangeTests: XCTestCase {
         let source = "# Study\n- First\n- Second\n"
 
         let mapRequest = MarkdownEditorRevealRequest(
-            note: note, line: 1, keepsMindMapVisible: true
+            note: note, target: .line(1), keepsMindMapVisible: true
         )
         let rebasedRange = try XCTUnwrap(mapRequest.selectionRange(
             in: source, selectedNote: note, selectedNodeLine: 2
@@ -22,7 +22,7 @@ final class MindMapInterchangeTests: XCTestCase {
         ))
 
         let editorRequest = MarkdownEditorRevealRequest(
-            note: note, line: 1, keepsMindMapVisible: false
+            note: note, target: .line(1), keepsMindMapVisible: false
         )
         let editorRange = try XCTUnwrap(editorRequest.selectionRange(
             in: source, selectedNote: note, selectedNodeLine: 2

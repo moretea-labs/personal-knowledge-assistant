@@ -2354,6 +2354,38 @@ extension PKSNotesTests {
         XCTAssertEqual(textView.markedRange(), markedRange)
     }
 
+    func testMarkdownEditorEndRevealPlacesCaretAfterAppendedCitation() {
+        let note = URL(fileURLWithPath: "/tmp/Study.md")
+        let source = "# 学习\n\n[PDF · p. 7](paper.pdf#page=7)\n> 引文 😀\n"
+        let request = MarkdownEditorRevealRequest(
+            note: note,
+            target: .end,
+            keepsMindMapVisible: false
+        )
+
+        XCTAssertEqual(
+            request.selectionRange(in: source, selectedNote: note, selectedNodeLine: nil),
+            NSRange(location: (source as NSString).length, length: 0)
+        )
+        XCTAssertNil(
+            request.selectionRange(
+                in: source,
+                selectedNote: URL(fileURLWithPath: "/tmp/Other.md"),
+                selectedNodeLine: nil
+            )
+        )
+
+        let lineRequest = MarkdownEditorRevealRequest(
+            note: note,
+            target: .line(2),
+            keepsMindMapVisible: false
+        )
+        XCTAssertEqual(
+            lineRequest.selectionRange(in: source, selectedNote: note, selectedNodeLine: nil),
+            MarkdownOutline.lineRange(in: source, lineIndex: 2)
+        )
+    }
+
     @MainActor
     func testNativeMarkdownFormattingPreservesUnicodeSelectionBeforeReturning() {
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 180))

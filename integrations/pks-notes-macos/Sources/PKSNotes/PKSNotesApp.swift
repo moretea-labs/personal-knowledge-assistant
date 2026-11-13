@@ -559,8 +559,13 @@ private struct RelationshipWarmupKey: Hashable {
 }
 
 struct MarkdownEditorRevealRequest: Equatable {
+    enum Target: Equatable {
+        case line(Int)
+        case end
+    }
+
     let note: URL
-    let line: Int
+    let target: Target
     let keepsMindMapVisible: Bool
 
     func selectionRange(
@@ -570,8 +575,13 @@ struct MarkdownEditorRevealRequest: Equatable {
     ) -> NSRange? {
         guard let selectedNote,
               selectedNote.standardizedFileURL == note.standardizedFileURL else { return nil }
-        let targetLine = keepsMindMapVisible ? selectedNodeLine ?? line : line
-        return MarkdownOutline.lineRange(in: source, lineIndex: targetLine)
+        switch target {
+        case .line(let line):
+            let targetLine = keepsMindMapVisible ? selectedNodeLine ?? line : line
+            return MarkdownOutline.lineRange(in: source, lineIndex: targetLine)
+        case .end:
+            return NSRange(location: (source as NSString).length, length: 0)
+        }
     }
 }
 
@@ -1113,7 +1123,11 @@ struct NotesWindow: View {
             } else if note == pendingEditorFocus, note != nil {
                 pendingEditorFocus = nil
                 mode = .edit
-                Task { @MainActor in editorFocused = true }
+                Task { @MainActor in
+                    await Task.yield()
+                    editorFocused = true
+                    applyPendingMarkdownReveal()
+                }
             } else if note != nil && !openAsMap {
                 // Existing Markdown always opens in Preview. Edit is an explicit
                 // per-note action; only the New Note path carries editor intent.
@@ -1531,14 +1545,24 @@ struct NotesWindow: View {
             guard !Task.isCancelled, saved else { return }
 
             closeQuickPicker()
+            showingMindMap = false
+            showingMindMapSourcePane = false
             // In narrow windows, show the citation in the note immediately.
             compactStudyShowsStudyPane = true
+            pendingMarkdownReveal = MarkdownEditorRevealRequest(
+                note: studyNote.standardizedFileURL,
+                target: .end,
+                keepsMindMapVisible: false
+            )
             pendingEditorFocus = studyNote
             model.openStudyNote(studyNote)
             if model.selected == studyNote {
                 pendingEditorFocus = nil
                 mode = .edit
-                Task { @MainActor in editorFocused = true }
+                Task { @MainActor in
+                    await Task.yield()
+                    applyPendingMarkdownReveal()
+                }
             }
         }
     }
@@ -3659,10 +3683,18 @@ struct NotesWindow: View {
                             anchor: anchor, to: note
                         )
                         guard saved, model.selected?.standardizedFileURL == note.standardizedFileURL else { return }
+                        pendingMarkdownReveal = MarkdownEditorRevealRequest(
+                            note: note.standardizedFileURL,
+                            target: .end,
+                            keepsMindMapVisible: false
+                        )
                         showingMindMap = false
                         compactStudyShowsStudyPane = true
                         mode = .edit
-                        editorFocused = true
+                        Task { @MainActor in
+                            await Task.yield()
+                            applyPendingMarkdownReveal()
+                        }
                     }
                 }
             },
@@ -4023,7 +4055,7 @@ struct NotesWindow: View {
         mindMapSelectionLine = MindMapOutline.nodeID(atUTF16Offset: range.location, in: model.draft)
         pendingMarkdownReveal = MarkdownEditorRevealRequest(
             note: note.standardizedFileURL,
-            line: line,
+            target: .line(line),
             keepsMindMapVisible: keepMindMapVisible
         )
         if keepMindMapVisible {
