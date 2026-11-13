@@ -37,4 +37,24 @@ final class MarkdownEditingTests: XCTestCase {
         XCTAssertEqual(result.text, "``")
         XCTAssertEqual(result.selection, NSRange(location: 1, length: 0))
     }
+
+    func testInlineCodePreservesBoundarySpacesAndDoesNotPadWhitespaceOnlySelection() {
+        let cases = [
+            ("  value  ", "before`   value   `after", 2),
+            ("   ", "before`   `after", 1)
+        ]
+
+        for (selected, expected, selectionOffset) in cases {
+            let source = "before\(selected)after"
+            let selection = (source as NSString).range(of: selected)
+            let result = MarkdownEditing.apply(.inlineCode, to: source, selection: selection)
+
+            XCTAssertEqual(result.text, expected)
+            XCTAssertEqual(
+                result.selection,
+                NSRange(location: selection.location + selectionOffset, length: selection.length)
+            )
+            XCTAssertEqual((result.text as NSString).substring(with: result.selection), selected)
+        }
+    }
 }

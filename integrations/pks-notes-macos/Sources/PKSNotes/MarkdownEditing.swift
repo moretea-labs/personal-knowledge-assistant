@@ -57,9 +57,7 @@ enum MarkdownEditing {
         switch command {
         case .bold: return wrap(text, range: range, prefix: "**", suffix: "**")
         case .italic: return wrap(text, range: range, prefix: "*", suffix: "*")
-        case .inlineCode:
-            let marker = inlineCodeDelimiter(for: ns.substring(with: range))
-            return wrap(text, range: range, prefix: marker, suffix: marker)
+        case .inlineCode: return wrapInlineCode(text, range: range)
         case .link:
             let selected = ns.substring(with: range)
             let label = escapedLinkLabel(selected)
@@ -106,6 +104,25 @@ enum MarkdownEditing {
         let updated = ns.replacingCharacters(in: range, with: value)
         let cursor = location + (value as NSString).length
         return .init(text: updated, selection: NSRange(location: cursor, length: 0))
+    }
+
+    private static func wrapInlineCode(_ text: String, range: NSRange) -> MarkdownEditResult {
+        let ns = text as NSString
+        let selected = ns.substring(with: range)
+        let delimiter = inlineCodeDelimiter(for: selected)
+        let normalized = selected
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+        let padding = selected.hasPrefix(" ") && selected.hasSuffix(" ")
+            && normalized.contains(where: { $0 != " " }) ? " " : ""
+        let replacement = delimiter + padding + selected + padding + delimiter
+        let updated = ns.replacingCharacters(in: range, with: replacement)
+        let selectionLocation = range.location + ((delimiter + padding) as NSString).length
+        return .init(
+            text: updated,
+            selection: NSRange(location: selectionLocation, length: range.length)
+        )
     }
 
     private static func inlineCodeDelimiter(for selected: String) -> String {
