@@ -237,6 +237,27 @@ final class MindMapViewportTests: XCTestCase {
         ), 1.25)
     }
 
+    func testLayoutSnapshotPrecomputesStyleAwareConnectorGeometryAndStrokeBounds() throws {
+        let nodes = [
+            MindMapNode(id: 20, depth: 0, title: "Root"),
+            MindMapNode(id: 8, depth: 1, title: "First child"),
+            MindMapNode(id: 11, depth: 1, title: "Second child")
+        ]
+        let layout = MindMapSpatialLayout.layout(nodes, style: .minimal)
+        let connector = try XCTUnwrap(layout.connectors.first)
+
+        XCTAssertEqual(layout.connectors.count, 2)
+        XCTAssertEqual(connector.branch, 1)
+        XCTAssertTrue(connector.angular)
+        XCTAssertEqual(connector.lineWidth, MindMapVisualStyle.minimal.connectorWidth)
+        XCTAssertEqual(connector.control1.x, (connector.start.x + connector.end.x) / 2, accuracy: 0.001)
+        XCTAssertEqual(connector.control1.y, connector.start.y, accuracy: 0.001)
+        XCTAssertEqual(connector.control2.x, connector.control1.x, accuracy: 0.001)
+        XCTAssertEqual(connector.control2.y, connector.end.y, accuracy: 0.001)
+        XCTAssertTrue(connector.bounds.contains(connector.start))
+        XCTAssertTrue(connector.bounds.contains(connector.end))
+    }
+
     func testVisiblePlacementsPreserveSourceOrderAndReuseLayoutRelationships() {
         let layout = MindMapSpatialLayout.layout([
             MindMapNode(id: 20, depth: 0, title: "Root"),

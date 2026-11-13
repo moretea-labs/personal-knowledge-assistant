@@ -1243,7 +1243,6 @@ struct MindMapCanvas: View {
         _ layout: MindMapLayoutSnapshot,
         exporting: Bool = false
     ) -> some View {
-        let byID = layout.placementsByID
         let connectorViewport = !exporting
             ? MindMapViewportGeometry.visibleRect(
                 mapSize: layout.size,
@@ -1256,58 +1255,32 @@ struct MindMapCanvas: View {
                 overscan: 320
             )
             : nil
-        let branchByID = layout.branchByID
         return Canvas { context, _ in
-            for placement in layout.placements {
-                guard let parentID = placement.parentID,
-                      let parent = byID[parentID] else { continue }
-                let start = CGPoint(
-                    x: parent.center.x + parent.size.width / 2,
-                    y: parent.center.y
-                )
-                let end = CGPoint(
-                    x: placement.center.x - placement.size.width / 2,
-                    y: placement.center.y
-                )
-                let control1: CGPoint
-                let control2: CGPoint
-                if mapStyle.angularConnectors {
-                    let middleX = (start.x + end.x) / 2
-                    control1 = CGPoint(x: middleX, y: start.y)
-                    control2 = CGPoint(x: middleX, y: end.y)
-                } else {
-                    let bend = max(34, (end.x - start.x) * 0.48)
-                    control1 = CGPoint(x: start.x + bend, y: start.y)
-                    control2 = CGPoint(x: end.x - bend, y: end.y)
-                }
-                if let connectorViewport,
-                   !MindMapViewportGeometry.connectorIntersectsViewport(
-                    start: start, end: end,
-                    control1: control1, control2: control2,
-                    viewport: connectorViewport,
-                    lineWidth: mapStyle.connectorWidth
-                   ) {
+            for connector in layout.connectors {
+                if let connectorViewport, !connector.bounds.intersects(connectorViewport) {
                     continue
                 }
-
                 var path = Path()
-                path.move(to: start)
-                if mapStyle.angularConnectors {
-                    path.addLine(to: control1)
-                    path.addLine(to: control2)
-                    path.addLine(to: end)
+                path.move(to: connector.start)
+                if connector.angular {
+                    path.addLine(to: connector.control1)
+                    path.addLine(to: connector.control2)
+                    path.addLine(to: connector.end)
                 } else {
-                    path.addCurve(to: end, control1: control1, control2: control2)
+                    path.addCurve(
+                        to: connector.end,
+                        control1: connector.control1,
+                        control2: connector.control2
+                    )
                 }
-                let branch = branchByID[placement.id] ?? 0
                 let color = mapStyle == .colorful
-                    ? mapStyle.branchColor(branch).opacity(0.67)
+                    ? mapStyle.branchColor(connector.branch).opacity(0.67)
                     : Color.secondary.opacity(mapStyle == .minimal ? 0.43 : 0.30)
                 context.stroke(
                     path,
                     with: .color(color),
                     style: StrokeStyle(
-                        lineWidth: mapStyle.connectorWidth,
+                        lineWidth: connector.lineWidth,
                         lineCap: .round,
                         lineJoin: .round
                     )

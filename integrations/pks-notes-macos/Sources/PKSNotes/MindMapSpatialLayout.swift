@@ -42,6 +42,48 @@ struct MindMapPlacement: Identifiable, Equatable {
     var id: Int { node.id }
 }
 
+struct MindMapConnector: Equatable {
+    let start: CGPoint
+    let end: CGPoint
+    let control1: CGPoint
+    let control2: CGPoint
+    let bounds: CGRect
+    let branch: Int
+    let angular: Bool
+    let lineWidth: CGFloat
+
+    init(parent: MindMapPlacement, child: MindMapPlacement,
+         style: MindMapVisualStyle, branch: Int) {
+        let start = CGPoint(x: parent.center.x + parent.size.width / 2, y: parent.center.y)
+        let end = CGPoint(x: child.center.x - child.size.width / 2, y: child.center.y)
+        let control1: CGPoint
+        let control2: CGPoint
+        if style.angularConnectors {
+            let middleX = (start.x + end.x) / 2
+            control1 = CGPoint(x: middleX, y: start.y)
+            control2 = CGPoint(x: middleX, y: end.y)
+        } else {
+            let bend = max(34, (end.x - start.x) * 0.48)
+            control1 = CGPoint(x: start.x + bend, y: start.y)
+            control2 = CGPoint(x: end.x - bend, y: end.y)
+        }
+        let minX = min(min(start.x, end.x), min(control1.x, control2.x))
+        let maxX = max(max(start.x, end.x), max(control1.x, control2.x))
+        let minY = min(min(start.y, end.y), min(control1.y, control2.y))
+        let maxY = max(max(start.y, end.y), max(control1.y, control2.y))
+        let lineWidth = style.connectorWidth
+        self.start = start
+        self.end = end
+        self.control1 = control1
+        self.control2 = control2
+        bounds = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+            .insetBy(dx: -lineWidth / 2, dy: -lineWidth / 2)
+        self.branch = branch
+        angular = style.angularConnectors
+        self.lineWidth = lineWidth
+    }
+}
+
 struct MindMapLayoutSnapshot: Equatable {
     let placements: [MindMapPlacement]
     let size: CGSize
@@ -49,16 +91,29 @@ struct MindMapLayoutSnapshot: Equatable {
     let placementOrderByID: [Int: Int]
     let parentIDs: Set<Int>
     let branchByID: [Int: Int]
+    let connectors: [MindMapConnector]
 
-    init(placements: [MindMapPlacement], size: CGSize) {
+    init(
+        placements: [MindMapPlacement],
+        size: CGSize,
+        style: MindMapVisualStyle = .classic
+    ) {
         self.placements = placements
         self.size = size
-        placementsByID = Dictionary(uniqueKeysWithValues: placements.map { ($0.id, $0) })
+        let byID = Dictionary(uniqueKeysWithValues: placements.map { ($0.id, $0) })
+        placementsByID = byID
         placementOrderByID = Dictionary(
             uniqueKeysWithValues: placements.enumerated().map { ($0.element.id, $0.offset) }
         )
         parentIDs = Set(placements.compactMap(\.parentID))
-        branchByID = MindMapVisualStyle.branchIndices(placements.map(\.node))
+        let branches = MindMapVisualStyle.branchIndices(placements.map(\.node))
+        branchByID = branches
+        connectors = placements.compactMap { child in
+            guard let parentID = child.parentID, let parent = byID[parentID] else { return nil }
+            return MindMapConnector(
+                parent: parent, child: child, style: style, branch: branches[child.id] ?? 0
+            )
+        }
     }
 
     /// Resolve the viewport's small visible set without filtering the full
@@ -200,7 +255,8 @@ enum MindMapSpatialLayout {
         let maxY = placements.map { $0.center.y + $0.size.height / 2 }.max() ?? 280
         return .init(
             placements: placements,
-            size: CGSize(width: max(560, maxX + margin), height: max(320, maxY + margin))
+            size: CGSize(width: max(560, maxX + margin), height: max(320, maxY + margin)),
+            style: style
         )
     }
 }
