@@ -548,6 +548,7 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(AppLanguage.allCases.map(\.rawValue), ["system", "zh-Hans", "en"])
         XCTAssertEqual(AppLanguage.restored("unknown"), .system)
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Search"), "搜索")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Insert PDF Citation at Cursor"), "在光标处插入 PDF 引用")
         XCTAssertEqual(AppLanguage.english.text("Search"), "Search")
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Markdown"), "Markdown")
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("On"), "开启")

@@ -3748,6 +3748,18 @@ struct NotesWindow: View {
         .background(theme.canvas)
     }
 
+    @ViewBuilder
+    private var pdfCitationInsertMenuSection: some View {
+        if let pdf = model.previewPDF {
+            Divider()
+            Button(language.text("Insert PDF Citation at Cursor"), systemImage: "text.quote") {
+                NotificationCenter.default.post(name: NotesMenuEvent.insertPDFCitationAtCursor, object: nil)
+            }
+            .disabled(model.loadingNote || loadedPDFURL?.standardizedFileURL != pdf.standardizedFileURL)
+            .accessibilityIdentifier("pks-markdown-insert-pdf-citation")
+        }
+    }
+
     private var markdownFormattingToolbar: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 7) {
@@ -3799,6 +3811,7 @@ struct NotesWindow: View {
                     Button(language.text("Paste Image from Clipboard"), systemImage: "photo") {
                         pasteImageFromClipboard()
                     }
+                    pdfCitationInsertMenuSection
                 } label: {
                     Label(language.text("Insert"), systemImage: "plus")
                         .font(.system(size: 11, weight: .medium))
@@ -3864,6 +3877,7 @@ struct NotesWindow: View {
                 Button(language.text("Paste Image from Clipboard"), systemImage: "photo") {
                     pasteImageFromClipboard()
                 }
+                pdfCitationInsertMenuSection
             } label: {
                 Image(systemName: "plus")
                     .frame(width: 24, height: 24)
