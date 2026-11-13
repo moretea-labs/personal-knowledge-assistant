@@ -114,7 +114,7 @@ enum MarkdownEditing {
             .replacingOccurrences(of: "\r\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
-        let padding = selected.hasPrefix(" ") && selected.hasSuffix(" ")
+        let padding = normalized.hasPrefix(" ") && normalized.hasSuffix(" ")
             && normalized.contains(where: { $0 != " " }) ? " " : ""
         let replacement = delimiter + padding + selected + padding + delimiter
         let updated = ns.replacingCharacters(in: range, with: replacement)

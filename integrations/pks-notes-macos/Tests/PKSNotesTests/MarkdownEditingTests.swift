@@ -41,7 +41,8 @@ final class MarkdownEditingTests: XCTestCase {
     func testInlineCodePreservesBoundarySpacesAndDoesNotPadWhitespaceOnlySelection() {
         let cases = [
             ("  value  ", "before`   value   `after", 2),
-            ("   ", "before`   `after", 1)
+            ("   ", "before`   `after", 1),
+            ("\nvalue\n", "before` \nvalue\n `after", 2)
         ]
 
         for (selected, expected, selectionOffset) in cases {
