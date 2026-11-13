@@ -464,33 +464,33 @@ extension MindMapOutlineTests {
 
 
 extension MindMapOutlineTests {
-    func testMoveListSubtreeReparentsWholeBranch() {
+    func testMoveNodeSubtreeReparentsWholeBranch() {
         let source = "# Root\n- A\n  - A1\n- B\n- C"
         XCTAssertEqual(
-            MindMapOutline.moveListSubtree(in: source, nodeID: 1, asChildOf: 3),
+            MindMapOutline.moveNodeSubtree(in: source, nodeID: 1, asChildOf: 3),
             "# Root\n- B\n  - A\n    - A1\n- C"
         )
         XCTAssertEqual(
-            MindMapOutline.moveListSubtree(in: source, nodeID: 4, asChildOf: 1),
+            MindMapOutline.moveNodeSubtree(in: source, nodeID: 4, asChildOf: 1),
             "# Root\n- A\n  - C\n  - A1\n- B"
         )
     }
 
-    func testMoveListSubtreeCanAttachToHeadingAndRejectCycles() {
+    func testMoveNodeSubtreeCanAttachToHeadingAndRejectCycles() {
         let source = "# Root\n- A\n  - A1\n- B"
         XCTAssertEqual(
-            MindMapOutline.moveListSubtree(in: source, nodeID: 3, asChildOf: 0),
+            MindMapOutline.moveNodeSubtree(in: source, nodeID: 3, asChildOf: 0),
             "# Root\n- B\n- A\n  - A1"
         )
-        XCTAssertNil(MindMapOutline.moveListSubtree(in: source, nodeID: 1, asChildOf: 2))
-        XCTAssertNil(MindMapOutline.moveListSubtree(in: source, nodeID: 0, asChildOf: 3))
+        XCTAssertNil(MindMapOutline.moveNodeSubtree(in: source, nodeID: 1, asChildOf: 2))
+        XCTAssertNil(MindMapOutline.moveNodeSubtree(in: source, nodeID: 0, asChildOf: 3))
     }
 
-    func testMoveListSubtreeOutcomeReportsNewNodeLineForSelection() {
+    func testMoveNodeSubtreeOutcomeReportsNewNodeLineForSelection() {
         // Moving a later node forward: C (line 4) becomes child of A (line 1).
         // After removal of C (1 line), target adjusts to 1; C lands at line 2.
         let forward = "# Root\n- A\n  - A1\n- B\n- C"
-        let forwardOutcome = MindMapOutline.moveListSubtreeWithOutcome(
+        let forwardOutcome = MindMapOutline.moveNodeSubtreeWithOutcome(
             in: forward, nodeID: 4, asChildOf: 1
         )
         XCTAssertEqual(forwardOutcome?.source, "# Root\n- A\n  - C\n  - A1\n- B")
@@ -499,7 +499,7 @@ extension MindMapOutlineTests {
         // Moving an earlier node backward: A subtree (lines 1-2) becomes child
         // of B (line 3). After removal of 2 lines, target adjusts to 1; A lands at line 2.
         let backward = "# Root\n- A\n  - A1\n- B\n- C"
-        let backwardOutcome = MindMapOutline.moveListSubtreeWithOutcome(
+        let backwardOutcome = MindMapOutline.moveNodeSubtreeWithOutcome(
             in: backward, nodeID: 1, asChildOf: 3
         )
         XCTAssertEqual(backwardOutcome?.source, "# Root\n- B\n  - A\n    - A1\n- C")

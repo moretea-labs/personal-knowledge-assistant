@@ -1550,7 +1550,9 @@ struct MindMapCanvas: View {
             }
 
             let placement: MindMapDropPlacement
-            if MindMapOutline.isListNode(in: source, nodeID: node.id) {
+            let sourceIsList = MindMapOutline.isListNode(in: source, nodeID: draggedID)
+            let targetIsList = MindMapOutline.isListNode(in: source, nodeID: node.id)
+            if sourceIsList == targetIsList {
                 let edgeZone = min(16, dropHeight * 0.25)
                 if location.y < edgeZone {
                     placement = .before
@@ -1563,7 +1565,7 @@ struct MindMapCanvas: View {
                 placement = .child
             }
 
-            guard let outcome = MindMapOutline.moveListSubtreeWithOutcome(
+            guard let outcome = MindMapOutline.moveNodeSubtreeWithOutcome(
                 in: source, nodeID: draggedID, relativeTo: node.id, placement: placement
             ) else {
                 interchangeError = language.text(

@@ -43,7 +43,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
             let moved = try XCTUnwrap(nodes.first(where: { $0.title == "Move me" }))
             let target = try XCTUnwrap(nodes.first(where: { $0.title == "Target" }))
 
-            let move = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+            let move = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
                 in: fixture.source, nodeID: moved.id, asChildOf: target.id
             ))
             XCTAssertEqual(move.source, fixture.expectedMove)
@@ -81,7 +81,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         let dragged = try XCTUnwrap(oldNodes.first(where: { $0.title == "C" }))
         let target = try XCTUnwrap(oldNodes.first(where: { $0.title == "A" }))
 
-        let outcome = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+        let outcome = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source, nodeID: dragged.id, relativeTo: target.id, placement: .child
         ))
         let newNodes = MindMapOutline.nodes(in: outcome.source)
@@ -116,7 +116,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
 
         let a = try XCTUnwrap(nodes.first(where: { $0.title == "A" }))
         let c = try XCTUnwrap(nodes.first(where: { $0.title == "C" }))
-        let forward = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+        let forward = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source, nodeID: c.id, relativeTo: a.id, placement: .child
         ))
         var forwardCollapsed = rebaseCollapsed(collapsed, from: source, to: forward.source)
@@ -128,7 +128,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         XCTAssertEqual(forwardCollapsed, expectedForward)
         XCTAssertFalse(forwardCollapsed.contains(a.id), "The child-drop target must expand to reveal the moved branch.")
 
-        let backward = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+        let backward = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source, nodeID: a.id, relativeTo: c.id, placement: .after
         ))
         let backwardCollapsed = rebaseCollapsed(collapsed, from: source, to: backward.source)
@@ -157,7 +157,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         let oldLeaves = oldNodes.filter { $0.title == "Leaf" }
         XCTAssertEqual(oldDuplicates.count, 2)
 
-        let move = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+        let move = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source, nodeID: oldB.id, relativeTo: oldA.id, placement: .child
         ))
         let newNodes = MindMapOutline.nodes(in: move.source)
@@ -195,7 +195,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         XCTAssertEqual(oldDuplicates.count, 2)
         XCTAssertEqual(oldChildren.count, 2)
 
-        let move = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+        let move = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source, nodeID: oldDuplicates[1].id,
             relativeTo: oldDuplicates[0].id, placement: .after
         ))
@@ -231,7 +231,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         let oldBeta = try XCTUnwrap(oldNodes.first(where: { $0.title == "Beta" }))
         XCTAssertEqual(oldDuplicates.count, 2)
 
-        let reorder = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+        let reorder = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source,
             nodeID: oldDuplicates[1].id,
             relativeTo: oldDuplicates[0].id,
@@ -257,7 +257,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         let source = "# Plan\n- Parent\n  - Duplicate\n    - Child\n      - Leaf\n  - Duplicate\n    - Child\n    - Leaf\n"
         let oldNodes = MindMapOutline.nodes(in: source)
         let duplicates = oldNodes.filter { $0.title == "Duplicate" }
-        let moved = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+        let moved = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source, nodeID: duplicates[1].id, relativeTo: duplicates[0].id, placement: .before
         ))
         let newNodes = MindMapOutline.nodes(in: moved.source)
@@ -286,7 +286,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         XCTAssertEqual(oldDuplicates.count, 2)
         XCTAssertEqual(oldChildren.count, 2)
 
-        let reorder = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+        let reorder = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source, nodeID: oldDuplicates[1].id,
             relativeTo: oldDuplicates[0].id, placement: .before
         ))
@@ -357,7 +357,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         let moved = try XCTUnwrap(nodes.first(where: { $0.title == "Move me" }))
         let target = try XCTUnwrap(nodes.first(where: { $0.title == "Target" }))
 
-        XCTAssertNil(MindMapOutline.moveListSubtreeWithOutcome(
+        XCTAssertNil(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source, nodeID: moved.id, asChildOf: target.id
         ))
         XCTAssertNil(MindMapOutline.addChild(in: source, parentID: target.id))
@@ -375,13 +375,13 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         let a = try XCTUnwrap(nodes.first(where: { $0.title == "A" }))
         let c = try XCTUnwrap(nodes.first(where: { $0.title == "C" }))
 
-        let before = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+        let before = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source, nodeID: c.id, relativeTo: a.id, placement: .before
         ))
         XCTAssertEqual(before.source, "# Plan\n- C\n- A\n  - A1\n- B")
         XCTAssertEqual(before.movedNodeID, 1)
 
-        let after = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+        let after = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source, nodeID: c.id, relativeTo: a.id, placement: .after
         ))
         XCTAssertEqual(after.source, "# Plan\n- A\n  - A1\n- C\n- B")
@@ -392,7 +392,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         let citedNodes = MindMapOutline.nodes(in: citedSource)
         let citedA = try XCTUnwrap(citedNodes.first(where: { $0.title == "A" }))
         let citedC = try XCTUnwrap(citedNodes.first(where: { $0.title == "C" }))
-        let citedAfter = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+        let citedAfter = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: citedSource, nodeID: citedC.id, relativeTo: citedA.id, placement: .after
         ))
         XCTAssertEqual(
@@ -404,6 +404,128 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
             MindMapOutline.presentations(in: citedAfter.source, nodes: reorderedNodes)[citedA.id]
         )
         XCTAssertEqual(aPresentation.links.map(\.target), [citation])
+    }
+
+    func testHeadingSectionsCanBeReparentedAndPreserveNestedMarkdownAndPDFEvidence() throws {
+        let citation = "/Books/Study.pdf#page=4&rects=0.1,0.2,0.3,0.04&fp=0123456789abcdef"
+        let source = """
+        # Plan
+        ## Reading
+        Introduction belongs to Reading.
+        [Textbook · p. 4](\(citation))
+        > Selected passage
+        ### Detail
+        Details stay with the section.
+        - Claim
+        ## Target
+        Target introduction.
+        ### Existing
+        Existing child.
+        ## Keep
+        """
+        let oldNodes = MindMapOutline.nodes(in: source)
+        let reading = try XCTUnwrap(oldNodes.first { $0.title == "Reading" })
+        let detail = try XCTUnwrap(oldNodes.first { $0.title == "Detail" })
+        let target = try XCTUnwrap(oldNodes.first { $0.title == "Target" })
+
+        let outcome = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
+            in: source, nodeID: reading.id, relativeTo: target.id, placement: .child
+        ))
+        XCTAssertEqual(outcome.source, """
+        # Plan
+        ## Target
+        Target introduction.
+        ### Reading
+        Introduction belongs to Reading.
+        [Textbook · p. 4](\(citation))
+        > Selected passage
+        #### Detail
+        Details stay with the section.
+        - Claim
+        ### Existing
+        Existing child.
+        ## Keep
+        """)
+
+        let newNodes = MindMapOutline.nodes(in: outcome.source)
+        let movedReading = try XCTUnwrap(newNodes.first { $0.title == "Reading" })
+        let movedDetail = try XCTUnwrap(newNodes.first { $0.title == "Detail" })
+        let mapping = MindMapOutline.lineIndexMap(from: oldNodes, to: newNodes)
+        XCTAssertEqual(mapping[reading.id], movedReading.id)
+        XCTAssertEqual(mapping[detail.id], movedDetail.id)
+        XCTAssertEqual(
+            MindMapOutline.presentations(in: outcome.source, nodes: newNodes)[movedReading.id]?.links.map(\.target),
+            [citation]
+        )
+    }
+
+    func testHeadingSectionsReorderAndRejectCyclesUnsupportedTargetsAndDepthOverflow() throws {
+        let source = """
+        # Root
+        ## A
+        A body.
+        ### A1
+        - Claim
+        ## B
+        B body.
+        ### B1
+        ## C
+        C body.
+        """
+        let nodes = MindMapOutline.nodes(in: source)
+        let a = try XCTUnwrap(nodes.first { $0.title == "A" })
+        let b = try XCTUnwrap(nodes.first { $0.title == "B" })
+        let c = try XCTUnwrap(nodes.first { $0.title == "C" })
+
+        let before = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
+            in: source, nodeID: c.id, relativeTo: a.id, placement: .before
+        ))
+        XCTAssertEqual(before.source, """
+        # Root
+        ## C
+        C body.
+        ## A
+        A body.
+        ### A1
+        - Claim
+        ## B
+        B body.
+        ### B1
+        """)
+
+        let after = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
+            in: source, nodeID: a.id, relativeTo: b.id, placement: .after
+        ))
+        XCTAssertEqual(after.source, """
+        # Root
+        ## B
+        B body.
+        ### B1
+        ## A
+        A body.
+        ### A1
+        - Claim
+        ## C
+        C body.
+        """)
+
+        let nested = "# Root\n## Parent\n### Child\n"
+        let nestedNodes = MindMapOutline.nodes(in: nested)
+        let parent = try XCTUnwrap(nestedNodes.first { $0.title == "Parent" })
+        let child = try XCTUnwrap(nestedNodes.first { $0.title == "Child" })
+        XCTAssertNil(MindMapOutline.moveNodeSubtree(in: nested, nodeID: parent.id, asChildOf: child.id))
+
+        let deep = "# Root\n###### Last\n## Candidate\n"
+        let deepNodes = MindMapOutline.nodes(in: deep)
+        let last = try XCTUnwrap(deepNodes.first { $0.title == "Last" })
+        let candidate = try XCTUnwrap(deepNodes.first { $0.title == "Candidate" })
+        XCTAssertNil(MindMapOutline.moveNodeSubtree(in: deep, nodeID: candidate.id, asChildOf: last.id))
+
+        let mixed = "# Root\n- List\n## Section\n"
+        let mixedNodes = MindMapOutline.nodes(in: mixed)
+        let list = try XCTUnwrap(mixedNodes.first { $0.title == "List" })
+        let section = try XCTUnwrap(mixedNodes.first { $0.title == "Section" })
+        XCTAssertNil(MindMapOutline.moveNodeSubtree(in: mixed, nodeID: section.id, asChildOf: list.id))
     }
 
     func testAddChildKeepsTheParentsPDFCitationOnTheParentNode() throws {
@@ -444,7 +566,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         let nodes = MindMapOutline.nodes(in: source)
         let moved = try XCTUnwrap(nodes.first(where: { $0.title == "A1" }))
         let target = try XCTUnwrap(nodes.first(where: { $0.title == "B" }))
-        let outcome = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+        let outcome = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source, nodeID: moved.id, asChildOf: target.id
         ))
 
@@ -496,7 +618,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
     func testBlankSpacingBeforeTargetChildDoesNotBlockSafeMove() {
         let source = "# Plan\n- Move me\n- Target\n\n  - Old child\n"
         XCTAssertEqual(
-            MindMapOutline.moveListSubtree(in: source, nodeID: 1, asChildOf: 2),
+            MindMapOutline.moveNodeSubtree(in: source, nodeID: 1, asChildOf: 2),
             "# Plan\n- Target\n\n  - Move me\n  - Old child\n"
         )
     }

@@ -1054,23 +1054,41 @@ extension MindMapOutline {
 }
 
 extension MindMapOutline {
-    /// Move a list subtree under another structural node or reorder it beside a sibling.
-    static func moveListSubtree(in source: String, nodeID: Int, asChildOf targetID: Int) -> String? {
-        moveListSubtreeWithOutcome(in: source, nodeID: nodeID, asChildOf: targetID)?.source
+    /// Move any structural Markdown node without introducing a second graph authority.
+    static func moveNodeSubtree(in source: String, nodeID: Int, asChildOf targetID: Int) -> String? {
+        moveNodeSubtreeWithOutcome(in: source, nodeID: nodeID, asChildOf: targetID)?.source
     }
 
-    /// Backwards-compatible child placement for existing callers.
-    static func moveListSubtreeWithOutcome(
+    static func moveNodeSubtreeWithOutcome(
         in source: String, nodeID: Int, asChildOf targetID: Int
     ) -> MindMapMoveOutcome? {
-        moveListSubtreeWithOutcome(
+        moveNodeSubtreeWithOutcome(
             in: source, nodeID: nodeID, relativeTo: targetID, placement: .child
         )
     }
 
-    /// Move before/after a sibling or make the dragged node a child of its target.
-    /// The whole source body moves with it; Markdown remains the sole authority.
-    static func moveListSubtreeWithOutcome(
+    /// Dispatch list indentation and heading-section moves through one public writer.
+    static func moveNodeSubtreeWithOutcome(
+        in source: String,
+        nodeID: Int,
+        relativeTo targetID: Int,
+        placement: MindMapDropPlacement
+    ) -> MindMapMoveOutcome? {
+        guard nodeID != targetID else { return nil }
+        let lines = source.components(separatedBy: "\n")
+        guard lines.indices.contains(nodeID), lines.indices.contains(targetID) else { return nil }
+        if isListLine(lines[nodeID]) {
+            return moveListSubtreeWithOutcome(
+                in: source, nodeID: nodeID, relativeTo: targetID, placement: placement
+            )
+        }
+        return moveHeadingSubtreeWithOutcome(
+            in: source, nodeID: nodeID, relativeTo: targetID, placement: placement
+        )
+    }
+
+    /// Reparent a list subtree by indentation while preserving its attached Markdown.
+    private static func moveListSubtreeWithOutcome(
         in source: String,
         nodeID: Int,
         relativeTo targetID: Int,
@@ -1137,6 +1155,85 @@ extension MindMapOutline {
             let nextIndent = currentIndent + delta
             guard nextIndent >= 0 else { return nil }
             moved[index] = String(repeating: " ", count: nextIndent) + moved[index].dropFirst(currentIndent)
+        }
+
+        let removedCount = sourceEnd - nodeID
+        lines.removeSubrange(nodeID..<sourceEnd)
+        let adjustedInsertion = insertionLine > nodeID ? insertionLine - removedCount : insertionLine
+        guard adjustedInsertion >= 0, adjustedInsertion <= lines.count else { return nil }
+        lines.insert(contentsOf: moved, at: adjustedInsertion)
+        return MindMapMoveOutcome(
+            source: lines.joined(separator: "\n"),
+            movedNodeID: adjustedInsertion
+        )
+    }
+
+    private static func headingLevel(in line: String) -> Int? {
+        let leadingCount = line.prefix(while: \.isWhitespace).count
+        let content = line.dropFirst(leadingCount)
+        let level = content.prefix(while: { $0 == "#" }).count
+        guard (1...6).contains(level), content.dropFirst(level).first == " " else { return nil }
+        return level
+    }
+
+    private static func replacingHeadingLevel(in line: String, with level: Int) -> String? {
+        guard (1...6).contains(level) else { return nil }
+        let leading = String(line.prefix(while: \.isWhitespace))
+        let content = line.dropFirst(leading.count)
+        let current = content.prefix(while: { $0 == "#" }).count
+        guard (1...6).contains(current), content.dropFirst(current).first == " " else { return nil }
+        return leading + String(repeating: "#", count: level) + String(content.dropFirst(current))
+    }
+
+    /// Move an entire heading section, including its Markdown body and descendants.
+    /// Relevel every heading in the section by one shared delta so its internal hierarchy survives.
+    private static func moveHeadingSubtreeWithOutcome(
+        in source: String,
+        nodeID: Int,
+        relativeTo targetID: Int,
+        placement: MindMapDropPlacement
+    ) -> MindMapMoveOutcome? {
+        let parsed = nodes(in: source)
+        guard let sourcePosition = parsed.firstIndex(where: { $0.id == nodeID }),
+              let targetPosition = parsed.firstIndex(where: { $0.id == targetID }) else { return nil }
+        var lines = source.components(separatedBy: "\n")
+        guard lines.indices.contains(nodeID), lines.indices.contains(targetID),
+              let sourceLevel = headingLevel(in: lines[nodeID]),
+              let targetLevel = headingLevel(in: lines[targetID]) else { return nil }
+
+        let contentLineCount = lines.count - (source.hasSuffix("\n") ? 1 : 0)
+        let sourceEnd = subtreeEndLine(at: sourcePosition, nodes: parsed, lineCount: contentLineCount)
+        guard !(nodeID..<sourceEnd).contains(targetID) else { return nil }
+        let targetEnd = subtreeEndLine(at: targetPosition, nodes: parsed, lineCount: contentLineCount)
+        let targetFirstChild = firstDescendantLine(
+            at: targetPosition, nodes: parsed, fallback: targetEnd
+        )
+
+        let insertionLine: Int
+        let desiredLevel: Int
+        switch placement {
+        case .child:
+            desiredLevel = targetLevel + 1
+            guard desiredLevel <= 6 else { return nil }
+            insertionLine = targetFirstChild
+        case .before:
+            desiredLevel = targetLevel
+            insertionLine = targetID
+        case .after:
+            desiredLevel = targetLevel
+            insertionLine = targetEnd
+        }
+
+        let delta = desiredLevel - sourceLevel
+        var moved = Array(lines[nodeID..<sourceEnd])
+        for candidate in parsed where candidate.id >= nodeID && candidate.id < sourceEnd {
+            let offset = candidate.id - nodeID
+            guard moved.indices.contains(offset),
+                  let currentLevel = headingLevel(in: moved[offset]) else { continue }
+            guard let updated = replacingHeadingLevel(in: moved[offset], with: currentLevel + delta) else {
+                return nil
+            }
+            moved[offset] = updated
         }
 
         let removedCount = sourceEnd - nodeID
