@@ -35,6 +35,29 @@ final class MarkdownEditingTests: XCTestCase {
         XCTAssertEqual(italic.selection, NSRange(location: 1, length: 0))
     }
 
+    func testInlineCodeCommandTogglesOffLiveSelectionAndPreservesPadding() {
+        let selectedCases = [
+            "ordinary",
+            "  value  ",
+            "   ",
+            "\nvalue\n",
+            "😀 `single` and ``double``"
+        ]
+
+        for selected in selectedCases {
+            let source = "before\(selected)after"
+            let selection = (source as NSString).range(of: selected)
+            let wrapped = MarkdownEditing.apply(.inlineCode, to: source, selection: selection)
+            let unwrapped = MarkdownEditing.apply(.inlineCode, to: wrapped.text, selection: wrapped.selection)
+
+            XCTAssertEqual(unwrapped.text, source, "Failed to toggle inline code for: \(selected)")
+            XCTAssertEqual(
+                (unwrapped.text as NSString).substring(with: unwrapped.selection),
+                selected
+            )
+        }
+    }
+
     func testInlineCodeUsesSingleBackticksForOrdinaryText() {
         let source = "before ordinary after"
         let selection = (source as NSString).range(of: "ordinary")

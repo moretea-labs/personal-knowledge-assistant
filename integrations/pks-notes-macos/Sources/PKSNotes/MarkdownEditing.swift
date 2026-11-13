@@ -57,7 +57,7 @@ enum MarkdownEditing {
         switch command {
         case .bold: return toggleEmphasis(text, range: range, delimiterLength: 2)
         case .italic: return toggleEmphasis(text, range: range, delimiterLength: 1)
-        case .inlineCode: return wrapInlineCode(text, range: range)
+        case .inlineCode: return toggleInlineCode(text, range: range)
         case .link:
             let selected = ns.substring(with: range)
             let label = escapedLinkLabel(selected)
@@ -255,6 +255,59 @@ enum MarkdownEditing {
                 location: start + remaining,
                 length: (content as NSString).length
             )
+        )
+    }
+
+    private static func toggleInlineCode(_ text: String, range: NSRange) -> MarkdownEditResult {
+        let ns = text as NSString
+        let selected = ns.substring(with: range)
+        if !selected.isEmpty, let unwrapped = unwrapInlineCode(ns, range: range, selected: selected) {
+            return unwrapped
+        }
+        return wrapInlineCode(text, range: range)
+    }
+
+    private static func unwrapInlineCode(
+        _ text: NSString,
+        range: NSRange,
+        selected: String
+    ) -> MarkdownEditResult? {
+        var openingBoundary = range.location
+        var leftPadding = 0
+        if openingBoundary > 0 && text.character(at: openingBoundary - 1) == 32 {
+            leftPadding = 1
+            openingBoundary -= 1
+        }
+        var openingStart = openingBoundary
+        while openingStart > 0 && text.character(at: openingStart - 1) == 96 {
+            openingStart -= 1
+        }
+        let openingLength = openingBoundary - openingStart
+        guard openingLength > 0 else { return nil }
+
+        var closingBoundary = NSMaxRange(range)
+        var rightPadding = 0
+        if closingBoundary < text.length && text.character(at: closingBoundary) == 32 {
+            rightPadding = 1
+            closingBoundary += 1
+        }
+        var closingEnd = closingBoundary
+        while closingEnd < text.length && text.character(at: closingEnd) == 96 {
+            closingEnd += 1
+        }
+        let closingLength = closingEnd - closingBoundary
+        let longestContentRun = inlineCodeDelimiter(for: selected).count - 1
+        guard openingLength == closingLength,
+              leftPadding == rightPadding,
+              openingLength > longestContentRun else {
+            return nil
+        }
+
+        let target = NSRange(location: openingStart, length: closingEnd - openingStart)
+        let updated = text.replacingCharacters(in: target, with: selected)
+        return .init(
+            text: updated,
+            selection: NSRange(location: openingStart, length: (selected as NSString).length)
         )
     }
 
