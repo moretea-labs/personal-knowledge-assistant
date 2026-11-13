@@ -58,7 +58,7 @@ enum MarkdownEditing {
         case .bold: return wrap(text, range: range, prefix: "**", suffix: "**")
         case .italic: return wrap(text, range: range, prefix: "*", suffix: "*")
         case .inlineCode:
-            let marker = String(Character(UnicodeScalar(96)!))
+            let marker = inlineCodeDelimiter(for: ns.substring(with: range))
             return wrap(text, range: range, prefix: marker, suffix: marker)
         case .link:
             let selected = ns.substring(with: range)
@@ -106,6 +106,20 @@ enum MarkdownEditing {
         let updated = ns.replacingCharacters(in: range, with: value)
         let cursor = location + (value as NSString).length
         return .init(text: updated, selection: NSRange(location: cursor, length: 0))
+    }
+
+    private static func inlineCodeDelimiter(for selected: String) -> String {
+        var longestRun = 0
+        var currentRun = 0
+        for byte in selected.utf8 {
+            if byte == 0x60 {
+                currentRun += 1
+                longestRun = max(longestRun, currentRun)
+            } else {
+                currentRun = 0
+            }
+        }
+        return String(repeating: "`", count: longestRun + 1)
     }
 
     private static func escapedLinkLabel(_ text: String) -> String {
