@@ -173,7 +173,26 @@ final class MarkdownEditingTests: XCTestCase {
         let result = MarkdownEditing.apply(
             .heading(2), to: source, selection: NSRange(location: 0, length: (source as NSString).length)
         )
-        XCTAssertEqual(result.text, "## Title\n  \n## Child\n## plain\n## \n##     code\n")
+        XCTAssertEqual(result.text, "## Title\n  \n## Child\n## plain\n## \n    code\n")
+    }
+
+    func testHeadingCommandPreservesFencedCodeWhileFormattingSurroundingLines() {
+        let source = "Title\n```swift\nlet answer = 42\n```\nSummary"
+        let result = MarkdownEditing.apply(
+            .heading(2), to: source, selection: NSRange(location: 0, length: (source as NSString).length)
+        )
+
+        XCTAssertEqual(result.text, "## Title\n```swift\nlet answer = 42\n```\n## Summary")
+    }
+
+    func testBulletCommandPreservesFencedAndIndentedCodeAndCanToggleListOff() {
+        let source = "first\n```swift\nprint(1)\n```\n    print(2)\nlast\n"
+        let selection = NSRange(location: 0, length: (source as NSString).length)
+        let formatted = MarkdownEditing.apply(.bullet, to: source, selection: selection)
+        XCTAssertEqual(formatted.text, "- first\n```swift\nprint(1)\n```\n    print(2)\n- last\n")
+
+        let unformatted = MarkdownEditing.apply(.bullet, to: formatted.text, selection: formatted.selection)
+        XCTAssertEqual(unformatted.text, source)
     }
 
     func testQuoteCommandTogglesOffOneLevelIncludingNestedQuotes() {
