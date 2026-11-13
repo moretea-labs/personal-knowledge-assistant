@@ -1739,14 +1739,12 @@ struct MindMapCanvas: View {
     private func addSibling() -> Bool {
         guard projectionIsCurrent,
               let id = selectedID ?? nodes.first?.id else { return false }
-        let createsChild = !MindMapOutline.isListNode(in: source, nodeID: id)
         guard let outcome = MindMapOutline.addSiblingWithOutcome(in: source, nodeID: id) else {
             interchangeError = language.text(
                 "Cannot add a node here without changing attached Markdown. Use the editor."
             )
             return false
         }
-        if createsChild { collapsed.remove(id) }
         source = outcome.source
         startEditingNode(outcome.nodeID, title: "New idea", created: true)
         return true

@@ -59,6 +59,24 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         }
     }
 
+    func testAddingHeadingSiblingRebasesCollapsedBranchesWithoutChangingTheirHierarchy() throws {
+        let source = "# Root\n## A\n### A1\n## B\n"
+        let nodes = MindMapOutline.nodes(in: source)
+        let a = try XCTUnwrap(nodes.first { $0.title == "A" })
+        let a1 = try XCTUnwrap(nodes.first { $0.title == "A1" })
+        let collapsed = Set([a.id, a1.id])
+
+        let outcome = try XCTUnwrap(
+            MindMapOutline.addSiblingWithOutcome(in: source, nodeID: a.id)
+        )
+        let rebased = rebaseCollapsed(collapsed, from: source, to: outcome.source)
+        let updatedNodes = MindMapOutline.nodes(in: outcome.source)
+        let expected = Set(try ["A", "A1"].map { title in
+            try XCTUnwrap(updatedNodes.first { $0.title == title }?.id)
+        })
+        XCTAssertEqual(rebased, expected)
+    }
+
     func testDeletingLeafRebasesCollapsedBranchesAfterItsLine() throws {
         let source = "# Plan\n- A\n  - A1\n- Delete me\n- B\n  - B1\n"
         let nodes = MindMapOutline.nodes(in: source)
