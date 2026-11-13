@@ -3734,6 +3734,7 @@ struct NotesWindow: View {
                     }
                     .buttonStyle(.plain)
                     .help(language.text(mode == .read ? "Edit" : "Read"))
+                    .accessibilityLabel(language.text(mode == .read ? "Edit" : "Read"))
                     .accessibilityIdentifier("pks-study-note-mode-toggle")
                 }
                 Button {
