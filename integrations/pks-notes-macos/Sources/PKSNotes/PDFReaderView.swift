@@ -814,13 +814,16 @@ final class PDFReaderController: ObservableObject {
                 let childPath = path + ".\(index)"
                 if let destination = child.destination,
                    let page = destination.page {
+                    let pageIndex = document.index(for: page)
                     let title = child.label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    if !title.isEmpty {
+                    // PDFKit can return an out-of-range sentinel for a
+                    // destination owned by another document; never expose it.
+                    if !title.isEmpty, (0..<document.pageCount).contains(pageIndex) {
                         entries.append(.init(
                             id: childPath,
                             title: title,
                             depth: depth,
-                            pageIndex: max(0, document.index(for: page))
+                            pageIndex: pageIndex
                         ))
                     }
                 }

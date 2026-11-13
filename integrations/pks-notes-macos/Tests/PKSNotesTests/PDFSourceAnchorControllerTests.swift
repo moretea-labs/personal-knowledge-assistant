@@ -776,6 +776,59 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
 
 
 extension PDFSourceAnchorControllerTests {
+    @MainActor
+    func testOutlineSkipsDestinationsOutsideLoadedDocument() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+
+        func makeDocument(_ text: String) throws -> PDFDocument {
+            let textView = NSTextView(frame: bounds)
+            textView.string = text
+            return try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: bounds)))
+        }
+
+        let firstSource = try makeDocument("First page")
+        let secondSource = try makeDocument("Second page")
+        let externalSource = try makeDocument("Moved PDF page")
+        let document = PDFDocument()
+        document.insert(try XCTUnwrap(firstSource.page(at: 0)), at: 0)
+        document.insert(try XCTUnwrap(secondSource.page(at: 0)), at: 1)
+        let externalPage = try XCTUnwrap(externalSource.page(at: 0))
+
+        let root = PDFOutline()
+        let staleEntry = PDFOutline()
+        staleEntry.label = "Moved bookmark"
+        staleEntry.destination = PDFDestination(page: externalPage, at: .zero)
+        root.insertChild(staleEntry, at: 0)
+
+        let validEntry = PDFOutline()
+        validEntry.label = "Second chapter"
+        validEntry.destination = PDFDestination(
+            page: try XCTUnwrap(document.page(at: 1)),
+            at: .zero
+        )
+        root.insertChild(validEntry, at: 1)
+        document.outlineRoot = root
+
+        XCTAssertFalse((0..<document.pageCount).contains(document.index(for: externalPage)))
+
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Outline-\(UUID().uuidString).pdf")
+        defer { controller.detach(view: view) }
+
+        controller.attach(
+            view: view,
+            document: document,
+            url: url,
+            requestedPage: nil,
+            requestedAnchor: nil
+        )
+
+        XCTAssertEqual(controller.outline.map(\.title), ["Second chapter"])
+        XCTAssertEqual(controller.outline.first?.pageIndex, 1)
+    }
+
     func testSourceAnchorParserRejectsMalformedAndUnboundedFragments() throws {
         let fingerprint = "0123456789abcdef"
         let rect = "0.10000,0.20000,0.30000,0.04000"
