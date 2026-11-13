@@ -139,6 +139,44 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         XCTAssertEqual(backwardCollapsed, expectedBackward)
     }
 
+    func testCollapsedDuplicateBranchesFollowTheirOriginalParentsAfterReparent() throws {
+        let source = """
+        # Plan
+        - A
+          - Duplicate
+            - Leaf
+        - B
+          - Duplicate
+            - Leaf
+        - C
+        """
+        let oldNodes = MindMapOutline.nodes(in: source)
+        let oldA = try XCTUnwrap(oldNodes.first(where: { $0.title == "A" }))
+        let oldB = try XCTUnwrap(oldNodes.first(where: { $0.title == "B" }))
+        let oldDuplicates = oldNodes.filter { $0.title == "Duplicate" }
+        let oldLeaves = oldNodes.filter { $0.title == "Leaf" }
+        XCTAssertEqual(oldDuplicates.count, 2)
+
+        let move = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+            in: source, nodeID: oldB.id, relativeTo: oldA.id, placement: .child
+        ))
+        let newNodes = MindMapOutline.nodes(in: move.source)
+        let newA = try XCTUnwrap(newNodes.first(where: { $0.title == "A" }))
+        let newB = try XCTUnwrap(newNodes.first(where: { $0.title == "B" }))
+        let newDuplicates = newNodes.filter { $0.title == "Duplicate" }
+        let newLeaves = newNodes.filter { $0.title == "Leaf" }
+        let lineIndexMap = MindMapOutline.lineIndexMap(from: oldNodes, to: newNodes)
+
+        XCTAssertEqual(lineIndexMap[oldA.id], newA.id)
+        XCTAssertEqual(lineIndexMap[oldB.id], newB.id)
+        XCTAssertEqual(lineIndexMap[oldDuplicates[0].id], newDuplicates[1].id)
+        XCTAssertEqual(lineIndexMap[oldDuplicates[1].id], newDuplicates[0].id)
+        XCTAssertEqual(lineIndexMap[oldLeaves[0].id], newLeaves[1].id)
+        XCTAssertEqual(lineIndexMap[oldLeaves[1].id], newLeaves[0].id)
+        let collapsed = Set([oldDuplicates[0].id, oldDuplicates[1].id])
+        XCTAssertEqual(rebaseCollapsed(collapsed, from: source, to: move.source), Set(newDuplicates.map(\.id)))
+    }
+
     func testAddingNodesRebasesOnlyAffectedCollapsedBranches() throws {
         let source = "# Plan\n- A\n  - A1\n- B\n  - B1\n- C\n  - C1\n"
         let nodes = MindMapOutline.nodes(in: source)

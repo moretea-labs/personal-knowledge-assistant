@@ -424,6 +424,58 @@ extension MindMapOutline {
             guard newNodes.indices.contains(newPosition) else { continue }
             result[node.id] = newNodes[newPosition].id
         }
+
+        let oldTitleCounts = Dictionary(grouping: oldNodes, by: \.title).mapValues(\.count)
+        let newTitleCounts = Dictionary(grouping: newNodes, by: \.title).mapValues(\.count)
+        let ambiguousTitles = Set(oldTitleCounts.compactMap { $0.value > 1 ? $0.key : nil })
+            .union(newTitleCounts.compactMap { $0.value > 1 ? $0.key : nil })
+        guard !ambiguousTitles.isEmpty else { return result }
+
+        struct ParentTitleKey: Hashable {
+            let parentID: Int?
+            let title: String
+        }
+        func parentIDs(for nodes: [MindMapNode]) -> [Int: Int] {
+            var parents: [Int: Int] = [:]
+            var ancestors: [MindMapNode] = []
+            for node in nodes {
+                while let last = ancestors.last, last.depth >= node.depth { ancestors.removeLast() }
+                if let parent = ancestors.last { parents[node.id] = parent.id }
+                ancestors.append(node)
+            }
+            return parents
+        }
+        func siblingGroups(_ nodes: [MindMapNode], parents: [Int: Int]) -> [ParentTitleKey: [MindMapNode]] {
+            Dictionary(grouping: nodes) { ParentTitleKey(parentID: parents[$0.id], title: $0.title) }
+        }
+
+        let oldParents = parentIDs(for: oldNodes)
+        let newParents = parentIDs(for: newNodes)
+        let ambiguousOldIDs = Set(oldNodes.filter { ambiguousTitles.contains($0.title) }.map(\.id))
+        let ambiguousNewIDs = Set(newNodes.filter { ambiguousTitles.contains($0.title) }.map(\.id))
+        let invalidatedMappings = result.compactMap { oldID, newID in
+            ambiguousOldIDs.contains(oldID) || ambiguousNewIDs.contains(newID) ? oldID : nil
+        }
+        for oldID in invalidatedMappings { result.removeValue(forKey: oldID) }
+
+        // Duplicate titles are identities only within a parent already mapped from Markdown.
+        let oldGroups = siblingGroups(oldNodes, parents: oldParents)
+        let newGroups = siblingGroups(newNodes, parents: newParents)
+        var mappedNewIDs = Set(result.values)
+        for oldNode in oldNodes where ambiguousTitles.contains(oldNode.title) && result[oldNode.id] == nil {
+            let oldParentID = oldParents[oldNode.id]
+            let newParentID = oldParentID.flatMap { result[$0] }
+            if oldParentID != nil && newParentID == nil { continue }
+            let oldSiblings = oldGroups[ParentTitleKey(parentID: oldParentID, title: oldNode.title)] ?? []
+            let newSiblings = newGroups[ParentTitleKey(parentID: newParentID, title: oldNode.title)] ?? []
+            guard oldSiblings.count == newSiblings.count,
+                  let occurrence = oldSiblings.firstIndex(where: { $0.id == oldNode.id }),
+                  newSiblings.indices.contains(occurrence) else { continue }
+            let newID = newSiblings[occurrence].id
+            guard !mappedNewIDs.contains(newID) else { continue }
+            result[oldNode.id] = newID
+            mappedNewIDs.insert(newID)
+        }
         return result
     }
 
