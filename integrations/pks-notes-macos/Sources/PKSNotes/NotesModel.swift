@@ -3313,6 +3313,9 @@ final class NotesModel: ObservableObject {
               ) else {
             return nil
         }
+        let parent = selected.deletingLastPathComponent()
+        let attachmentFolder = parent.appendingPathComponent("attachments", isDirectory: true)
+        scheduleFilesystemMutationRefresh(parentFolders: [parent, attachmentFolder])
         return "![\(altText)](\(relative))"
     }
 

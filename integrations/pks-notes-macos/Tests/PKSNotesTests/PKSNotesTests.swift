@@ -2470,6 +2470,8 @@ extension PKSNotesTests {
         defer { try? FileManager.default.removeItem(at: base) }
 
         let note = root.appendingPathComponent("Note.md")
+        let attachmentFolder = root.appendingPathComponent("attachments", isDirectory: true)
+        try FileManager.default.createDirectory(at: attachmentFolder, withIntermediateDirectories: true)
         try "# Note".write(to: note, atomically: true, encoding: .utf8)
         let bitmap = try XCTUnwrap(NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1,
@@ -2483,14 +2485,43 @@ extension PKSNotesTests {
         let invalid = base.appendingPathComponent("not-an-image.txt")
         try "not an image".write(to: invalid, atomically: true, encoding: .utf8)
 
+        func item(_ url: URL, in items: [NoteItem]) -> NoteItem? {
+            for candidate in items {
+                if candidate.url.standardizedFileURL == url.standardizedFileURL { return candidate }
+                if let children = candidate.children, let found = item(url, in: children) {
+                    return found
+                }
+            }
+            return nil
+        }
+
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<200 where model.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.loadExpandedFolder(attachmentFolder)
+        for _ in 0..<200 where item(attachmentFolder, in: model.files)?.children == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(item(attachmentFolder, in: model.files)?.children?.count, 0)
+
         model.openNote(note)
         await waitForNote(model, note)
+        model.prepareGlobalFileIndex()
+        for _ in 0..<300 where !model.globalFileIndexReady {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(model.globalFileIndexReady)
 
         let markdown = try XCTUnwrap(model.importImage(from: source))
         XCTAssertEqual(markdown, "![Image](attachments/image.png)")
-        let attachment = root.appendingPathComponent("attachments/image.png")
+        XCTAssertFalse(model.globalFileIndexReady)
+        let attachment = attachmentFolder.appendingPathComponent("image.png")
+        for _ in 0..<300 where item(attachment, in: model.files) == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertNotNil(item(attachment, in: model.files))
         XCTAssertNotNil(NSImage(contentsOf: attachment))
         XCTAssertNil(model.importImage(from: invalid))
         XCTAssertEqual(model.selected, note)
