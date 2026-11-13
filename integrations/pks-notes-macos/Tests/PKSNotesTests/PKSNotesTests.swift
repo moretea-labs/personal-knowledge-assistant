@@ -2784,10 +2784,37 @@ extension PKSNotesTests {
         XCTAssertEqual(
             found.first?.locations,
             [
-                NoteBacklinkLocation(lineIndex: 1, count: 1),
-                NoteBacklinkLocation(lineIndex: 2, count: 1)
+                NoteBacklinkLocation(lineIndex: 1, count: 1, context: "Book · p. 3"),
+                NoteBacklinkLocation(lineIndex: 2, count: 1, context: "Again")
             ]
         )
+    }
+
+    func testPDFBacklinksIncludeCitationAndQuotedPassageContext() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-PDF-Backlink-Context-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let pdf = root.appendingPathComponent("Book.pdf")
+        let note = root.appendingPathComponent("Study.md")
+        try Data("%PDF-1.4".utf8).write(to: pdf)
+        try """
+        # Study
+        [Book.pdf · p. 2](/Book.pdf#page=2)
+
+        > Important fact
+        > Second line
+        """.write(to: note, atomically: true, encoding: .utf8)
+
+        let backlinks = WorkspaceBacklinks.find(
+            target: pdf, root: root, files: WorkspaceFiles.tree(in: root)
+        )
+        let location = try XCTUnwrap(backlinks.first?.locations.first)
+        XCTAssertEqual(location.lineIndex, 1)
+        XCTAssertEqual(location.count, 1)
+        XCTAssertEqual(location.context, "Book.pdf · p. 2 Important fact Second line")
+        XCTAssertLessThanOrEqual(location.context.count, 180)
     }
 
     @MainActor
@@ -2827,7 +2854,7 @@ extension PKSNotesTests {
         XCTAssertEqual(model.backlinks.first?.source, note.standardizedFileURL)
         XCTAssertEqual(
             model.backlinks.first?.locations,
-            [NoteBacklinkLocation(lineIndex: 2, count: 1)]
+            [NoteBacklinkLocation(lineIndex: 2, count: 1, context: "Source.pdf · p. 1")]
         )
     }
 
@@ -3261,8 +3288,8 @@ extension PKSNotesTests {
         XCTAssertEqual(
             scan.backlinks.first?.locations,
             [
-                NoteBacklinkLocation(lineIndex: 0, count: 1),
-                NoteBacklinkLocation(lineIndex: 1, count: 1)
+                NoteBacklinkLocation(lineIndex: 0, count: 1, context: "Target"),
+                NoteBacklinkLocation(lineIndex: 1, count: 1, context: "again")
             ]
         )
         XCTAssertEqual(scan.skippedDatalessFiles, 0)
@@ -3327,8 +3354,8 @@ extension PKSNotesTests {
         XCTAssertEqual(
             backlink.locations,
             [
-                NoteBacklinkLocation(lineIndex: 0, count: 2),
-                NoteBacklinkLocation(lineIndex: 1, count: 1)
+                NoteBacklinkLocation(lineIndex: 0, count: 2, context: "B and B2"),
+                NoteBacklinkLocation(lineIndex: 1, count: 1, context: "B3")
             ]
         )
     }
@@ -3434,7 +3461,7 @@ extension PKSNotesTests {
         let backlink = try XCTUnwrap(scan.backlinks.first)
         XCTAssertEqual(backlink.source, source.standardizedFileURL)
         XCTAssertEqual(backlink.count, 1)
-        XCTAssertEqual(backlink.locations, [NoteBacklinkLocation(lineIndex: 7, count: 1)])
+        XCTAssertEqual(backlink.locations, [NoteBacklinkLocation(lineIndex: 7, count: 1, context: "Real")])
     }
 }
 

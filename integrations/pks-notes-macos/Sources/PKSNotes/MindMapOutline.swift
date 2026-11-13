@@ -778,6 +778,13 @@ struct MindMapLink: Equatable, Sendable {
 struct MarkdownLinkOccurrence: Equatable {
     let link: MindMapLink
     let lineIndex: Int
+    let context: String
+
+    init(link: MindMapLink, lineIndex: Int, context: String = "") {
+        self.link = link
+        self.lineIndex = lineIndex
+        self.context = context
+    }
 }
 
 struct MindMapNodePresentation: Equatable, Sendable {
@@ -948,14 +955,47 @@ extension MindMapOutline {
         return lines.joined(separator: "\n")
     }
 
+    private static func backlinkContext(
+        in line: String, matches: [ParsedLink], lines: [String], lineIndex: Int
+    ) -> String {
+        let rendered = NSMutableString(string: line)
+        for match in matches.sorted(by: { $0.range.location > $1.range.location }) {
+            rendered.replaceCharacters(in: match.range, with: match.link.label)
+        }
+        var parts = [(rendered as String).trimmingCharacters(in: .whitespacesAndNewlines)]
+        let hasPDF = matches.contains { match in
+            let path = match.link.target.split(
+                separator: "#", maxSplits: 1, omittingEmptySubsequences: false
+            ).first.map(String.init) ?? match.link.target
+            return URL(fileURLWithPath: path.removingPercentEncoding ?? path)
+                .pathExtension.lowercased() == "pdf"
+        }
+        if hasPDF {
+            var next = lineIndex + 1
+            if next < lines.count,
+               lines[next].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { next += 1 }
+            var quoteLines = 0
+            while next < lines.count, quoteLines < 8 {
+                let candidate = lines[next].trimmingCharacters(in: .whitespacesAndNewlines)
+                guard candidate.hasPrefix(">") else { break }
+                let quote = String(candidate.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !quote.isEmpty { parts.append(quote) }
+                next += 1
+                quoteLines += 1
+                if parts.joined(separator: " ").count >= 180 { break }
+            }
+        }
+        return String(parts.filter { !$0.isEmpty }.joined(separator: " ").prefix(180))
+    }
+
     /// Preserve every Markdown link occurrence and its canonical source line.
-    /// Backlinks reuse this parse result; there is no second occurrence index.
-    /// Fenced and indented code blocks are skipped so example markup never
-    /// reports as a real backlink.
+    /// Backlinks reuse this parse result; no second occurrence index is created.
+    /// Context is opt-in and remains a bounded projection of the same source.
     static func linkOccurrences(
         in markdown: String,
         includeImages: Bool = false,
-        baseIndent: Int = 0
+        baseIndent: Int = 0,
+        includeContext: Bool = false
     ) -> [MarkdownLinkOccurrence] {
         guard !Task.isCancelled else { return [] }
         let lines = markdown.components(separatedBy: "\n")
@@ -980,8 +1020,13 @@ extension MindMapOutline {
             }
             guard !isIndentedCodeLine(line, after: previousNode, in: lines, baseIndent: baseIndent),
                   line.contains("["), line.contains("]") else { continue }
-            for item in parsedLinks(in: line, includeImages: includeImages) {
-                result.append(.init(link: item.link, lineIndex: lineIndex))
+            let matches = parsedLinks(in: line, includeImages: includeImages)
+            guard !matches.isEmpty else { continue }
+            let context = includeContext
+                ? backlinkContext(in: line, matches: matches, lines: lines, lineIndex: lineIndex)
+                : ""
+            for item in matches {
+                result.append(.init(link: item.link, lineIndex: lineIndex, context: context))
             }
         }
         return result

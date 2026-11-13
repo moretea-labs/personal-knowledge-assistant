@@ -655,6 +655,13 @@ enum WorkspaceFiles {
 struct NoteBacklinkLocation: Identifiable, Equatable {
     let lineIndex: Int
     let count: Int
+    let context: String
+
+    init(lineIndex: Int, count: Int, context: String = "") {
+        self.lineIndex = lineIndex
+        self.count = count
+        self.context = context
+    }
 
     var id: Int { lineIndex }
 }
@@ -802,7 +809,7 @@ final class WorkspaceBacklinkParseCache: @unchecked Sendable {
         lock.unlock()
 
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        let occurrences = MindMapOutline.linkOccurrences(in: content)
+        let occurrences = MindMapOutline.linkOccurrences(in: content, includeContext: true)
 
         // If another editor changed the file while it was being read, use this
         // parse for the current scan but do not memoize it under a stale stamp.
@@ -883,13 +890,14 @@ enum WorkspaceBacklinks {
                 guard let stamp = WorkspaceFiles.fileStamp(source),
                       let content = try? String(contentsOf: source, encoding: .utf8)
                 else { continue }
-                let parsed = MindMapOutline.linkOccurrences(in: content)
+                let parsed = MindMapOutline.linkOccurrences(in: content, includeContext: true)
                 guard WorkspaceFiles.fileStamp(source) == stamp else { continue }
                 sourceStamp = stamp
                 occurrences = parsed
             }
 
             var lineCounts: [Int: Int] = [:]
+            var lineContexts: [Int: String] = [:]
             for occurrence in occurrences where WorkspaceFiles.linkedTargetMatches(
                 occurrence.link.target,
                 from: source,
@@ -898,10 +906,17 @@ enum WorkspaceBacklinks {
                 candidateBasenames: candidateBasenames
             ) {
                 lineCounts[occurrence.lineIndex, default: 0] += 1
+                if lineContexts[occurrence.lineIndex] == nil {
+                    lineContexts[occurrence.lineIndex] = occurrence.context
+                }
             }
             guard !lineCounts.isEmpty else { continue }
             let locations = lineCounts.keys.sorted().map {
-                NoteBacklinkLocation(lineIndex: $0, count: lineCounts[$0] ?? 0)
+                NoteBacklinkLocation(
+                    lineIndex: $0,
+                    count: lineCounts[$0] ?? 0,
+                    context: lineContexts[$0] ?? ""
+                )
             }
             result.append(.init(source: source, sourceStamp: sourceStamp, locations: locations))
         }

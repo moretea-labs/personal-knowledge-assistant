@@ -3191,6 +3191,7 @@ struct NotesWindow: View {
                     Text(detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
@@ -3268,11 +3269,15 @@ struct NotesWindow: View {
                 } else {
                     ForEach(model.backlinks) { backlink in
                         ForEach(backlink.locations) { location in
+                            let lineLabel = location.count > 1
+                                ? "L\(location.lineIndex + 1) · \(location.count) \(language.text("references"))"
+                                : "L\(location.lineIndex + 1)"
+                            let detail = location.context.isEmpty
+                                ? lineLabel
+                                : "\(lineLabel) · \(location.context)"
                             relationshipButton(
                                 title: backlink.title,
-                                detail: location.count > 1
-                                    ? "L\(location.lineIndex + 1) · \(location.count) \(language.text("references"))"
-                                    : "L\(location.lineIndex + 1)",
+                                detail: detail,
                                 symbol: "arrow.turn.up.left"
                             ) {
                                 openBacklinkLocation(backlink, location: location)
