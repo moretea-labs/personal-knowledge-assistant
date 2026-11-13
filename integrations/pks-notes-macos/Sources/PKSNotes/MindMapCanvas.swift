@@ -548,7 +548,7 @@ struct MindMapCanvas: View {
             Button(language.text("Delete Branch"), role: .destructive) {
                 if projectionIsCurrent,
                    let id = branchDeleteCandidateID,
-                   let updated = MindMapOutline.deleteListSubtree(in: source, nodeID: id) {
+                   let updated = MindMapOutline.deleteNodeSubtree(in: source, nodeID: id) {
                     source = updated
                     selectedID = nil
                 }
@@ -561,7 +561,7 @@ struct MindMapCanvas: View {
                 restoreCanvasFocusAfterMenu()
             }
         } message: {
-            Text(language.text("The selected list branch and its child nodes will be removed from this note."))
+            Text(language.text("The selected section, its child nodes and attached Markdown content will be removed from this note."))
         }
         .alert(language.text("Mind Map"), isPresented: Binding(
             get: { interchangeError != nil },
@@ -834,7 +834,7 @@ struct MindMapCanvas: View {
                 Button(language.text("Delete Branch"), systemImage: "trash.slash", role: .destructive) {
                     _ = performShortcut(.deleteBranch)
                 }
-                .disabled(selectedID == nil)
+                .disabled(selectedID.flatMap { MindMapOutline.deleteNodeSubtree(in: source, nodeID: $0) } == nil)
                 Divider()
                 Menu {
                     ForEach(MindMapVisualStyle.allCases) { style in
@@ -1184,7 +1184,7 @@ struct MindMapCanvas: View {
             source = updated
             self.selectedID = nil
         case .deleteBranch:
-            guard let selectedID, MindMapOutline.deleteListSubtree(in: source, nodeID: selectedID) != nil
+            guard let selectedID, MindMapOutline.deleteNodeSubtree(in: source, nodeID: selectedID) != nil
             else { return false }
             branchDeleteCandidateID = selectedID
         case .fit:
@@ -1687,7 +1687,7 @@ struct MindMapCanvas: View {
                 branchDeleteCandidateID = node.id
             }
             .disabled(editingNodeID != nil ||
-                      MindMapOutline.deleteListSubtree(in: source, nodeID: node.id) == nil)
+                      MindMapOutline.deleteNodeSubtree(in: source, nodeID: node.id) == nil)
             .accessibilityIdentifier("pks-mind-map-context-delete-branch")
         }
         .onTapGesture {

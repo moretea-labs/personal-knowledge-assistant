@@ -176,30 +176,84 @@ extension MindMapOutlineTests {
 }
 
 extension MindMapOutlineTests {
-    func testDeleteListSubtreeKeepsUnrelatedHeadingsAndSiblings() {
-        XCTAssertEqual(MindMapOutline.deleteListSubtree(
+    func testDeleteHeadingSubtreeRemovesItsCompleteSectionAndPreservesSiblingContent() throws {
+        let citation = "[Textbook · p. 4](/Books/Study.pdf#page=4&rects=0.1,0.2,0.3,0.04&fp=0123456789abcdef)"
+        let source = """
+        # Plan
+        Introduction remains.
+        ## Reading
+        Reading notes.
+        \(citation)
+        ### Detail
+        Detail notes.
+        - Claim
+        ## Target
+        Target notes.
+        """
+        let nodes = MindMapOutline.nodes(in: source)
+        let reading = try XCTUnwrap(nodes.first { $0.title == "Reading" })
+        let updated = try XCTUnwrap(
+            MindMapOutline.deleteNodeSubtree(in: source, nodeID: reading.id)
+        )
+        XCTAssertEqual(updated, """
+        # Plan
+        Introduction remains.
+        ## Target
+        Target notes.
+        """)
+    }
+
+    func testDeleteHeadingSubtreePreservesOneRemainingRootAndRejectsDeletingOnlyMap() throws {
+        let multipleRoots = """
+        # First
+        First section.
+        # Second
+        Second section.
+        """
+        let first = try XCTUnwrap(MindMapOutline.nodes(in: multipleRoots).first)
+        XCTAssertEqual(
+            MindMapOutline.deleteNodeSubtree(in: multipleRoots, nodeID: first.id),
+            "# Second\nSecond section."
+        )
+
+        for source in [
+            "# Root\nRoot notes.\n",
+            "# Root\n## Child\nChild notes.\n"
+        ] {
+            let root = try XCTUnwrap(MindMapOutline.nodes(in: source).first)
+            XCTAssertNil(MindMapOutline.deleteNodeSubtree(in: source, nodeID: root.id))
+        }
+
+        let emptyLeaf = "# Root\n## Empty\n"
+        let leaf = try XCTUnwrap(MindMapOutline.nodes(in: emptyLeaf).last)
+        XCTAssertNil(MindMapOutline.deleteNodeSubtree(in: emptyLeaf, nodeID: leaf.id))
+        XCTAssertNotNil(MindMapOutline.deleteLeaf(in: emptyLeaf, nodeID: leaf.id))
+    }
+
+    func testDeleteNodeSubtreeKeepsUnrelatedHeadingsAndSiblings() {
+        XCTAssertEqual(MindMapOutline.deleteNodeSubtree(
             in: "# Root\n- Parent\n  - Child A\n    - Grandchild\n  - Child B\n- Another",
             nodeID: 1
         ), "# Root\n- Another")
-        XCTAssertEqual(MindMapOutline.deleteListSubtree(
+        XCTAssertEqual(MindMapOutline.deleteNodeSubtree(
             in: "# Root\n- Parent\n  - Child\n", nodeID: 1
         ), "# Root\n")
-        XCTAssertEqual(MindMapOutline.deleteListSubtree(
+        XCTAssertEqual(MindMapOutline.deleteNodeSubtree(
             in: "# Root\n- Parent\n  - Child\n- Another", nodeID: 2
         ), "# Root\n- Parent\n- Another")
-        XCTAssertNil(MindMapOutline.deleteListSubtree(
+        XCTAssertNil(MindMapOutline.deleteNodeSubtree(
             in: "# Root\n- Child", nodeID: 0
         ))
     }
 
-    func testDeleteListSubtreeRejectsNonListContentInsideBranch() {
+    func testDeleteNodeSubtreeRejectsNonListContentInsideBranch() {
         for source in [
             "# Root\n- Parent\n  - Child\n  Attached notes\n- Next",
             "# Root\n- Parent\n  ~~~swift\n  print(1)\n  ~~~\n  - Child\n- Next",
             "# Root\n- Parent\n  - Child\n  ![photo](photo.png)\n- Next",
             "# Root\n- Parent\n  - Child\n  - \n- Next"
         ] {
-            XCTAssertNil(MindMapOutline.deleteListSubtree(in: source, nodeID: 1), source)
+            XCTAssertNil(MindMapOutline.deleteNodeSubtree(in: source, nodeID: 1), source)
         }
     }
 

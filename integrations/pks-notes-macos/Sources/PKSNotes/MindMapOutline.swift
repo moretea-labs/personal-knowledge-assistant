@@ -645,34 +645,58 @@ extension MindMapOutline {
         return result
     }
 
-    /// Explicit branch deletion: only a complete, list-only subtree may be
-    /// deleted. Never remove Markdown paragraphs, headings, code or attachments
-    /// as a side effect of a graph edit.
-    static func deleteListSubtree(in source: String, nodeID: Int) -> String? {
+    /// One branch-deletion entry point for the Markdown-backed map.
+    /// Heading deletion is an explicit destructive section operation; list deletion
+    /// retains its stricter list-only safety rule.
+    static func deleteNodeSubtree(in source: String, nodeID: Int) -> String? {
+        guard let context = editContext(in: source, nodeID: nodeID),
+              context.lines.indices.contains(nodeID) else { return nil }
+        if isListLine(context.lines[nodeID]) {
+            return deleteListSubtree(in: source, nodeID: nodeID)
+        }
+        guard headingLevel(in: context.lines[nodeID]) != nil else { return nil }
+
+        let contentLineCount = context.lines.count - (source.hasSuffix("\n") ? 1 : 0)
+        let endLine = subtreeEndLine(
+            at: context.position, nodes: context.parsed, lineCount: contentLineCount
+        )
+        let nextNode = context.position + 1 < context.parsed.count
+            ? context.parsed[context.position + 1] : nil
+        let hasDescendants = nextNode.map { $0.depth > context.node.depth } ?? false
+        let attachedContentEnd = nextNode?.id ?? contentLineCount
+        let hasAttachedContent = context.lines[(nodeID + 1)..<attachedContentEnd]
+            .contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        guard hasDescendants || hasAttachedContent else { return nil }
+
+        // A destructive section removal must never leave the map without a node.
+        let remainingNodes = context.parsed.filter { !($0.id >= nodeID && $0.id < endLine) }
+        guard !remainingNodes.isEmpty else { return nil }
+
+        var lines = context.lines
+        lines.removeSubrange(nodeID..<endLine)
+        return lines.joined(separator: "\n")
+    }
+
+    /// List branches remain removable only when every nonempty line is a list node.
+    /// This prevents a graph action from silently deleting attached prose or files.
+    private static func deleteListSubtree(in source: String, nodeID: Int) -> String? {
         let parsed = nodes(in: source)
         guard let position = parsed.firstIndex(where: { $0.id == nodeID }) else { return nil }
-        let selected = parsed[position]
         var lines = source.components(separatedBy: "\n")
-        guard lines.indices.contains(nodeID),
-              ["- ", "* ", "+ "].contains(where: {
-                  lines[nodeID].trimmingCharacters(in: .whitespaces).hasPrefix($0)
-              }) else { return nil }
+        guard lines.indices.contains(nodeID), isListLine(lines[nodeID]) else { return nil }
 
-        let endID = parsed.dropFirst(position + 1)
-            .first(where: { $0.depth <= selected.depth })?.id ?? lines.count
+        let contentLineCount = lines.count - (source.hasSuffix("\n") ? 1 : 0)
+        let endID = subtreeEndLine(at: position, nodes: parsed, lineCount: contentLineCount)
         let knownNodeIDs = Set(parsed.map(\.id))
         for index in nodeID..<endID {
             let trimmed = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty { continue }
-            guard knownNodeIDs.contains(index),
-                  ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) else {
-                return nil
-            }
+            guard knownNodeIDs.contains(index), isListLine(trimmed) else { return nil }
         }
+        let remainingNodes = parsed.filter { !($0.id >= nodeID && $0.id < endID) }
+        guard !remainingNodes.isEmpty else { return nil }
         lines.removeSubrange(nodeID..<endID)
-        var result = lines.joined(separator: "\n")
-        if source.hasSuffix("\n") && !result.hasSuffix("\n") { result += "\n" }
-        return result
+        return lines.joined(separator: "\n")
     }
 
     static func addChild(in source: String, parentID: Int, title: String = "New idea") -> String? {

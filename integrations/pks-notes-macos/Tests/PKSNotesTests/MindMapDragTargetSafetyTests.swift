@@ -341,7 +341,7 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         })
         let b = try XCTUnwrap(nodes.first(where: { $0.title == "B" }))
 
-        let updated = try XCTUnwrap(MindMapOutline.deleteListSubtree(in: source, nodeID: b.id))
+        let updated = try XCTUnwrap(MindMapOutline.deleteNodeSubtree(in: source, nodeID: b.id))
         let rebased = rebaseCollapsed(collapsed, from: source, to: updated)
         let updatedNodes = MindMapOutline.nodes(in: updated)
         let expected = Set(try ["A", "C"].map { title in
