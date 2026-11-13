@@ -230,6 +230,44 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         XCTAssertEqual(rebaseCollapsed([duplicates[0].id], from: source, to: moved.source), [newDuplicates[1].id])
     }
 
+    func testCollapsedDuplicateSiblingBranchesFollowAttachedMarkdownWhenOutlineShapeIsIdentical() throws {
+        let source = """
+        # Plan
+        - Parent
+          - Duplicate
+            Evidence alpha.
+            - Child
+          - Duplicate
+            Evidence beta.
+            - Child
+        """
+        let oldNodes = MindMapOutline.nodes(in: source)
+        let oldDuplicates = oldNodes.filter { $0.title == "Duplicate" }
+        let oldChildren = oldNodes.filter { $0.title == "Child" }
+        XCTAssertEqual(oldDuplicates.count, 2)
+        XCTAssertEqual(oldChildren.count, 2)
+
+        let reorder = try XCTUnwrap(MindMapOutline.moveListSubtreeWithOutcome(
+            in: source, nodeID: oldDuplicates[1].id,
+            relativeTo: oldDuplicates[0].id, placement: .before
+        ))
+        let newNodes = MindMapOutline.nodes(in: reorder.source)
+        let newDuplicates = newNodes.filter { $0.title == "Duplicate" }
+        let newChildren = newNodes.filter { $0.title == "Child" }
+        XCTAssertEqual(oldNodes.map(\.title), newNodes.map(\.title))
+        XCTAssertEqual(oldNodes.map(\.depth), newNodes.map(\.depth))
+
+        let lineIndexMap = MindMapOutline.lineIndexMap(from: oldNodes, to: newNodes)
+        XCTAssertEqual(lineIndexMap[oldDuplicates[0].id], newDuplicates[1].id)
+        XCTAssertEqual(lineIndexMap[oldDuplicates[1].id], newDuplicates[0].id)
+        XCTAssertEqual(lineIndexMap[oldChildren[0].id], newChildren[1].id)
+        XCTAssertEqual(lineIndexMap[oldChildren[1].id], newChildren[0].id)
+        XCTAssertEqual(
+            rebaseCollapsed([oldDuplicates[0].id], from: source, to: reorder.source),
+            [newDuplicates[1].id]
+        )
+    }
+
     func testAddingNodesRebasesOnlyAffectedCollapsedBranches() throws {
         let source = "# Plan\n- A\n  - A1\n- B\n  - B1\n- C\n  - C1\n"
         let nodes = MindMapOutline.nodes(in: source)

@@ -5,6 +5,14 @@ struct MindMapNode: Equatable, Identifiable, Sendable {
     let id: Int
     let depth: Int
     let title: String
+    let attachedBodyFingerprint: Int
+
+    init(id: Int, depth: Int, title: String, attachedBodyFingerprint: Int = 0) {
+        self.id = id
+        self.depth = depth
+        self.title = title
+        self.attachedBodyFingerprint = attachedBodyFingerprint
+    }
 }
 
 enum MindMapDropPlacement: Equatable {
@@ -194,6 +202,40 @@ enum MindMapOutline {
             canDeleteLeaf: canDeleteLeaf(context)
         )
     }
+    /// Fingerprint the Markdown body owned by one structural line. Strip only
+    /// common continuation indentation so a safe subtree reparent keeps the
+    /// same derived identity; preserve internal spacing, blank lines and syntax.
+    private static func attachedBodyFingerprint(
+        in lines: [String], from start: Int, to end: Int
+    ) -> Int? {
+        var lower = min(max(0, start), lines.count)
+        var upper = min(max(lower, end), lines.count)
+        func isBlank(_ line: String) -> Bool {
+            line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        while lower < upper && isBlank(lines[lower]) { lower += 1 }
+        while upper > lower && isBlank(lines[upper - 1]) { upper -= 1 }
+
+        var commonIndent: Int?
+        for index in lower..<upper {
+            if index.isMultiple(of: 128), Task.isCancelled { return nil }
+            let line = lines[index]
+            guard !isBlank(line) else { continue }
+            let indent = line.prefix(while: { $0 == " " }).count
+            commonIndent = min(commonIndent ?? indent, indent)
+        }
+
+        var hasher = Hasher()
+        hasher.combine(upper - lower)
+        for index in lower..<upper {
+            if (index - lower).isMultiple(of: 128), Task.isCancelled { return nil }
+            let line = lines[index]
+            let indent = line.prefix(while: { $0 == " " }).count
+            hasher.combine(String(line.dropFirst(min(indent, commonIndent ?? 0))))
+        }
+        return hasher.finalize()
+    }
+
     static func nodes(in markdown: String, baseIndent: Int = 0) -> [MindMapNode] {
         guard !Task.isCancelled else { return [] }
         var result: [MindMapNode] = []
@@ -228,7 +270,23 @@ enum MindMapOutline {
                 if !title.isEmpty { result.append(.init(id: index, depth: headingDepth + indent / 2, title: title)) }
             }
         }
-        return result
+
+        // The node's own attached Markdown body is part of its transient
+        // identity. Descendant bodies are included recursively by lineIndexMap.
+        var projected: [MindMapNode] = []
+        projected.reserveCapacity(result.count)
+        for (position, node) in result.enumerated() {
+            if position.isMultiple(of: 64), Task.isCancelled { return [] }
+            let bodyEnd = position + 1 < result.count ? result[position + 1].id : lines.count
+            guard let bodyFingerprint = attachedBodyFingerprint(
+                in: lines, from: node.id + 1, to: bodyEnd
+            ) else { return [] }
+            projected.append(.init(
+                id: node.id, depth: node.depth, title: node.title,
+                attachedBodyFingerprint: bodyFingerprint
+            ))
+        }
+        return projected
     }
 
     /// Node IDs are canonical Markdown line indexes. Convert them to native UTF-16
@@ -379,7 +437,9 @@ extension MindMapOutline {
 
         if oldNodes.count == newNodes.count,
            oldNodes.enumerated().allSatisfy({ index, node in
-               node.title == newNodes[index].title && node.depth == newNodes[index].depth
+               node.title == newNodes[index].title
+                   && node.depth == newNodes[index].depth
+                   && node.attachedBodyFingerprint == newNodes[index].attachedBodyFingerprint
            }) {
             return Dictionary(uniqueKeysWithValues: zip(oldNodes, newNodes).map {
                 ($0.id, $1.id)
@@ -482,6 +542,7 @@ extension MindMapOutline {
                     .sorted()
                 var hasher = Hasher()
                 hasher.combine(node.title)
+                hasher.combine(node.attachedBodyFingerprint)
                 hasher.combine(children.count)
                 for child in children { hasher.combine(child) }
                 fingerprints[node.id] = hasher.finalize()
