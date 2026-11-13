@@ -133,13 +133,14 @@ enum MarkdownEditing {
         let firstLine = ns.substring(to: lineRange.location).reduce(into: 0) { count, character in
             if character == "\n" { count += 1 }
         }
-        let codeLines = blockCodeLineFlags(in: text)
+        let codeLines = MindMapOutline.blockCodeLineFlags(in: text)
         let contentLines = lines.enumerated().compactMap { offset, line -> String? in
             let absoluteLine = firstLine + offset
             guard !codeLines[absoluteLine],
                   !line.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
             return line
         }
+        let hasExistingList = contentLines.contains { parseListLine($0) != nil }
         let removesExistingList = !contentLines.isEmpty && contentLines.allSatisfy { line in
             guard let parsed = parseListLine(line) else { return false }
             if asTask, case .task(_) = parsed.kind { return true }
@@ -149,7 +150,12 @@ enum MarkdownEditing {
 
         let formattedLines = lines.enumerated().map { offset, line -> String in
             let absoluteLine = firstLine + offset
-            if codeLines[absoluteLine] { return line }
+            if codeLines[absoluteLine] {
+                if removesExistingList {
+                    return line.hasPrefix("  ") ? String(line.dropFirst(2)) : line
+                }
+                return hasExistingList ? line : "  " + line
+            }
             if line.trimmingCharacters(in: .whitespaces).isEmpty && lines.count > 1 { return line }
 
             let parsed = parseListLine(line)
@@ -213,30 +219,6 @@ enum MarkdownEditing {
             )
         }
         return nil
-    }
-
-    /// Keep Markdown block code outside paragraph-level formatting. Fence
-    /// recognition reuses the outline's existing syntax authority; indented
-    /// non-list lines are preserved as code instead of becoming list content.
-    private static func blockCodeLineFlags(in text: String) -> [Bool] {
-        let lines = text.components(separatedBy: "\n")
-        var flags = Array(repeating: false, count: lines.count)
-        var fence: Character?
-        for (index, line) in lines.enumerated() {
-            let wasInsideFence = fence != nil
-            _ = MarkdownHeadingScanner.heading(in: line, fence: &fence)
-            if wasInsideFence || fence != nil {
-                flags[index] = true
-                continue
-            }
-
-            let indentation = line.prefix { $0 == " " || $0 == "\t" }
-            if (indentation.count >= 4 || indentation.contains("\t")),
-               parseListLine(line) == nil {
-                flags[index] = true
-            }
-        }
-        return flags
     }
 
     private static func toggleEmphasis(
@@ -419,7 +401,7 @@ enum MarkdownEditing {
         let firstLine = ns.substring(to: lineRange.location).reduce(into: 0) { count, character in
             if character == "\n" { count += 1 }
         }
-        let codeLines = blockCodeLineFlags(in: text)
+        let codeLines = MindMapOutline.blockCodeLineFlags(in: text)
         let prefix = String(repeating: "#", count: min(6, max(1, level))) + " "
 
         let formatted = lines.enumerated().map { offset, line -> String in

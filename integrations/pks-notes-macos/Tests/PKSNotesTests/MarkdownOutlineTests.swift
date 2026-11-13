@@ -28,6 +28,20 @@ final class MarkdownOutlineTests: XCTestCase {
         }
     }
 
+    func testVariableLengthFencesAreSharedByOutlinePreviewAndMindMap() {
+        let source = "Intro\n````swift\n```\n# Hidden tick heading\n~~~\n````\n# Visible\n~~~text\n## Hidden tilde heading\n~~~~\n## Next"
+
+        XCTAssertEqual(MarkdownOutline.headings(in: source).map(\.title), ["Visible", "Next"])
+        XCTAssertEqual(MarkdownSection.sections(in: source).compactMap(\.heading), ["Visible", "Next"])
+        XCTAssertEqual(MindMapOutline.nodes(in: source).map(\.title), ["Visible", "Next"])
+
+        let indentedSource = "first\n```\nprint(1)\n```\n    print(2)\nlast"
+        XCTAssertEqual(
+            MindMapOutline.blockCodeLineFlags(in: indentedSource),
+            [false, true, true, true, true, false]
+        )
+    }
+
     func testHeadingOffsetsUseUTF16ForNativeTextViewSelection() {
         let source = "😀 preface\n# 标题\nBody\n## Next"
         let headings = MarkdownOutline.headings(in: source)

@@ -188,11 +188,36 @@ final class MarkdownEditingTests: XCTestCase {
     func testBulletCommandPreservesFencedAndIndentedCodeAndCanToggleListOff() {
         let source = "first\n```swift\nprint(1)\n```\n    print(2)\nlast\n"
         let selection = NSRange(location: 0, length: (source as NSString).length)
+        XCTAssertEqual(
+            MindMapOutline.blockCodeLineFlags(in: source),
+            [false, true, true, true, true, false, false]
+        )
         let formatted = MarkdownEditing.apply(.bullet, to: source, selection: selection)
-        XCTAssertEqual(formatted.text, "- first\n```swift\nprint(1)\n```\n    print(2)\n- last\n")
+        XCTAssertEqual(formatted.text, "- first\n  ```swift\n  print(1)\n  ```\n      print(2)\n- last\n")
 
         let unformatted = MarkdownEditing.apply(.bullet, to: formatted.text, selection: formatted.selection)
         XCTAssertEqual(unformatted.text, source)
+    }
+
+    func testHeadingAndListCommandsPreserveVariableLengthFencedCode() {
+        let source = "Title\n````swift\n```\n# still code\n~~~\n````\nSummary\n~~~text\n- still code\n~~~~\nEnd"
+        let selection = NSRange(location: 0, length: (source as NSString).length)
+
+        let heading = MarkdownEditing.apply(.heading(2), to: source, selection: selection)
+        XCTAssertEqual(
+            heading.text,
+            "## Title\n````swift\n```\n# still code\n~~~\n````\n## Summary\n~~~text\n- still code\n~~~~\n## End"
+        )
+
+        let listed = MarkdownEditing.apply(.bullet, to: source, selection: selection)
+        XCTAssertEqual(
+            listed.text,
+            "- Title\n  ````swift\n  ```\n  # still code\n  ~~~\n  ````\n- Summary\n  ~~~text\n  - still code\n  ~~~~\n- End"
+        )
+        XCTAssertEqual(
+            MarkdownEditing.apply(.bullet, to: listed.text, selection: listed.selection).text,
+            source
+        )
     }
 
     func testQuoteCommandTogglesOffOneLevelIncludingNestedQuotes() {

@@ -106,6 +106,38 @@ enum MindMapOutline {
         return trimmed.dropFirst(length).allSatisfy(\.isWhitespace)
     }
 
+    /// One block-code classification shared by the outline, preview and editor.
+    /// Reuse the same fence lengths and list-relative indentation rules as the
+    /// Mind Map parser instead of maintaining a second Markdown code scanner.
+    static func blockCodeLineFlags(in markdown: String, baseIndent: Int = 0) -> [Bool] {
+        let lines = markdown.components(separatedBy: "\n")
+        let parsedNodes = nodes(in: markdown, baseIndent: baseIndent)
+        var nodeCursor = 0
+        var previousNode: MindMapNode?
+        var activeFence: MarkdownFence?
+        var flags = Array(repeating: false, count: lines.count)
+
+        for (lineIndex, line) in lines.enumerated() {
+            while nodeCursor < parsedNodes.count && parsedNodes[nodeCursor].id < lineIndex {
+                previousNode = parsedNodes[nodeCursor]
+                nodeCursor += 1
+            }
+
+            let opening = openingFence(in: line)
+            let closesActiveFence = activeFence.map { closesFence(line, matching: $0) } ?? false
+            flags[lineIndex] = activeFence != nil
+                || opening != nil
+                || isIndentedCodeLine(line, after: previousNode, in: lines, baseIndent: baseIndent)
+
+            if activeFence != nil {
+                if closesActiveFence { activeFence = nil }
+            } else if let opening {
+                activeFence = opening
+            }
+        }
+        return flags
+    }
+
     private static func isListLine(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         return ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) })

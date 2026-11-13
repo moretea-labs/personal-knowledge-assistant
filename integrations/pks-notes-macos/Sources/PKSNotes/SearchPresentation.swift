@@ -55,10 +55,10 @@ struct MarkdownSection: Identifiable {
 
     static func sections(in source: String) -> [MarkdownSection] {
         let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
+        let codeLines = MindMapOutline.blockCodeLineFlags(in: source)
         var result: [MarkdownSection] = []
         var currentLines: [Substring] = []
         var currentHeading: String?
-        var fence: Character?
 
         func flush() {
             if !currentLines.isEmpty {
@@ -69,8 +69,8 @@ struct MarkdownSection: Identifiable {
             currentLines = []
         }
 
-        for line in lines {
-            if let heading = MarkdownHeadingScanner.heading(in: line, fence: &fence) {
+        for (index, line) in lines.enumerated() {
+            if !codeLines[index], let heading = MarkdownHeadingScanner.heading(in: line) {
                 flush()
                 currentHeading = heading.title
             }
