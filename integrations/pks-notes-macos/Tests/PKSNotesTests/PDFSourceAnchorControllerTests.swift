@@ -297,6 +297,119 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         XCTAssertTrue(snippet.contains("> Second page evidence"))
     }
 
+    private func removeStoredReadingPosition(for url: URL) {
+        var positions = UserDefaults.standard.dictionary(
+            forKey: PDFReadingPositionStore.defaultsKey
+        ) ?? [:]
+        positions.removeValue(forKey: url.standardizedFileURL.path)
+        UserDefaults.standard.set(positions, forKey: PDFReadingPositionStore.defaultsKey)
+    }
+
+    func testPDFReadingPositionStoreRetainsNewestEntryWhenCapacityIsFull() throws {
+        let suite = "PKSNotesPDFPositionCapacity-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let existing = Dictionary(uniqueKeysWithValues: (0..<PDFReadingPositionStore.maxEntries).map {
+            ("/tmp/z-\($0).pdf", $0)
+        })
+        defaults.set(existing, forKey: PDFReadingPositionStore.defaultsKey)
+
+        let newest = URL(fileURLWithPath: "/tmp/a-new.pdf")
+        PDFReadingPositionStore.save(pageIndex: 7, for: newest, defaults: defaults)
+
+        let positions = try XCTUnwrap(defaults.dictionary(forKey: PDFReadingPositionStore.defaultsKey))
+        XCTAssertEqual(positions.count, PDFReadingPositionStore.maxEntries)
+        XCTAssertEqual(positions[newest.standardizedFileURL.path] as? Int, 7)
+    }
+
+    func testPDFReadingPositionStoreDoesNotEvictHistoryForDefaultPageZero() throws {
+        let suite = "PKSNotesPDFPositionDefault-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let remembered = URL(fileURLWithPath: "/tmp/remembered.pdf")
+        let firstPage = URL(fileURLWithPath: "/tmp/new-document.pdf")
+        PDFReadingPositionStore.save(pageIndex: 6, for: remembered, defaults: defaults)
+        PDFReadingPositionStore.save(pageIndex: 0, for: firstPage, defaults: defaults)
+
+        XCTAssertEqual(PDFReadingPositionStore.pageIndex(
+            for: remembered, pageCount: 10, defaults: defaults
+        ), 6)
+        XCTAssertNil(PDFReadingPositionStore.pageIndex(
+            for: firstPage, pageCount: 10, defaults: defaults
+        ))
+    }
+
+    @MainActor
+    func testPDFReaderDetachPersistsLastPageBeforeDeferredPageChangeSync() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let document = PDFDocument()
+        for text in ["First page", "Last page read"] {
+            let textView = NSTextView(frame: bounds)
+            textView.string = text
+            let pageDocument = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: bounds)))
+            document.insert(try XCTUnwrap(pageDocument.page(at: 0)), at: document.pageCount)
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Detach-Position-\(UUID().uuidString).pdf")
+        defer { removeStoredReadingPosition(for: url) }
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        controller.attach(view: view, document: document, url: url,
+                          requestedPage: nil, requestedAnchor: nil)
+
+        view.go(to: try XCTUnwrap(document.page(at: 1)))
+        XCTAssertEqual(document.index(for: try XCTUnwrap(view.currentPage)), 1)
+
+        // Do not yield to the asynchronous PDFViewPageChanged observer.
+        controller.detach(view: view)
+        XCTAssertEqual(PDFReadingPositionStore.pageIndex(for: url, pageCount: 2), 1)
+    }
+
+    @MainActor
+    func testReplacingPDFDocumentPersistsOutgoingPageBeforeRebindingTheView() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        func makeDocument(_ texts: [String]) throws -> PDFDocument {
+            let document = PDFDocument()
+            for text in texts {
+                let textView = NSTextView(frame: bounds)
+                textView.string = text
+                let pageDocument = try XCTUnwrap(
+                    PDFDocument(data: textView.dataWithPDF(inside: bounds))
+                )
+                document.insert(try XCTUnwrap(pageDocument.page(at: 0)), at: document.pageCount)
+            }
+            return document
+        }
+
+        let outgoing = try makeDocument(["First page", "Last page read"])
+        let incoming = try makeDocument(["New PDF"])
+        let outgoingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Switch-Outgoing-\(UUID().uuidString).pdf")
+        let incomingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Switch-Incoming-\(UUID().uuidString).pdf")
+        defer {
+            removeStoredReadingPosition(for: outgoingURL)
+            removeStoredReadingPosition(for: incomingURL)
+        }
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        controller.attach(view: view, document: outgoing, url: outgoingURL,
+                          requestedPage: nil, requestedAnchor: nil)
+
+        view.go(to: try XCTUnwrap(outgoing.page(at: 1)))
+        XCTAssertEqual(outgoing.index(for: try XCTUnwrap(view.currentPage)), 1)
+
+        controller.attach(view: view, document: incoming, url: incomingURL,
+                          requestedPage: nil, requestedAnchor: nil)
+        XCTAssertEqual(
+            PDFReadingPositionStore.pageIndex(for: outgoingURL, pageCount: 2),
+            1
+        )
+        controller.detach(view: view)
+    }
+
     @MainActor
     func testRepeatedPDFSelectionAnchorReturnsToPageTwoAfterPageOne() throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)

@@ -289,13 +289,24 @@ enum PDFReadingPositionStore {
         let key = url.standardizedFileURL.path
         let normalized = max(0, pageIndex)
         var values = defaults.dictionary(forKey: defaultsKey) ?? [:]
+        if normalized == 0 {
+            if values.removeValue(forKey: key) != nil {
+                defaults.set(values, forKey: defaultsKey)
+            }
+            return
+        }
         if values[key] as? Int == normalized { return }
         values[key] = normalized
         if values.count > maxEntries {
-            let keep = values.keys.sorted().suffix(maxEntries)
-            values = Dictionary(uniqueKeysWithValues: keep.compactMap { key in
-                values[key].map { (key, $0) }
+            let previousValues = values
+            let keep = previousValues.keys
+                .filter { $0 != key }
+                .sorted()
+                .suffix(maxEntries - 1)
+            values = Dictionary(uniqueKeysWithValues: keep.compactMap { existingKey in
+                previousValues[existingKey].map { (existingKey, $0) }
             })
+            values[key] = normalized
         }
         defaults.set(values, forKey: defaultsKey)
     }
@@ -335,13 +346,17 @@ final class PDFReaderController: ObservableObject {
         navigationSequence: UInt64 = 0
     ) {
         let viewChanged = pdfView !== view
+        let documentChanged = self.document !== document || documentURL != url
+        if viewChanged || documentChanged {
+            // Persist the outgoing document before replacing its PDFView or identity.
+            syncPageFromView()
+        }
         if viewChanged {
             removeViewObservers()
             pdfView = view
             installViewObservers(for: view)
         }
 
-        let documentChanged = self.document !== document || documentURL != url
         let pageRequestChanged = self.requestedPage != requestedPage
         let anchorRequestChanged = self.requestedAnchor != requestedAnchor
         let navigationRequested = self.navigationSequence != navigationSequence
@@ -471,6 +486,7 @@ final class PDFReaderController: ObservableObject {
 
     func detach(view: PDFView) {
         guard pdfView === view else { return }
+        syncPageFromView()
         removeViewObservers()
         pdfView = nil
         selectionNeedsPageOnlyReference = false
