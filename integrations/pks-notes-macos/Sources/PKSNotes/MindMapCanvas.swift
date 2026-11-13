@@ -273,6 +273,7 @@ struct MindMapCanvas: View {
     @Binding var source: String
     @Binding var selectedID: Int?
     let revision: UInt64
+    let hidesNodeDetails: Bool
     let openLink: (String) -> Void
     let connectNote: (Int) -> Void
     let connectSection: (Int) -> Void
@@ -520,7 +521,7 @@ struct MindMapCanvas: View {
                         )
                     }
                 }
-                if showingNodeDetails,
+                if showingNodeDetails && !hidesNodeDetails,
                    let selectedID,
                    let node = nodes.first(where: { $0.id == selectedID }) {
                     Divider()
@@ -752,19 +753,21 @@ struct MindMapCanvas: View {
             .accessibilityLabel(language.text("Rename node"))
             .accessibilityIdentifier("pks-mind-map-rename")
 
-            Button {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                    showingNodeDetails.toggle()
+            if !hidesNodeDetails {
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                        showingNodeDetails.toggle()
+                    }
+                    restoreCanvasFocusAfterMenu()
+                } label: {
+                    Image(systemName: showingNodeDetails ? "sidebar.right" : "info.circle")
+                        .frame(width: 30, height: 30)
                 }
-                restoreCanvasFocusAfterMenu()
-            } label: {
-                Image(systemName: showingNodeDetails ? "sidebar.right" : "info.circle")
-                    .frame(width: 30, height: 30)
+                .disabled(selectedID == nil)
+                .help(language.text("Node Details"))
+                .accessibilityLabel(language.text("Node Details"))
+                .accessibilityIdentifier("pks-mind-map-node-details")
             }
-            .disabled(selectedID == nil)
-            .help(language.text("Node Details"))
-            .accessibilityLabel(language.text("Node Details"))
-            .accessibilityIdentifier("pks-mind-map-node-details")
 
             Menu {
                 Button(language.text("Link Note"), systemImage: "doc.text") {

@@ -576,6 +576,7 @@ struct NotesWindow: View {
     @Namespace private var readingModeNamespace
     @State private var mode: ReadingMode = .read
     @State private var showingMindMap = false
+    @State private var showingMindMapSourcePane = false
     @State private var mindMapSelectionLine: Int?
     @State private var modeBeforeMindMap: ReadingMode = .read
     @AppStorage("PKSNotesReadingTheme") private var themeID = NotesTheme.system.rawValue
@@ -903,6 +904,9 @@ struct NotesWindow: View {
                 showingBacklinks = false
             }
         }
+        .onChange(of: showingMindMap) { _, visible in
+            if !visible { showingMindMapSourcePane = false }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.quickOpen)) { _ in
             openQuickPicker()
         }
@@ -1041,6 +1045,7 @@ struct NotesWindow: View {
         }
         .onChange(of: model.previewPDF) { _, pdf in
             guard pdf != nil else { return }
+            showingMindMapSourcePane = false
             showingOutline = false
             outlineHeadings = []
             compactStudyShowsStudyPane = showingMindMap
@@ -1051,6 +1056,7 @@ struct NotesWindow: View {
             }
         }
         .onChange(of: model.selected) { _, note in
+            showingMindMapSourcePane = false
             mindMapSelectionLine = nil
             let openAsMap = note != nil && note == pendingMindMapOpen
             showingMindMap = openAsMap && ProAccess.allows(.mindMap, unlocked: purchases.unlocked)
@@ -3536,7 +3542,22 @@ struct NotesWindow: View {
         } else if showingMindMap
                     && ProAccess.allows(.mindMap, unlocked: purchases.unlocked)
                     && model.selected != nil && model.externalBody == nil {
-            mindMapCanvas
+            HSplitView {
+                mindMapCanvas
+                    .frame(
+                        minWidth: showingMindMapSourcePane ? 280 : 0,
+                        idealWidth: showingMindMapSourcePane ? 480 : 900
+                    )
+                if showingMindMapSourcePane {
+                    editor
+                        .frame(minWidth: 300, idealWidth: 420)
+                }
+            }
+            .accessibilityIdentifier(
+                showingMindMapSourcePane
+                    ? "pks-mind-map-source-workspace"
+                    : "pks-mind-map-workspace"
+            )
         } else if model.externalBody != nil || mode == .read {
             renderedNote
         } else if mode == .edit {
@@ -3556,6 +3577,7 @@ struct NotesWindow: View {
             source: $model.draft,
             selectedID: $mindMapSelectionLine,
             revision: model.draftRevision,
+            hidesNodeDetails: showingMindMapSourcePane,
             openLink: { target in
                 _ = model.openKnowledgeLink(
                     target,
@@ -3903,6 +3925,7 @@ struct NotesWindow: View {
         guard visible != showingMindMap else { return }
         if visible {
             modeBeforeMindMap = mode
+            showingMindMapSourcePane = false
             if let textView = MarkdownNativeCommand.activeTextView()
                 ?? markdownTextView(in: NSApp.keyWindow?.contentView) {
                 mindMapSelectionLine = MindMapOutline.nodeID(
@@ -3917,35 +3940,50 @@ struct NotesWindow: View {
                 compactStudyShowsStudyPane = true
             }
         } else if let line = mindMapSelectionLine {
-            revealMarkdownLine(line)
+            revealMarkdownLineIndex(line)
         } else {
             showingMindMap = false
+            showingMindMapSourcePane = false
             mode = modeBeforeMindMap
         }
     }
 
     private func revealMarkdownLine(_ line: Int) {
         guard MindMapOutline.sourceLineRange(in: model.draft, nodeID: line) != nil else { return }
-        revealMarkdownLineIndex(line)
+        revealMarkdownLineIndex(
+            line,
+            keepMindMapVisible: showingMindMap && model.previewPDF == nil
+        )
     }
 
-    private func revealMarkdownLineIndex(_ line: Int) {
+    private func revealMarkdownLineIndex(_ line: Int, keepMindMapVisible: Bool = false) {
         guard model.selected != nil,
               let range = MarkdownOutline.lineRange(in: model.draft, lineIndex: line) else {
             model.message = language.text("Link target not available in this workspace.")
             return
         }
         mindMapSelectionLine = MindMapOutline.nodeID(atUTF16Offset: range.location, in: model.draft)
-        showingMindMap = false
+        if keepMindMapVisible {
+            showingMindMapSourcePane = true
+        } else {
+            showingMindMap = false
+            showingMindMapSourcePane = false
+        }
         mode = .edit
         Task { @MainActor in
             await Task.yield()
             try? await Task.sleep(for: .milliseconds(60))
             guard let textView = MarkdownNativeCommand.activeTextView()
                     ?? markdownTextView(in: NSApp.keyWindow?.contentView) else { return }
+            let targetLine = keepMindMapVisible ? mindMapSelectionLine : line
+            guard let targetLine,
+                  let currentRange = MarkdownOutline.lineRange(
+                    in: textView.string, lineIndex: targetLine
+                  ) else { return }
+            editorFocused = true
             NSApp.keyWindow?.makeFirstResponder(textView)
-            textView.setSelectedRange(range)
-            textView.scrollRangeToVisible(range)
+            textView.setSelectedRange(currentRange)
+            textView.scrollRangeToVisible(currentRange)
         }
     }
 
