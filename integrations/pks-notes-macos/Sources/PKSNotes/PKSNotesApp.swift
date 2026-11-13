@@ -558,6 +558,23 @@ private struct RelationshipWarmupKey: Hashable {
     let enabled: Bool
 }
 
+struct MarkdownEditorRevealRequest: Equatable {
+    let note: URL
+    let line: Int
+    let keepsMindMapVisible: Bool
+
+    func selectionRange(
+        in source: String,
+        selectedNote: URL?,
+        selectedNodeLine: Int?
+    ) -> NSRange? {
+        guard let selectedNote,
+              selectedNote.standardizedFileURL == note.standardizedFileURL else { return nil }
+        let targetLine = keepsMindMapVisible ? selectedNodeLine ?? line : line
+        return MarkdownOutline.lineRange(in: source, lineIndex: targetLine)
+    }
+}
+
 private struct PDFCaptureRequest: Equatable {
     let id = UUID()
     let pdf: URL
@@ -578,6 +595,7 @@ struct NotesWindow: View {
     @State private var showingMindMap = false
     @State private var showingMindMapSourcePane = false
     @State private var mindMapSelectionLine: Int?
+    @State private var pendingMarkdownReveal: MarkdownEditorRevealRequest?
     @State private var modeBeforeMindMap: ReadingMode = .read
     @AppStorage("PKSNotesReadingTheme") private var themeID = NotesTheme.system.rawValue
     @AppStorage("PKSNotesFontAdjustment") private var fontAdjustment = 0.0
@@ -3746,11 +3764,24 @@ struct NotesWindow: View {
                     handlePDFCitationDrop(providers)
                 }
                 .accessibilityIdentifier("pks-markdown-editor")
-                .onAppear { resetNativeEditorUndoBaseline() }
+                .onAppear {
+                    resetNativeEditorUndoBaseline()
+                    Task { @MainActor in
+                        await Task.yield()
+                        applyPendingMarkdownReveal()
+                    }
+                }
         }
         .frame(maxWidth: theme.typography.pageWidth + widthAdjustment + 56)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.canvas)
+        .onChange(of: model.draftRevision) { _, _ in
+            guard pendingMarkdownReveal != nil else { return }
+            Task { @MainActor in
+                await Task.yield()
+                applyPendingMarkdownReveal()
+            }
+        }
     }
 
     @ViewBuilder
@@ -3976,12 +4007,17 @@ struct NotesWindow: View {
     }
 
     private func revealMarkdownLineIndex(_ line: Int, keepMindMapVisible: Bool = false) {
-        guard model.selected != nil,
+        guard let note = model.selected,
               let range = MarkdownOutline.lineRange(in: model.draft, lineIndex: line) else {
             model.message = language.text("Link target not available in this workspace.")
             return
         }
         mindMapSelectionLine = MindMapOutline.nodeID(atUTF16Offset: range.location, in: model.draft)
+        pendingMarkdownReveal = MarkdownEditorRevealRequest(
+            note: note.standardizedFileURL,
+            line: line,
+            keepsMindMapVisible: keepMindMapVisible
+        )
         if keepMindMapVisible {
             showingMindMapSourcePane = true
         } else {
@@ -3991,20 +4027,45 @@ struct NotesWindow: View {
         mode = .edit
         Task { @MainActor in
             await Task.yield()
-            try? await Task.sleep(for: .milliseconds(60))
-            guard let textView = MarkdownNativeCommand.activeTextView()
-                    ?? markdownTextView(in: NSApp.keyWindow?.contentView) else { return }
-            let targetLine = keepMindMapVisible ? mindMapSelectionLine : line
-            guard let targetLine,
-                  let currentRange = MarkdownOutline.lineRange(
-                    in: textView.string, lineIndex: targetLine
-                  ) else { return }
-            editorFocused = true
-            NSApp.keyWindow?.makeFirstResponder(textView)
-            textView.setSelectedRange(currentRange)
-            textView.scrollRangeToVisible(currentRange)
+            applyPendingMarkdownReveal()
         }
     }
+
+    @MainActor
+    private func applyPendingMarkdownReveal() {
+        guard let request = pendingMarkdownReveal else { return }
+        guard !model.loadingNote else { return }
+        guard let selectedNote = model.selected,
+              selectedNote.standardizedFileURL == request.note.standardizedFileURL else {
+            pendingMarkdownReveal = nil
+            return
+        }
+        let presentationIsCurrent = request.keepsMindMapVisible
+            ? showingMindMap && showingMindMapSourcePane
+            : !showingMindMap && mode == .edit
+        guard presentationIsCurrent else {
+            pendingMarkdownReveal = nil
+            return
+        }
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow,
+              let textView = markdownTextView(in: window.contentView),
+              textView.window === window,
+              textView.string == model.draft else { return }
+        guard let range = request.selectionRange(
+            in: textView.string,
+            selectedNote: selectedNote,
+            selectedNodeLine: request.keepsMindMapVisible ? mindMapSelectionLine : nil
+        ) else {
+            pendingMarkdownReveal = nil
+            return
+        }
+        pendingMarkdownReveal = nil
+        editorFocused = true
+        window.makeFirstResponder(textView)
+        textView.setSelectedRange(range)
+        textView.scrollRangeToVisible(range)
+    }
+
 
     private var renderedNote: some View {
         MarkdownPreviewPane(source: model.body, revision: model.bodyRevision,

@@ -5,6 +5,31 @@ import XCTest
 @testable import PKSNotes
 
 final class MindMapInterchangeTests: XCTestCase {
+    func testMarkdownRevealUsesRebasedMapSelectionAndRejectsAnotherNote() throws {
+        let note = URL(fileURLWithPath: "/tmp/Study.md")
+        let otherNote = URL(fileURLWithPath: "/tmp/Other.md")
+        let source = "# Study\n- First\n- Second\n"
+
+        let mapRequest = MarkdownEditorRevealRequest(
+            note: note, line: 1, keepsMindMapVisible: true
+        )
+        let rebasedRange = try XCTUnwrap(mapRequest.selectionRange(
+            in: source, selectedNote: note, selectedNodeLine: 2
+        ))
+        XCTAssertEqual((source as NSString).substring(with: rebasedRange), "- Second")
+        XCTAssertNil(mapRequest.selectionRange(
+            in: source, selectedNote: otherNote, selectedNodeLine: 2
+        ))
+
+        let editorRequest = MarkdownEditorRevealRequest(
+            note: note, line: 1, keepsMindMapVisible: false
+        )
+        let editorRange = try XCTUnwrap(editorRequest.selectionRange(
+            in: source, selectedNote: note, selectedNodeLine: 2
+        ))
+        XCTAssertEqual((source as NSString).substring(with: editorRange), "- First")
+    }
+
     func testEmptyMapCanStartWithOneCanonicalMarkdownHeading() {
         XCTAssertEqual(MindMapOutline.createMap(), "# New Mind Map\n")
         XCTAssertEqual(MindMapOutline.nodes(in: MindMapOutline.createMap()).map(\.title), ["New Mind Map"])
@@ -15,7 +40,7 @@ final class MindMapInterchangeTests: XCTestCase {
         XCTAssertEqual(MindMapOutline.addSibling(in: input, nodeID: 1),
                        "# Root\n- A\n  - A1\n- New idea\n- B")
         XCTAssertEqual(MindMapOutline.addSibling(in: input, nodeID: 0),
-                       "# Root\n- New idea\n- A\n  - A1\n- B")
+                       "# Root\n- A\n  - A1\n- B\n# New idea")
     }
 
     func testExportImportRoundTripPreservesHierarchyAndXMLCharacters() throws {
