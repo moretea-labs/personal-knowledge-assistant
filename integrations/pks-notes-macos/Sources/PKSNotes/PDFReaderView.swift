@@ -348,6 +348,9 @@ final class PDFReaderController: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var searchGeneration: UInt64 = 0
     private var searchMatches: [PDFSelection] = []
+    // PDFView has one current selection for both search hits and user source text.
+    // Retain only the active search selection so invalidation cannot clear newer user intent.
+    private var activeSearchSelection: PDFSelection?
 
     func attach(
         view: PDFView,
@@ -727,6 +730,10 @@ final class PDFReaderController: ObservableObject {
     }
 
     private func syncSelectionStatus() {
+        if let activeSearchSelection,
+           pdfView?.currentSelection !== activeSearchSelection {
+            self.activeSearchSelection = nil
+        }
         let hasSelectedText = selectedText() != nil
         selectionNeedsPageOnlyReference = hasSelectedText && selectedSourceAnchor() == nil
     }
@@ -753,6 +760,7 @@ final class PDFReaderController: ObservableObject {
         selection.color = NSColor.systemYellow.withAlphaComponent(0.45)
         view.currentSelection = selection
         view.go(to: selection)
+        activeSearchSelection = view.currentSelection
         // In continuous mode PDFView.currentPage may remain the mostly-visible
         // previous page even after the search match is revealed. The match's
         // own page is the canonical navigation destination for toolbar state
@@ -766,9 +774,13 @@ final class PDFReaderController: ObservableObject {
         searchTask?.cancel()
         searchTask = nil
         searchMatches.removeAll()
-        // A previous match must not remain highlighted when a different
-        // search is pending or the new query has no results.
-        pdfView?.currentSelection = nil
+        // Clear only the exact selection owned by search. The user may have
+        // replaced it with a source passage that must survive query edits.
+        if let activeSearchSelection,
+           pdfView?.currentSelection === activeSearchSelection {
+            pdfView?.currentSelection = nil
+        }
+        activeSearchSelection = nil
         selectionNeedsPageOnlyReference = false
         completedSearchQuery = ""
         searchMatchCount = 0

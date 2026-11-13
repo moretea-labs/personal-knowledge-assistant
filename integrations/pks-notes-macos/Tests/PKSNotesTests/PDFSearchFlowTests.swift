@@ -112,6 +112,38 @@ final class PDFSearchFlowTests: XCTestCase {
         controller.detach(view: view)
     }
 
+    func testEditingSubmittedQueryPreservesManualSourceSelection() async throws {
+        let document = try makeDocument(
+            text: "Alpha search result. Important source passage. Beta search result."
+        )
+        let view = PDFView(frame: NSRect(x: 0, y: 0, width: 700, height: 800))
+        let controller = PDFReaderController()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pks-search-selection-\(UUID().uuidString).pdf")
+        controller.attach(view: view, document: document, url: url,
+                          requestedPage: nil, requestedAnchor: nil)
+
+        controller.search("alpha")
+        try await finishSearch(controller)
+        XCTAssertEqual(controller.selectedText(), "Alpha")
+
+        let manualSelection = try XCTUnwrap(
+            document.findString("Important source passage", withOptions: []).first
+        )
+        view.currentSelection = manualSelection
+        await Task.yield()
+
+        controller.invalidateSearchIfQueryChanged("beta")
+
+        XCTAssertEqual(
+            controller.selectedText(),
+            "Important source passage",
+            "Invalidating stale search results must preserve the user's newer source selection."
+        )
+        XCTAssertEqual(controller.searchMatchCount, 0)
+        controller.detach(view: view)
+    }
+
     func testCrossPageSearchUpdatesCanonicalPageIndex() async throws {
         let document = try makeDocument(pages: [
             "Opening evidence.",
