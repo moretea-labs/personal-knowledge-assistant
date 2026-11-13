@@ -105,6 +105,11 @@ struct PKSNotesApp: App {
                     .keyboardShortcut("e", modifiers: .command)
                 Button(language.text("Link")) { MarkdownNativeCommand.perform("link") }
                     .keyboardShortcut("k", modifiers: .command)
+                Button(language.text("Insert PDF Citation at Cursor")) {
+                    NotificationCenter.default.post(name: NotesMenuEvent.insertPDFCitationAtCursor, object: nil)
+                }
+                .keyboardShortcut("k", modifiers: [.command, .shift])
+                .disabled(model.previewPDF == nil || model.selected == nil || model.externalBody != nil)
                 Divider()
                 Button(language.text("Heading 1")) { MarkdownNativeCommand.perform("h1") }
                     .keyboardShortcut("1", modifiers: [.command, .shift])
@@ -318,6 +323,12 @@ enum MarkdownNativeCommand {
     }
 
     @discardableResult
+    static func insertAtCaret(_ value: String, in textView: NSTextView) -> Bool {
+        guard textView.selectedRange().length == 0 else { return false }
+        return insertText(value, at: textView.selectedRange().location, in: textView)
+    }
+
+    @discardableResult
     static func perform(_ value: String) -> Bool {
         perform(value, in: activeTextView())
     }
@@ -503,6 +514,7 @@ enum NotesMenuEvent {
     static let toggleEdit = Notification.Name("PKSNotesToggleEditPreview")
     static let paste = Notification.Name("PKSNotesPaste")
     static let revealCurrentFile = Notification.Name("PKSNotesRevealCurrentFile")
+    static let insertPDFCitationAtCursor = Notification.Name("PKSNotesInsertPDFCitationAtCursor")
 }
 
 private enum SidebarTab: String, CaseIterable {
@@ -915,6 +927,9 @@ struct NotesWindow: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.paste)) { _ in
             handlePaste()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.insertPDFCitationAtCursor)) { _ in
+            insertPDFCitationAtCursor()
         }
         .task(id: "\(model.previewPDF?.standardizedFileURL.path ?? "")#\(model.previewPDFReloadSequence)") {
             guard let requestedURL = model.previewPDF?.standardizedFileURL else {
@@ -2940,6 +2955,29 @@ struct NotesWindow: View {
             await Task.yield()
             try? await Task.sleep(for: .milliseconds(60))
             markdownTextView(in: NSApp.keyWindow?.contentView)?.undoManager?.removeAllActions()
+        }
+    }
+
+    private func insertPDFCitationAtCursor() {
+        guard let pdf = model.previewPDF, let root = model.root,
+              model.selected != nil, model.externalBody == nil, !model.loadingNote,
+              !showingMindMap, mode == .edit,
+              loadedPDFURL?.standardizedFileURL == pdf.standardizedFileURL else {
+            model.message = language.text("Open the study note in Edit mode first.")
+            return
+        }
+        guard let textView = MarkdownNativeCommand.activeTextView(),
+              textView.string == model.draft,
+              let citation = pdfReaderController.selectedCitationForDrag(pdf: pdf, root: root) else {
+            model.message = language.text("Select PDF text and place the note cursor without selecting text.")
+            return
+        }
+        let formattedCitation = PDFCitationDropTarget.citationForInsertion(
+            citation, in: textView.string, at: textView.selectedRange().location
+        )
+        guard MarkdownNativeCommand.insertAtCaret(formattedCitation, in: textView) else {
+            model.message = language.text("Select PDF text and place the note cursor without selecting text.")
+            return
         }
     }
 

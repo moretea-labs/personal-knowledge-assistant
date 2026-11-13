@@ -130,7 +130,11 @@ final class PDFCitationDragTests: XCTestCase {
 
         let citation = "\n\n[Reading.pdf · p. 1](/Reading.pdf#page=1&rects=...) \n\n> Important fact\n\n"
         let insertionPoint = ("Before " as NSString).length
-        XCTAssertTrue(MarkdownNativeCommand.insertText(citation, at: insertionPoint, in: textView))
+        textView.setSelectedRange(NSRange(location: insertionPoint, length: 5))
+        XCTAssertFalse(MarkdownNativeCommand.insertAtCaret(citation, in: textView))
+        XCTAssertEqual(textView.string, "Before After")
+        textView.setSelectedRange(NSRange(location: insertionPoint, length: 0))
+        XCTAssertTrue(MarkdownNativeCommand.insertAtCaret(citation, in: textView))
         XCTAssertEqual(textView.string, "Before " + citation + "After")
 
         await Task.yield()
