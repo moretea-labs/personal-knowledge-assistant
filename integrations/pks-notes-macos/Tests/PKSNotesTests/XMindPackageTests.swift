@@ -51,6 +51,18 @@ final class XMindPackageTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), before, "Import must not mutate the .xmind archive.")
     }
 
+    func testRejectsSymlinkedAndNonRegularXMindSourcesBeforeReading() throws {
+        let (root, file) = try archive(#"[{"rootTopic":{"title":"Valid"}}]"#, entry: "content.json")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let alias = root.appendingPathComponent("Alias.xmind")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: file)
+        let directory = root.appendingPathComponent("Directory.xmind", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        XCTAssertThrowsError(try XMindPackage.importOutline(from: alias))
+        XCTAssertThrowsError(try XMindPackage.importOutline(from: directory))
+    }
+
     func testImportsJSONNoteBodyWithoutCreatingNewTopics() throws {
         let content = #"""
         [{

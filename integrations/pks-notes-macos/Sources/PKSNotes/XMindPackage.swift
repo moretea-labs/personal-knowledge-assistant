@@ -43,8 +43,13 @@ enum XMindPackage {
     }
 
     private static func readDocument(from url: URL, includeImages: Bool) throws -> ImportedDocument {
-        guard url.pathExtension.lowercased() == "xmind",
-              let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+        guard url.pathExtension.lowercased() == "xmind" else { throw Failure.unsupported }
+        guard let location = try? url.resourceValues(
+            forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+        ), location.isRegularFile == true, location.isSymbolicLink != true else {
+            throw Failure.malformed
+        }
+        guard let fileSize = location.fileSize,
               fileSize <= 64 * 1_024 * 1_024,
               let archive = try? Data(contentsOf: url, options: .mappedIfSafe),
               archive.count <= 64 * 1_024 * 1_024 else { throw Failure.tooLarge }
