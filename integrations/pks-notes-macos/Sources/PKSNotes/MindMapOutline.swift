@@ -138,9 +138,78 @@ enum MindMapOutline {
         return flags
     }
 
+    private enum ListMarker: Equatable {
+        case bullet(Character)
+        case ordered(number: Int, delimiter: Character)
+
+        var markdownPrefix: String {
+            switch self {
+            case .bullet(let marker):
+                return "\(marker) "
+            case .ordered(let number, let delimiter):
+                return "\(number)\(delimiter) "
+            }
+        }
+
+        var newItemPrefix: String {
+            switch self {
+            case .bullet:
+                return markdownPrefix
+            case .ordered(_, let delimiter):
+                return "1\(delimiter) "
+            }
+        }
+
+        func insertionPrefix(
+            for source: ListMarker,
+            placement: MindMapDropPlacement
+        ) -> String? {
+            switch (self, source) {
+            case (.bullet, .bullet):
+                return markdownPrefix
+            case let (.ordered(number, delimiter), .ordered(_, _)):
+                switch placement {
+                case .before:
+                    return "\(number)\(delimiter) "
+                case .child:
+                    return "1\(delimiter) "
+                case .after:
+                    guard number < 999_999_999 else { return nil }
+                    return "\(number + 1)\(delimiter) "
+                }
+            default:
+                return nil
+            }
+        }
+    }
+
+    private static func listMarker(in line: String) -> ListMarker? {
+        let content = line.drop(while: { $0 == " " || $0 == "\t" })
+        guard let first = content.first else { return nil }
+        if ["-", "*", "+"].contains(first),
+           content.dropFirst().first?.isWhitespace == true {
+            return .bullet(first)
+        }
+
+        let digits = content.prefix { $0 >= "0" && $0 <= "9" }
+        guard (1...9).contains(digits.count),
+              let number = Int(String(digits)),
+              let delimiter = content.dropFirst(digits.count).first,
+              delimiter == "." || delimiter == ")",
+              content.dropFirst(digits.count + 1).first?.isWhitespace == true
+        else { return nil }
+        return .ordered(number: number, delimiter: delimiter)
+    }
+
+    private static func replacingListMarker(in line: String, with prefix: String) -> String? {
+        let leading = line.prefix(while: { $0 == " " || $0 == "\t" })
+        let content = line.dropFirst(leading.count)
+        guard let marker = listMarker(in: String(content)) else { return nil }
+        return String(leading) + prefix + content.dropFirst(marker.markdownPrefix.count)
+    }
+
     private static func isListLine(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        return ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) })
+        listMarker(in: line) != nil
     }
 
     private static func indentedCodeThreshold(
@@ -314,9 +383,12 @@ enum MindMapOutline {
                 continue
             }
             let indent = line.prefix(while: { $0 == " " }).count
-            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
-                let title = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-                if !title.isEmpty { result.append(.init(id: index, depth: headingDepth + indent / 2, title: title)) }
+            if let marker = listMarker(in: trimmed) {
+                let title = String(trimmed.dropFirst(marker.markdownPrefix.count))
+                    .trimmingCharacters(in: .whitespaces)
+                if !title.isEmpty {
+                    result.append(.init(id: index, depth: headingDepth + indent / 2, title: title))
+                }
             }
         }
 
@@ -443,9 +515,12 @@ extension MindMapOutline {
         let contentLineCount = lines.count - (source.hasSuffix("\n") ? 1 : 0)
         let insertion = subtreeEndLine(at: position, nodes: parsed, lineCount: contentLineCount)
 
-        if isListLine(line) {
+        if let marker = listMarker(in: line) {
             let indent = line.prefix(while: { $0 == " " }).count
-            lines.insert(String(repeating: " ", count: indent) + "- " + title, at: insertion)
+            lines.insert(
+                String(repeating: " ", count: indent) + marker.newItemPrefix + title,
+                at: insertion
+            )
         } else {
             guard let level = headingLevel(in: line) else { return nil }
             let leading = String(line.prefix(while: \.isWhitespace))
@@ -466,7 +541,14 @@ extension MindMapOutline {
         let leading = line.prefix(while: { $0 == " " }).count
         let trimmed = String(line.dropFirst(leading))
         let hashes = trimmed.prefix(while: { $0 == "#" }).count
-        let prefix = hashes > 0 ? String(repeating: "#", count: hashes) + " " : String(trimmed.prefix(2))
+        let prefix: String
+        if hashes > 0 {
+            prefix = String(repeating: "#", count: hashes) + " "
+        } else if let marker = listMarker(in: trimmed) {
+            prefix = marker.markdownPrefix
+        } else {
+            return nil
+        }
         lines[nodeID] = String(repeating: " ", count: leading) + prefix + title
         return lines.joined(separator: "\n")
     }
@@ -750,7 +832,8 @@ extension MindMapOutline {
         guard lines.indices.contains(parentID) else { return nil }
 
         let parentLine = lines[parentID]
-        let isList = isListLine(parentLine)
+        let parentMarker = listMarker(in: parentLine)
+        let isList = parentMarker != nil
         let indent = parentLine.prefix(while: { $0 == " " }).count
         let contentLineCount = lines.count - (source.hasSuffix("\n") ? 1 : 0)
         let endLine = subtreeEndLine(at: position, nodes: parsed, lineCount: contentLineCount)
@@ -763,7 +846,11 @@ extension MindMapOutline {
         }
 
         let childIndent = isList ? indent + 2 : 0
-        lines.insert(String(repeating: " ", count: childIndent) + "- " + title, at: insertion)
+        let childPrefix = parentMarker?.newItemPrefix ?? "- "
+        lines.insert(
+            String(repeating: " ", count: childIndent) + childPrefix + title,
+            at: insertion
+        )
         return (lines.joined(separator: "\n"), insertion)
     }
 }
@@ -1236,7 +1323,7 @@ extension MindMapOutline {
 
         var lines = source.components(separatedBy: "\n")
         guard lines.indices.contains(nodeID), lines.indices.contains(targetID),
-              isListLine(lines[nodeID]) else { return nil }
+              let sourceMarker = listMarker(in: lines[nodeID]) else { return nil }
 
         let contentLineCount = lines.count - (source.hasSuffix("\n") ? 1 : 0)
         let sourceEnd = subtreeEndLine(at: sourcePosition, nodes: parsed, lineCount: contentLineCount)
@@ -1248,7 +1335,8 @@ extension MindMapOutline {
         ) else { return nil }
 
         let targetLine = lines[targetID]
-        let targetIsList = isListLine(targetLine)
+        let targetMarker = listMarker(in: targetLine)
+        let targetIsList = targetMarker != nil
         let targetIndent = targetLine.prefix(while: { $0 == " " }).count
         let targetEnd = subtreeEndLine(at: targetPosition, nodes: parsed, lineCount: contentLineCount)
         let targetFirstChild = firstDescendantLine(
@@ -1290,6 +1378,11 @@ extension MindMapOutline {
             let nextIndent = currentIndent + delta
             guard nextIndent >= 0 else { return nil }
             moved[index] = String(repeating: " ", count: nextIndent) + moved[index].dropFirst(currentIndent)
+        }
+        if let targetMarker {
+            guard let prefix = targetMarker.insertionPrefix(for: sourceMarker, placement: placement),
+                  let rewrittenRoot = replacingListMarker(in: moved[0], with: prefix) else { return nil }
+            moved[0] = rewrittenRoot
         }
 
         let removedCount = sourceEnd - nodeID
