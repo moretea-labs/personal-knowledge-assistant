@@ -576,3 +576,87 @@ final class PDFCitationDragTests: XCTestCase {
         XCTAssertFalse(controller.selectionNeedsPageOnlyReference)
     }
 }
+
+
+extension PDFCitationDragTests {
+    @MainActor
+    func testAppendPDFReferencePersistsToActiveAndOtherNotesWithoutChangingActiveDraft() async throws {
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
+        let previousBookmark = defaults.object(forKey: "PKSNotesWorkspaceBookmark")
+        let previousLastOpened = defaults.object(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let previousWorkspace { defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousBookmark { defaults.set(previousBookmark, forKey: "PKSNotesWorkspaceBookmark") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+            if let previousLastOpened { defaults.set(previousLastOpened, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-PDF-Append-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        defaults.set(root.path, forKey: "PKSNotesWorkspace")
+        defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark")
+        defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown")
+
+        let pdf = root.appendingPathComponent("Reading.pdf")
+        let activeNote = root.appendingPathComponent("Active.md")
+        let otherNote = root.appendingPathComponent("Other.md")
+        XCTAssertTrue(FileManager.default.createFile(atPath: pdf.path, contents: Data()))
+        try "# Active\n".write(to: activeNote, atomically: true, encoding: .utf8)
+        try "# Other\n".write(to: otherNote, atomically: true, encoding: .utf8)
+
+        let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Important fact"))
+        let anchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 1,
+            normalizedRects: [CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.04)],
+            fingerprint: fingerprint
+        ))
+        let activeSnippet = try XCTUnwrap(PDFPageReference.noteSnippet(
+            for: pdf, page: 1, root: root, commentary: "Active observation",
+            selectedText: "Important fact", anchor: anchor
+        ))
+        let otherSnippet = try XCTUnwrap(PDFPageReference.noteSnippet(
+            for: pdf, page: 1, root: root, commentary: "Saved for later",
+            selectedText: "Important fact", anchor: anchor
+        ))
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(activeNote)
+        for _ in 0..<400 where model.selected != activeNote || model.loadingNote {
+            await Task.yield()
+        }
+        XCTAssertEqual(model.selected, activeNote)
+        XCTAssertFalse(model.loadingNote)
+
+        let activeSaved = await model.appendPDFReference(
+            pdf: pdf, page: 1, commentary: "Active observation",
+            selectedText: "Important fact", anchor: anchor, to: activeNote
+        )
+        XCTAssertTrue(activeSaved, model.message ?? "Active-note PDF capture failed")
+        let activeContent = try String(contentsOf: activeNote, encoding: .utf8)
+        XCTAssertEqual(model.draft, activeContent)
+        XCTAssertFalse(model.isDirty)
+        XCTAssertTrue(activeContent.contains(activeSnippet))
+        XCTAssertTrue(activeContent.contains(anchor.fragment))
+
+        let activeDraftBeforeOtherCapture = model.draft
+        let otherSaved = await model.appendPDFReference(
+            pdf: pdf, page: 1, commentary: "Saved for later",
+            selectedText: "Important fact", anchor: anchor, to: otherNote
+        )
+        XCTAssertTrue(otherSaved, model.message ?? "Other-note PDF capture failed")
+        XCTAssertEqual(model.selected, activeNote)
+        XCTAssertEqual(model.draft, activeDraftBeforeOtherCapture)
+        XCTAssertFalse(model.isDirty)
+
+        let otherContent = try String(contentsOf: otherNote, encoding: .utf8)
+        XCTAssertTrue(otherContent.hasPrefix("# Other\n"))
+        XCTAssertTrue(otherContent.contains(otherSnippet))
+        XCTAssertTrue(otherContent.contains(anchor.fragment))
+    }
+}
