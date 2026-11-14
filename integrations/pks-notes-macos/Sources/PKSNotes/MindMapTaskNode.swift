@@ -18,6 +18,19 @@ enum MindMapTaskNode {
         return nil
     }
 
+    /// Edit the visible task label without exposing checkbox syntax in the field.
+    static func titleForEditing(_ title: String) -> String {
+        parse(title)?.title ?? title
+    }
+
+    /// Preserve the exact checkbox marker when replacing a task's visible label.
+    static func replacingTitle(_ replacement: String, in originalTitle: String) -> String? {
+        let title = replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, !title.contains("\n"), !title.contains("\r") else { return nil }
+        guard parse(originalTitle) != nil else { return title }
+        return String(originalTitle.prefix(3)) + " " + title
+    }
+
     static func toggle(in source: String, nodeID: Int) -> String? {
         guard let node = MindMapOutline.nodes(in: source).first(where: { $0.id == nodeID }),
               let task = parse(node.title) else { return nil }

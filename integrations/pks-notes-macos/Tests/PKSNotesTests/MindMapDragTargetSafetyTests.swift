@@ -708,3 +708,22 @@ extension MindMapDragTargetSafetyTests {
         ), "A stale card must not mutate the different node now occupying its old line index.")
     }
 }
+
+
+extension MindMapDragTargetSafetyTests {
+    func testTaskInlineRenamePreservesVisibleLabelAndCheckboxState() throws {
+        let cases = [("[ ] Pending", "[ ] Renamed", false),
+                     ("[x] Complete", "[x] Renamed", true),
+                     ("[X] Complete", "[X] Renamed", true)]
+        for (original, expected, checked) in cases {
+            XCTAssertEqual(MindMapTaskNode.titleForEditing(original), String(original.dropFirst(4)))
+            let title = try XCTUnwrap(MindMapTaskNode.replacingTitle("Renamed", in: original))
+            XCTAssertEqual(title, expected)
+            let source = "# Plan\n- " + original + "\n"
+            let node = try XCTUnwrap(MindMapOutline.nodes(in: source).first)
+            let updated = try XCTUnwrap(MindMapOutline.rename(in: source, nodeID: node.id, to: title))
+            let renamed = try XCTUnwrap(MindMapTaskNode.parse(MindMapOutline.nodes(in: updated).first?.title ?? ""))
+            XCTAssertEqual(renamed, MindMapTaskNode.Display(title: "Renamed", checked: checked))
+        }
+    }
+}
