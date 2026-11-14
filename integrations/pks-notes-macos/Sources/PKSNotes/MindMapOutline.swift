@@ -930,6 +930,7 @@ extension MindMapOutline {
     private struct ParsedLink {
         let range: NSRange
         let targetRange: NSRange
+        let isWikiLink: Bool
         let link: MindMapLink
     }
 
@@ -981,6 +982,7 @@ extension MindMapOutline {
             parsed.append(.init(
                 range: match.range(at: 0),
                 targetRange: targetRange,
+                isWikiLink: true,
                 link: .init(label: label, target: target)
             ))
         }
@@ -996,6 +998,7 @@ extension MindMapOutline {
             parsed.append(.init(
                 range: match.range(at: 0),
                 targetRange: match.range(at: 2),
+                isWikiLink: false,
                 link: .init(
                     label: String(title[labelRange]),
                     target: String(title[targetRange])
@@ -1011,26 +1014,78 @@ extension MindMapOutline {
     }
 
     /// Inline node editing changes the readable label, not links attached through
-    /// the map's Connect actions. Only a whitespace-separated trailing run of
-    /// real Markdown/Wiki links is preserved; links inside prose remain editable.
-    private static func inlineTitleParts(_ rawTitle: String) -> (label: String, links: String) {
-        let nsTitle = rawTitle as NSString
-        let linkedRanges = parsedLinks(in: rawTitle).map(\.range)
-            .sorted { $0.location > $1.location }
-        var boundary = nsTitle.length
+    /// the map's Connect actions. Link-only nodes edit the link label while keeping
+    /// its target; trailing links are preserved, while links inside prose stay editable.
+    private static func inlineTitleParts(
+        _ rawTitle: String
+    ) -> (label: String, links: String, primaryLink: ParsedLink?) {
+        // Task syntax belongs to the node, not its editable label. Parse the
+        // visible task body so a link-only task receives the same treatment.
+        let task = MindMapTaskNode.parse(rawTitle)
+        let taskPrefix: String
+        let content: String
+        if let task {
+            let raw = rawTitle as NSString
+            let prefixLength = raw.length - (task.title as NSString).length
+            taskPrefix = raw.substring(to: prefixLength)
+            content = task.title
+        } else {
+            taskPrefix = ""
+            content = rawTitle
+        }
+
+        let nsContent = content as NSString
+        let parsed = parsedLinks(in: content).sorted { $0.range.location < $1.range.location }
+        if let first = parsed.first, first.range.location == 0 {
+            var cursor = NSMaxRange(first.range)
+            var isLinkOnlyRun = true
+            for link in parsed.dropFirst() {
+                guard link.range.location >= cursor else {
+                    isLinkOnlyRun = false
+                    break
+                }
+                let gap = nsContent.substring(
+                    with: NSRange(location: cursor, length: link.range.location - cursor)
+                )
+                guard !gap.isEmpty, gap.allSatisfy({ $0.isWhitespace }) else {
+                    isLinkOnlyRun = false
+                    break
+                }
+                cursor = NSMaxRange(link.range)
+            }
+            let trailing = nsContent.substring(from: cursor)
+            if isLinkOnlyRun && trailing.allSatisfy({ $0.isWhitespace }) {
+                let offset = taskPrefix.utf16.count
+                let primaryLink = ParsedLink(
+                    range: NSRange(location: first.range.location + offset, length: first.range.length),
+                    targetRange: NSRange(location: first.targetRange.location + offset,
+                                         length: first.targetRange.length),
+                    isWikiLink: first.isWikiLink,
+                    link: first.link
+                )
+                return (
+                    taskPrefix + first.link.label,
+                    nsContent.substring(from: NSMaxRange(first.range)),
+                    primaryLink
+                )
+            }
+        }
+
+        let linkedRanges = parsed.map(\.range).sorted { $0.location > $1.location }
+        var boundary = nsContent.length
         for range in linkedRanges {
             guard NSMaxRange(range) == boundary else { break }
-            let before = nsTitle.substring(to: range.location)
+            let before = nsContent.substring(to: range.location)
             let trailingWhitespace = String(before.reversed().prefix(while: \.isWhitespace).reversed())
             guard !trailingWhitespace.isEmpty else { break }
             boundary = range.location - trailingWhitespace.utf16.count
         }
-        guard boundary < nsTitle.length else { return (rawTitle, "") }
-        let label = nsTitle.substring(to: boundary)
+        guard boundary < nsContent.length else { return (rawTitle, "", nil) }
+        let label = nsContent.substring(to: boundary)
         guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return (rawTitle, "")
+            return (rawTitle, "", nil)
         }
-        return (label, nsTitle.substring(from: boundary))
+        return (taskPrefix + label, nsContent.substring(from: boundary), nil)
     }
 
     static func titleForInlineEditing(_ rawTitle: String) -> String {
@@ -1039,8 +1094,22 @@ extension MindMapOutline {
 
     static func renameInlineTitle(in source: String, nodeID: Int, to label: String) -> String? {
         guard let node = nodes(in: source).first(where: { $0.id == nodeID }) else { return nil }
-        let links = inlineTitleParts(node.title).links
-        return rename(in: source, nodeID: nodeID, to: label + links)
+        let parts = inlineTitleParts(node.title)
+        if let primaryLink = parts.primaryLink {
+            let cleanLabel = (MindMapTaskNode.parse(node.title) != nil
+                ? (MindMapTaskNode.parse(label)?.title ?? label) : label)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleanLabel.isEmpty, !cleanLabel.contains("\n"),
+                  !cleanLabel.contains("\r"), !cleanLabel.contains("]") else { return nil }
+            let rawTitle = node.title as NSString
+            let target = rawTitle.substring(with: primaryLink.targetRange)
+            let replacement = primaryLink.isWikiLink
+                ? "[[\(target)|\(cleanLabel)]]"
+                : "[\(cleanLabel)](\(target))"
+            let updatedTitle = rawTitle.replacingCharacters(in: primaryLink.range, with: replacement)
+            return rename(in: source, nodeID: nodeID, to: updatedTitle)
+        }
+        return rename(in: source, nodeID: nodeID, to: label + parts.links)
     }
 
     /// Display-only WikiLink conversion; Markdown source is never changed.

@@ -977,9 +977,42 @@ extension MindMapOutlineTests {
         let nodes = MindMapOutline.nodes(in: original)
         XCTAssertEqual(MindMapOutline.titleForInlineEditing(nodes[1].title), "Open [[Source|label]] and compare")
         XCTAssertEqual(MindMapOutline.titleForInlineEditing(nodes[2].title), "\\[[Literal]]")
-        XCTAssertEqual(MindMapOutline.titleForInlineEditing(nodes[3].title), "[Only linked](../src.pdf)")
+        XCTAssertEqual(MindMapOutline.titleForInlineEditing(nodes[3].title), "Only linked")
         let renamed = try XCTUnwrap(MindMapOutline.renameInlineTitle(in: original, nodeID: nodes[1].id, to: "Changed"))
         XCTAssertTrue(renamed.contains("- Changed\n"))
         XCTAssertFalse(renamed.contains("Source|label"))
+    }
+}
+
+
+extension MindMapOutlineTests {
+    func testLinkOnlyNodeRenameEditsHumanLabelAndPreservesCanonicalTarget() throws {
+        let source = "# Root\n- [[/References/Plan|Plan source]]\n- [Old PDF](../source.pdf#page=4)\n- [ ] [[/Tasks/Read|Read source]]\n"
+        let nodes = MindMapOutline.nodes(in: source)
+        let wiki = try XCTUnwrap(nodes.first { $0.title.contains("/References/Plan") })
+        let markdown = try XCTUnwrap(nodes.first { $0.title.contains("../source.pdf") })
+        let task = try XCTUnwrap(nodes.first { $0.title.contains("/Tasks/Read") })
+
+        XCTAssertEqual(MindMapOutline.titleForInlineEditing(wiki.title), "Plan source")
+        XCTAssertEqual(MindMapOutline.titleForInlineEditing(markdown.title), "Old PDF")
+        XCTAssertEqual(MindMapTaskNode.titleForEditing(MindMapOutline.titleForInlineEditing(task.title)), "Read source")
+
+        let wikiRename = try XCTUnwrap(MindMapOutline.renameInlineTitle(in: source, nodeID: wiki.id, to: "Plan overview"))
+        XCTAssertEqual(wikiRename, "# Root\n- [[/References/Plan|Plan overview]]\n- [Old PDF](../source.pdf#page=4)\n- [ ] [[/Tasks/Read|Read source]]\n")
+        let markdownRename = try XCTUnwrap(MindMapOutline.renameInlineTitle(in: source, nodeID: markdown.id, to: "PDF overview"))
+        XCTAssertEqual(markdownRename, "# Root\n- [[/References/Plan|Plan source]]\n- [PDF overview](../source.pdf#page=4)\n- [ ] [[/Tasks/Read|Read source]]\n")
+        let taskTitle = try XCTUnwrap(MindMapTaskNode.replacingTitle(
+            "Reading notes", in: MindMapOutline.titleForInlineEditing(task.title)
+        ))
+        let taskRename = try XCTUnwrap(MindMapOutline.renameInlineTitle(in: source, nodeID: task.id, to: taskTitle))
+        XCTAssertEqual(taskRename, "# Root\n- [[/References/Plan|Plan source]]\n- [Old PDF](../source.pdf#page=4)\n- [ ] [[/Tasks/Read|Reading notes]]\n")
+
+        let multipleSources = "# Root\n- [[/References/Plan|Plan source]] [Extra](../extra.pdf)\n"
+        let multipleNode = try XCTUnwrap(MindMapOutline.nodes(in: multipleSources).first { $0.id == 1 })
+        XCTAssertEqual(MindMapOutline.titleForInlineEditing(multipleNode.title), "Plan source")
+        XCTAssertEqual(
+            MindMapOutline.renameInlineTitle(in: multipleSources, nodeID: multipleNode.id, to: "Overview"),
+            "# Root\n- [[/References/Plan|Overview]] [Extra](../extra.pdf)\n"
+        )
     }
 }
