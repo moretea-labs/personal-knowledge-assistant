@@ -3,6 +3,29 @@ import XCTest
 @testable import PKSNotes
 
 final class MindMapViewportTests: XCTestCase {
+    @MainActor
+    func testWheelCaptureHitTestingConvertsWindowCoordinatesToScreenCoordinates() {
+        let frame = NSRect(x: 460, y: 270, width: 600, height: 400)
+        let window = NSWindow(
+            contentRect: frame,
+            styleMask: [],
+            backing: .buffered,
+            defer: true
+        )
+        let content = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        window.contentView = content
+        let canvas = NSView(frame: NSRect(x: 80, y: 60, width: 320, height: 220))
+        content.addSubview(canvas)
+
+        let insideScreen = canvas.convert(NSPoint(x: 120, y: 100), to: nil)
+        let insideWindow = window.convertPoint(fromScreen: insideScreen)
+        XCTAssertTrue(MindMapWheelCapture.contains(insideWindow, in: canvas, window: window))
+
+        let outsideScreen = canvas.convert(NSPoint(x: -10, y: 100), to: nil)
+        let outsideWindow = window.convertPoint(fromScreen: outsideScreen)
+        XCTAssertFalse(MindMapWheelCapture.contains(outsideWindow, in: canvas, window: window))
+    }
+
     func testVisibleNodeCullingUsesViewportTransformAndScreenSpaceOverscan() {
         func placement(_ id: Int, x: CGFloat, y: CGFloat) -> MindMapPlacement {
             MindMapPlacement(

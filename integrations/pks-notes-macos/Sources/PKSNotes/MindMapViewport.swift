@@ -130,6 +130,12 @@ enum MindMapViewportGeometry {
 struct MindMapWheelCapture: NSViewRepresentable {
     let onScroll: (CGSize) -> Void
 
+    static func contains(_ pointInWindow: NSPoint, in view: NSView, window: NSWindow) -> Bool {
+        guard view.window === window else { return false }
+        let screenPoint = window.convertPoint(toScreen: pointInWindow)
+        return view.bounds.contains(view.convert(screenPoint, from: nil))
+    }
+
     func makeNSView(context: Context) -> WheelView {
         let view = WheelView()
         view.onScroll = onScroll
@@ -154,7 +160,7 @@ struct MindMapWheelCapture: NSViewRepresentable {
             monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
                 guard let self, let window = self.window,
                       event.window === window,
-                      self.bounds.contains(self.convert(event.locationInWindow, from: nil)) else {
+                      MindMapWheelCapture.contains(event.locationInWindow, in: self, window: window) else {
                     return event
                 }
                 let multiplier: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 16
