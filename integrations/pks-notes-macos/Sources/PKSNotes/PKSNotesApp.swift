@@ -285,6 +285,7 @@ enum MarkdownShortcut {
             case "1": return "h1"
             case "2": return "h2"
             case "3": return "h3"
+            case "7": return "ordered"
             case "8": return "bullet"
             case "9": return "task"
             default: return nil

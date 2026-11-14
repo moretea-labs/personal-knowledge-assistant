@@ -532,6 +532,7 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(MarkdownShortcut.command(key: "e", modifiers: .command), "code")
         XCTAssertEqual(MarkdownShortcut.command(key: "k", modifiers: .command), "link")
         XCTAssertEqual(MarkdownShortcut.command(key: "1", modifiers: [.command, .shift]), "h1")
+        XCTAssertEqual(MarkdownShortcut.command(key: "7", modifiers: [.command, .shift]), "ordered")
         XCTAssertEqual(MarkdownShortcut.command(key: "8", modifiers: [.command, .shift]), "bullet")
         XCTAssertEqual(MarkdownShortcut.command(key: "9", modifiers: [.command, .shift]), "task")
         XCTAssertNil(MarkdownShortcut.command(key: "b", modifiers: [.command, .option]))
