@@ -3852,7 +3852,8 @@ struct NotesWindow: View {
                     }
                 }
         }
-        .frame(maxWidth: theme.typography.pageWidth + widthAdjustment + 56)
+        .frame(maxWidth: theme.typography.pageWidth + widthAdjustment
+                + NotesGeometry.documentInset * 2)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.canvas)
         .onChange(of: model.draftRevision) { _, _ in
