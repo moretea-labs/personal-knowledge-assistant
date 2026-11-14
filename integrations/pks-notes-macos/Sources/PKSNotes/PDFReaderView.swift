@@ -210,11 +210,14 @@ enum PDFPageReference {
         allowed.remove(charactersIn: "#?()%")
         guard let encoded = relative.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
 
-        // Keep the readable filename in Markdown without inserting escaped
-        // square brackets into the relationship parser's link-label grammar.
-        // Markdown renderers display HTML numeric character references as
-        // brackets, while the canonical target path stays fully URL encoded.
+        // Escape HTML-significant characters in the readable filename so
+        // Markdown displays literal names (including entity-like text) without
+        // injecting markup or confusing the link-label parser. The target
+        // remains a separately URL-encoded canonical workspace path.
         let label = canonicalURL.lastPathComponent
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "[", with: "&#91;")
             .replacingOccurrences(of: "]", with: "&#93;")
         let fragment = anchor?.page == page ? anchor!.fragment : "page=\(page)"

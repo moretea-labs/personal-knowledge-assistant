@@ -792,6 +792,29 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         XCTAssertEqual(normalizedRendered, normalizedSelected)
     }
 
+    func testPDFPageReferencePreservesLiteralHTMLAndBracketCharactersInFilename() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-PDF-Literal-Filename-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let filename = "Plan &amp; [draft] <final>.pdf"
+        let pdf = root.appendingPathComponent(filename)
+        try Data().write(to: pdf)
+
+        let reference = try XCTUnwrap(PDFPageReference.markdown(for: pdf, page: 3, root: root))
+        let rendered = try AttributedString(markdown: reference)
+
+        XCTAssertEqual(String(rendered.characters), "\(filename) · p. 3")
+        XCTAssertTrue(rendered.runs.contains(where: { $0.link != nil }))
+        let target = try XCTUnwrap(MindMapOutline.linkOccurrences(in: reference).first?.link.target)
+        let encodedPath = String(target.split(separator: "#", maxSplits: 1)[0])
+        XCTAssertEqual(encodedPath.removingPercentEncoding, "/\(filename)")
+        XCTAssertTrue(reference.contains("&amp;amp;"))
+        XCTAssertTrue(reference.contains("&#91;draft&#93;"))
+        XCTAssertTrue(reference.contains("&lt;final&gt;"))
+    }
+
     @MainActor
     func testWorkspaceChangeMonitorEmitsFileLevelEvents() async throws {
         let root = FileManager.default.temporaryDirectory
