@@ -2316,7 +2316,7 @@ struct NotesWindow: View {
                             } else {
                                 Group {
                                     if row.item.isFolder {
-                                        Image(systemName: "folder.fill")
+                                        Image(systemName: row.item.iconName)
                                             .font(.system(size: NotesGeometry.symbolSize))
                                             .symbolRenderingMode(.hierarchical)
                                             .foregroundStyle(isSelected ? Color.primary : Color.secondary)

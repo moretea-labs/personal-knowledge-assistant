@@ -1005,6 +1005,8 @@ struct NativePDFPreview: View {
             .padding(.horizontal, 12)
         }
         .controlSize(.small)
+        .symbolRenderingMode(.hierarchical)
+        .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
