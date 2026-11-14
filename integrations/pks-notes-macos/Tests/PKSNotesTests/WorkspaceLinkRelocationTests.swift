@@ -181,6 +181,39 @@ final class WorkspaceLinkRelocationTests: XCTestCase {
     }
 
     @MainActor
+    func testMovingPDFRewritesIncomingLinkAndPreservesExactSourceAnchor() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let archive = root.appendingPathComponent("Archive", isDirectory: true)
+        try fm.createDirectory(at: archive, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let pdf = root.appendingPathComponent("Book.pdf")
+        let movedPDF = archive.appendingPathComponent("Book.pdf")
+        let note = root.appendingPathComponent("Reading.md")
+        let fragment = "#page=5&rects=0.1,0.2,0.3,0.4&fp=deadbeefdeadbeef"
+        try Data("%PDF-1.4\n%%EOF".utf8).write(to: pdf)
+        try "[Book](Book.pdf\(fragment))".write(to: note, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        let result = await model.moveItem(pdf, to: archive)
+
+        XCTAssertEqual(result, movedPDF)
+        let expectedTarget = try XCTUnwrap(
+            WorkspaceFiles.canonicalLinkTarget(for: movedPDF, in: root)
+        )
+        XCTAssertEqual(
+            try String(contentsOf: note, encoding: .utf8),
+            "[Book](\(expectedTarget)\(fragment))"
+        )
+        XCTAssertEqual(
+            model.message,
+            AppLanguage.current.text("Path changed and related links were updated.")
+        )
+    }
+
+    @MainActor
     func testMoveAttachmentRepairsMarkdownImageReferenceWithoutCreatingKnowledgeLink() async throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
