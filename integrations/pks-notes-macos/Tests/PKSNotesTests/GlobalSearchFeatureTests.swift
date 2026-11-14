@@ -196,7 +196,7 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertFalse(WorkspaceSearch.fuzzyContains("night-piano.md", "nigt"))
     }
 
-    func testSpotlightRecoversICloudFilePathWithoutMetadataURL() {
+    func testSpotlightRecoversICloudPathAndRanksPinyinWithoutOpeningFile() {
         // A Spotlight result may have kMDItemPath but no kMDItemURL.
         let path = "/Users/example/Library/Mobile Documents/com~apple~CloudDocs/吉他谱/夜的钢琴曲五.pdf"
         let recovered = GlobalSpotlightLookup.fileURL(metadataURL: nil, metadataPath: path)
@@ -206,6 +206,8 @@ final class GlobalSearchFeatureTests: XCTestCase {
         if let recovered {
             let entry = GlobalSearchItem.spotlight(recovered, title: "夜的钢琴曲五.pdf", isFolder: false)
             XCTAssertEqual(GlobalSpotlightLookup.rank([entry], for: "夜的钢琴曲").first?.url, recovered)
+            XCTAssertEqual(GlobalSpotlightLookup.rank([entry], for: "ye de gang qin qu").first?.url, recovered)
+            XCTAssertFalse(entry.spotlightContentMatch)
         }
         XCTAssertNil(GlobalSpotlightLookup.fileURL(metadataURL: nil, metadataPath: nil))
         XCTAssertNil(GlobalSpotlightLookup.fileURL(metadataURL: nil, metadataPath: "relative/path.pdf"))

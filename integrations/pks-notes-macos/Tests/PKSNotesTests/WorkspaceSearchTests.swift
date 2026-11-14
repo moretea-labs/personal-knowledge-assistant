@@ -61,7 +61,7 @@ final class WorkspaceSearchTests: XCTestCase {
         XCTAssertEqual(chineseQuery.coverage.readFiles, 0)
     }
 
-    func testPinyinNameOnlySearchFindsMarkdownWithoutReadingBody() throws {
+    func testPinyinFilenameSearchSkipsBodyReadWhenBodySearchIsEnabled() throws {
         let root = try fixture()
         let file = root.appendingPathComponent("夜的钢琴曲五.md")
         try "The body does not contain any query terms".write(
@@ -69,8 +69,7 @@ final class WorkspaceSearchTests: XCTestCase {
         )
 
         let result = WorkspaceSearch.search(
-            entries: entries(root), root: root, query: "ye de gang qin qu",
-            searchBodies: false
+            entries: entries(root), root: root, query: "ye de gang qin qu"
         )
 
         XCTAssertEqual(result.hits.map(\.uri), [file.path])
