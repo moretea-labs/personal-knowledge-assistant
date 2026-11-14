@@ -14,7 +14,15 @@ final class MindMapFunctionalShortcutsTests: XCTestCase {
         XCTAssertEqual(MindMapKeyboard.command(for: .return, modifiers: []), .addSibling)
     }
 
-    func testOptionArrowShortcutsPromoteAndDemoteWithoutChangingTextFieldEditing() {
+    func testOptionArrowShortcutsReorderAndReparentWithoutChangingTextFieldEditing() {
+        XCTAssertEqual(
+            MindMapKeyboard.command(for: .upArrow, modifiers: .option),
+            .moveUp
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.command(for: .downArrow, modifiers: .option),
+            .moveDown
+        )
         XCTAssertEqual(
             MindMapKeyboard.command(for: .leftArrow, modifiers: .option),
             .promote
@@ -96,9 +104,9 @@ final class MindMapFunctionalShortcutsTests: XCTestCase {
         )
         XCTAssertEqual(
             headingOutcome.source,
-            "# Topic\nHeading explanation.\n- New idea\n- Existing\n"
+            "# Topic\nHeading explanation.\n- Existing\n# New idea\n"
         )
-        XCTAssertEqual(headingOutcome.nodeID, 2)
+        XCTAssertEqual(headingOutcome.nodeID, 3)
 
         let list = "# Topic\n- Parent\n  [PDF · p. 2](Books/Study.pdf#page=2)\n  - Existing child\n- Next\n"
         let parentID = try XCTUnwrap(

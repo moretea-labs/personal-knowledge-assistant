@@ -21,12 +21,19 @@ enum MindMapDropPlacement: Equatable {
     case after
 }
 
+enum MindMapSiblingMoveDirection: Equatable {
+    case up
+    case down
+}
+
 struct MindMapMoveOutcome: Equatable {
     let source: String
     let movedNodeID: Int
 }
 
 struct MindMapActionAvailability: Equatable {
+    let canMoveUp: Bool
+    let canMoveDown: Bool
     let canPromote: Bool
     let canDemote: Bool
     let canDeleteLeaf: Bool
@@ -312,13 +319,44 @@ enum MindMapOutline {
 
     static func actionAvailability(in source: String, nodeID: Int) -> MindMapActionAvailability {
         guard let context = editContext(in: source, nodeID: nodeID) else {
-            return .init(canPromote: false, canDemote: false, canDeleteLeaf: false)
+            return .init(
+                canMoveUp: false, canMoveDown: false,
+                canPromote: false, canDemote: false, canDeleteLeaf: false
+            )
         }
         return .init(
+            canMoveUp: moveNodeToAdjacentSibling(in: source, context: context, direction: .up) != nil,
+            canMoveDown: moveNodeToAdjacentSibling(in: source, context: context, direction: .down) != nil,
             canPromote: canShiftNodeSubtree(context, deeper: false),
             canDemote: canShiftNodeSubtree(context, deeper: true),
             canDeleteLeaf: canDeleteLeaf(context)
         )
+    }
+
+    private static func adjacentSiblingID(
+        in context: EditContext, direction: MindMapSiblingMoveDirection
+    ) -> Int? {
+        var parentIDs: [Int: Int] = [:]
+        var ancestors: [MindMapNode] = []
+        for node in context.parsed {
+            while let last = ancestors.last, last.depth >= node.depth {
+                ancestors.removeLast()
+            }
+            if let parent = ancestors.last { parentIDs[node.id] = parent.id }
+            ancestors.append(node)
+        }
+
+        let currentIsList = isListLine(context.lines[context.node.id])
+        let siblings = context.parsed.filter {
+            parentIDs[$0.id] == parentIDs[context.node.id]
+                && isListLine(context.lines[$0.id]) == currentIsList
+        }
+        guard let index = siblings.firstIndex(where: { $0.id == context.node.id }) else {
+            return nil
+        }
+        let adjacentIndex = direction == .up ? index - 1 : index + 1
+        guard siblings.indices.contains(adjacentIndex) else { return nil }
+        return siblings[adjacentIndex].id
     }
     /// Fingerprint the Markdown body owned by one structural line. Strip only
     /// common continuation indentation so a safe subtree reparent keeps the
@@ -1276,6 +1314,27 @@ extension MindMapOutline {
 }
 
 extension MindMapOutline {
+    /// Reorder a node among siblings using the same Markdown subtree writer as drag-and-drop.
+    /// The returned line index is transient; selection is rebased from the original node ID.
+    static func moveNodeToAdjacentSibling(
+        in source: String, nodeID: Int, direction: MindMapSiblingMoveDirection
+    ) -> MindMapMoveOutcome? {
+        guard let context = editContext(in: source, nodeID: nodeID) else { return nil }
+        return moveNodeToAdjacentSibling(in: source, context: context, direction: direction)
+    }
+
+    private static func moveNodeToAdjacentSibling(
+        in source: String, context: EditContext, direction: MindMapSiblingMoveDirection
+    ) -> MindMapMoveOutcome? {
+        guard let targetID = adjacentSiblingID(in: context, direction: direction) else { return nil }
+        return moveNodeSubtreeWithOutcome(
+            in: source,
+            nodeID: context.node.id,
+            relativeTo: targetID,
+            placement: direction == .up ? .before : .after
+        )
+    }
+
     /// Move any structural Markdown node without introducing a second graph authority.
     static func moveNodeSubtree(in source: String, nodeID: Int, asChildOf targetID: Int) -> String? {
         moveNodeSubtreeWithOutcome(in: source, nodeID: nodeID, asChildOf: targetID)?.source

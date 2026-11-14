@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 enum MindMapKeyboard {
     enum Command: Equatable {
         case previous, next, parentOrCollapse, childOrExpand
-        case addChild, addSibling, promote, demote, rename, toggleBranch
+        case moveUp, moveDown, addChild, addSibling, promote, demote, rename, toggleBranch
         case deleteLeaf, deleteBranch, boldTitle, italicTitle, toggleTask
         case fit, zoomIn, zoomOut, clearSelection
     }
@@ -18,6 +18,8 @@ enum MindMapKeyboard {
                   !modifiers.contains(.command),
                   !modifiers.contains(.shift) else { return nil }
             switch key {
+            case .upArrow: return .moveUp
+            case .downArrow: return .moveDown
             case .leftArrow: return .promote
             case .rightArrow: return .demote
             default: return nil
@@ -307,6 +309,8 @@ struct MindMapCanvas: View {
     @State private var mapLayout = MindMapSpatialLayout.layout([])
     @State private var projectionReady = false
     @State private var projectedRevision: UInt64?
+    @State private var canMoveUp = false
+    @State private var canMoveDown = false
     @State private var canPromote = false
     @State private var canDemote = false
     @State private var canDeleteLeaf = false
@@ -654,18 +658,20 @@ struct MindMapCanvas: View {
             rebuildVisibleLayout()
         }
         .task(id: ActionAvailabilityKey(revision: revision, selectedID: selectedID)) {
-            guard let selectedID else {
-                canPromote = false
-                canDemote = false
-                canDeleteLeaf = false
-                return
-            }
+            canMoveUp = false
+            canMoveDown = false
+            canPromote = false
+            canDemote = false
+            canDeleteLeaf = false
+            guard let selectedID else { return }
             let input = source
             let sourceRevision = revision
             let availability = await Task.detached(priority: .utility) {
                 MindMapOutline.actionAvailability(in: input, nodeID: selectedID)
             }.value
             guard !Task.isCancelled, revision == sourceRevision, self.selectedID == selectedID else { return }
+            canMoveUp = availability.canMoveUp
+            canMoveDown = availability.canMoveDown
             canPromote = availability.canPromote
             canDemote = availability.canDemote
             canDeleteLeaf = availability.canDeleteLeaf
@@ -813,6 +819,19 @@ struct MindMapCanvas: View {
             .accessibilityIdentifier("pks-mind-map-reveal-markdown")
 
             Menu {
+                Button(language.text("Move Up"), systemImage: "arrow.up") {
+                    _ = performShortcut(.moveUp)
+                    restoreCanvasFocusAfterMenu()
+                }
+                .disabled(editingNodeID != nil || selectedID == nil || !canMoveUp)
+                .accessibilityIdentifier("pks-mind-map-move-up")
+                Button(language.text("Move Down"), systemImage: "arrow.down") {
+                    _ = performShortcut(.moveDown)
+                    restoreCanvasFocusAfterMenu()
+                }
+                .disabled(editingNodeID != nil || selectedID == nil || !canMoveDown)
+                .accessibilityIdentifier("pks-mind-map-move-down")
+                Divider()
                 Button(language.text("Promote node"), systemImage: "arrow.left") {
                     _ = performShortcut(.promote)
                     restoreCanvasFocusAfterMenu()
@@ -1062,6 +1081,7 @@ struct MindMapCanvas: View {
         let rows: [(String, String)] = [
             ("↑ / ↓", "Select previous / next node"),
             ("← / →", "Parent / child; collapse / expand"),
+            ("⌥ ↑ / ⌥ ↓", "Move node up / down"),
             ("⌥ ←", "Promote node"),
             ("⌥ →", "Make child of previous sibling"),
             ("Tab", "Add Child"),
@@ -1160,6 +1180,10 @@ struct MindMapCanvas: View {
             ) {
                 self.selectedID = child
             } else { return false }
+        case .moveUp:
+            guard moveSelectedSibling(.up) else { return false }
+        case .moveDown:
+            guard moveSelectedSibling(.down) else { return false }
         case .addChild:
             guard !nodes.isEmpty else { return false }
             guard addChild() else { return false }
@@ -1601,6 +1625,21 @@ struct MindMapCanvas: View {
                 selectedID = node.id
                 beginRename()
             }
+            Button(language.text("Move Up"), systemImage: "arrow.up") {
+                selectedID = node.id
+                _ = performShortcut(.moveUp)
+                restoreCanvasFocusAfterMenu()
+            }
+            .disabled(editingNodeID != nil || !availability.canMoveUp)
+            .accessibilityIdentifier("pks-mind-map-context-move-up")
+            Button(language.text("Move Down"), systemImage: "arrow.down") {
+                selectedID = node.id
+                _ = performShortcut(.moveDown)
+                restoreCanvasFocusAfterMenu()
+            }
+            .disabled(editingNodeID != nil || !availability.canMoveDown)
+            .accessibilityIdentifier("pks-mind-map-context-move-down")
+            Divider()
             Button(language.text("Promote node"), systemImage: "arrow.left") {
                 selectedID = node.id
                 _ = performShortcut(.promote)
@@ -2035,6 +2074,16 @@ struct MindMapCanvas: View {
         selectedID = nodes.first?.id
         editingCreatedNodeID = nil
         createdNodeDraftSnapshot = nil
+    }
+
+    private func moveSelectedSibling(_ direction: MindMapSiblingMoveDirection) -> Bool {
+        guard projectionIsCurrent, editingNodeID == nil, let selectedID,
+              let outcome = MindMapOutline.moveNodeToAdjacentSibling(
+                in: source, nodeID: selectedID, direction: direction
+              ) else { return false }
+        // Keep the old projection's ID until the revision task maps it to the moved line.
+        source = outcome.source
+        return true
     }
 
     private func shiftedSource(deeper: Bool) -> String? {

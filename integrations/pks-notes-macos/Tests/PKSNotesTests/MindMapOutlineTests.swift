@@ -602,6 +602,14 @@ extension MindMapOutlineTests {
         for nodeID in [0, 1, 2, 3, 4] {
             let availability = MindMapOutline.actionAvailability(in: source, nodeID: nodeID)
             XCTAssertEqual(
+                availability.canMoveUp,
+                MindMapOutline.moveNodeToAdjacentSibling(in: source, nodeID: nodeID, direction: .up) != nil
+            )
+            XCTAssertEqual(
+                availability.canMoveDown,
+                MindMapOutline.moveNodeToAdjacentSibling(in: source, nodeID: nodeID, direction: .down) != nil
+            )
+            XCTAssertEqual(
                 availability.canPromote,
                 MindMapOutline.shiftNodeSubtree(in: source, nodeID: nodeID, deeper: false) != nil
             )
@@ -617,9 +625,67 @@ extension MindMapOutlineTests {
 
         XCTAssertEqual(
             MindMapOutline.actionAvailability(in: source, nodeID: 3),
-            .init(canPromote: true, canDemote: false, canDeleteLeaf: true)
+            .init(
+                canMoveUp: false, canMoveDown: false,
+                canPromote: true, canDemote: false, canDeleteLeaf: true
+            )
         )
         XCTAssertFalse(MindMapOutline.actionAvailability(in: source, nodeID: 4).canDeleteLeaf)
+    }
+
+    func testSiblingReorderMovesWholeMarkdownSubtreesAndPreservesSelectionIdentity() throws {
+        let source = "# Root\n- First\n  First context.\n  - First child\n- Second\n  - Second child\n- Third"
+        let nodes = MindMapOutline.nodes(in: source)
+        let first = try XCTUnwrap(nodes.first { $0.title == "First" })
+        let third = try XCTUnwrap(nodes.first { $0.title == "Third" })
+
+        let down = try XCTUnwrap(MindMapOutline.moveNodeToAdjacentSibling(
+            in: source, nodeID: first.id, direction: .down
+        ))
+        XCTAssertEqual(
+            down.source,
+            "# Root\n- Second\n  - Second child\n- First\n  First context.\n  - First child\n- Third"
+        )
+        let movedFirst = try XCTUnwrap(MindMapOutline.nodes(in: down.source).first { $0.title == "First" })
+        XCTAssertEqual(MindMapOutline.lineIndexMap(from: nodes, to: MindMapOutline.nodes(in: down.source))[first.id], movedFirst.id)
+
+        let up = try XCTUnwrap(MindMapOutline.moveNodeToAdjacentSibling(
+            in: source, nodeID: third.id, direction: .up
+        ))
+        XCTAssertEqual(
+            up.source,
+            "# Root\n- First\n  First context.\n  - First child\n- Third\n- Second\n  - Second child"
+        )
+    }
+
+    func testSiblingReorderKeepsHeadingSectionsAndRejectsUnsafeOrDifferentTypeNeighbors() throws {
+        let headings = "# Root\n## First\nFirst body.\n### Child\n## Second\n### Second child\n## Third"
+        let nodes = MindMapOutline.nodes(in: headings)
+        let first = try XCTUnwrap(nodes.first { $0.title == "First" })
+        let third = try XCTUnwrap(nodes.first { $0.title == "Third" })
+        let moved = try XCTUnwrap(MindMapOutline.moveNodeToAdjacentSibling(
+            in: headings, nodeID: third.id, direction: .up
+        ))
+        XCTAssertEqual(
+            moved.source,
+            "# Root\n## First\nFirst body.\n### Child\n## Third\n## Second\n### Second child"
+        )
+        XCTAssertNil(MindMapOutline.moveNodeToAdjacentSibling(
+            in: headings, nodeID: first.id, direction: .up
+        ))
+
+        let unsafe = "# Root\n- First\nUnindented text\n- Second"
+        let unsafeNodes = MindMapOutline.nodes(in: unsafe)
+        let unsafeFirst = try XCTUnwrap(unsafeNodes.first { $0.title == "First" })
+        XCTAssertNil(MindMapOutline.moveNodeToAdjacentSibling(
+            in: unsafe, nodeID: unsafeFirst.id, direction: .down
+        ))
+        XCTAssertFalse(MindMapOutline.actionAvailability(in: unsafe, nodeID: unsafeFirst.id).canMoveDown)
+
+        let mixed = "- Root item\n# Heading"
+        XCTAssertNil(MindMapOutline.moveNodeToAdjacentSibling(
+            in: mixed, nodeID: 0, direction: .down
+        ))
     }
 }
 
