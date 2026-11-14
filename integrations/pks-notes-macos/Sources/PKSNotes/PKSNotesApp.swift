@@ -258,6 +258,7 @@ enum NotesGeometry {
     static let workspacePanelRadius: CGFloat = 14
     static let workspacePanelInset: CGFloat = 9
     static let workspacePanelGap: CGFloat = 9
+    static let workbenchColor = Color(nsColor: .windowBackgroundColor)
 
     static func workspaceTitle(_ root: URL?, language: AppLanguage) -> String {
         guard let root else { return language.text("Knowledge Library") }
@@ -737,7 +738,7 @@ struct NotesWindow: View {
                 }
             }
             .padding(NotesGeometry.workspacePanelInset)
-            .background(Color(nsColor: .underPageBackgroundColor))
+            .background(NotesGeometry.workbenchColor)
             .sheet(isPresented: Binding(
                 get: { auxiliaryListPresentation == "sheet" && (showingOutline || showingBacklinks) },
                 set: { if !$0 { showingOutline = false; showingBacklinks = false } }
@@ -745,7 +746,7 @@ struct NotesWindow: View {
                 auxiliaryListPanel.frame(width: 550, height: 610)
             }
         }
-        .toolbarBackground(.ultraThinMaterial, for: .windowToolbar)
+        .toolbarBackground(NotesGeometry.workbenchColor, for: .windowToolbar)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil && !showingMindMap {
@@ -766,10 +767,7 @@ struct NotesWindow: View {
                                 .background {
                                     if mode == choice {
                                         Capsule()
-                                            .fill(Color(nsColor: .textBackgroundColor)
-                                                .opacity(colorScheme == .dark ? 0.18 : 0.86))
-                                            .shadow(color: .black.opacity(colorScheme == .dark ? 0.08 : 0.06),
-                                                    radius: 4, y: 1)
+                                            .fill(Color.primary.opacity(colorScheme == .dark ? 0.16 : 0.09))
                                             .matchedGeometryEffect(id: "reading-mode", in: readingModeNamespace)
                                     }
                                 }
@@ -782,7 +780,6 @@ struct NotesWindow: View {
                         }
                     }
                     .padding(3)
-                    .background(.ultraThinMaterial, in: Capsule())
                 }
 
                 if model.selected != nil && model.externalBody == nil && model.previewPDF == nil
@@ -2579,11 +2576,6 @@ struct NotesWindow: View {
                 .foregroundStyle(.secondary)
                 .help(language.text("Quick Open a file in the current library") + " (⌘P)")
                 .accessibilityIdentifier("pks-sidebar-quick-open")
-                .background(
-                    Color(nsColor: .textBackgroundColor)
-                        .opacity(colorScheme == .dark ? 0.12 : 0.48),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                )
                 .padding(.bottom, 15)
             }
             .frame(width: 66)
@@ -2795,7 +2787,7 @@ struct NotesWindow: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(.ultraThinMaterial)
+        .background(NotesGeometry.workbenchColor)
     }
 
     private func railButton(_ tab: SidebarTab, symbol: String, title: String) -> some View {
@@ -3421,7 +3413,7 @@ struct NotesWindow: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.ultraThinMaterial)
+        .background(theme.canvas)
         .accessibilityIdentifier("pks-auxiliary-list-panel")
     }
 
