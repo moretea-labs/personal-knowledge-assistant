@@ -126,8 +126,8 @@ struct MarkdownPreviewPane: View {
                     }
                     .frame(maxWidth: theme.typography.pageWidth + widthAdjustment, alignment: .topLeading)
                     .frame(maxWidth: .infinity, alignment: .top)
-                    .padding(.horizontal, 38)
-                    .padding(.vertical, 48)
+                    .padding(.horizontal, NotesGeometry.documentInset)
+                    .padding(.vertical, NotesGeometry.documentInset)
                 }
             }
             .onAppear { jumpToNavigation(scroll) }

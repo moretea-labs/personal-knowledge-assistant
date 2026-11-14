@@ -254,11 +254,24 @@ enum NotesGeometry {
     static let sidebarInset: CGFloat = 14
     static let symbolSize: CGFloat = 14
     static let toolbarTarget: CGFloat = 28
+    static let railSymbolSize: CGFloat = 16
+    static let documentInset: CGFloat = 32
     static let selectionCorner: CGFloat = 9
     static let workspacePanelRadius: CGFloat = 14
     static let workspacePanelInset: CGFloat = 9
     static let workspacePanelGap: CGFloat = 9
+    static let auxiliaryPanelWidth: CGFloat = 312
+    static let standardMainMinimumWidth: CGFloat = 700
     static let workbenchColor = Color(nsColor: .windowBackgroundColor)
+
+    static func studySplitThreshold(showingMindMap: Bool) -> CGFloat {
+        showingMindMap ? 940 : 820
+    }
+
+    static func fitsInlineAuxiliary(availableWidth: CGFloat, minimumMainWidth: CGFloat) -> Bool {
+        availableWidth >= minimumMainWidth + auxiliaryPanelWidth
+            + workspacePanelInset * 2 + workspacePanelGap
+    }
 
     static func workspaceTitle(_ root: URL?, language: AppLanguage) -> String {
         guard let root else { return language.text("Knowledge Library") }
@@ -721,29 +734,43 @@ struct NotesWindow: View {
             sidebar
                 .navigationSplitViewColumnWidth(min: 320, ideal: 368, max: 480)
         } detail: {
-            HStack(spacing: NotesGeometry.workspacePanelGap) {
-                detail
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipShape(RoundedRectangle(
-                        cornerRadius: NotesGeometry.workspacePanelRadius,
-                        style: .continuous
-                    ))
-                if auxiliaryListPresentation != "sheet" && (showingOutline || showingBacklinks) {
-                    auxiliaryListPanel
-                        .frame(width: 312)
+            GeometryReader { geometry in
+                let minimumMainWidth = model.previewPDF != nil && model.selected != nil
+                    && model.externalBody == nil
+                    ? NotesGeometry.studySplitThreshold(showingMindMap: showingMindMap)
+                    : NotesGeometry.standardMainMinimumWidth
+                let inlineAuxiliary = auxiliaryListPresentation != "sheet"
+                    && NotesGeometry.fitsInlineAuxiliary(
+                        availableWidth: geometry.size.width, minimumMainWidth: minimumMainWidth
+                    )
+
+                HStack(spacing: NotesGeometry.workspacePanelGap) {
+                    detail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipShape(RoundedRectangle(
                             cornerRadius: NotesGeometry.workspacePanelRadius,
                             style: .continuous
                         ))
+                    if inlineAuxiliary && (showingOutline || showingBacklinks) {
+                        auxiliaryListPanel
+                            .frame(width: NotesGeometry.auxiliaryPanelWidth)
+                            .clipShape(RoundedRectangle(
+                                cornerRadius: NotesGeometry.workspacePanelRadius,
+                                style: .continuous
+                            ))
+                    }
                 }
-            }
-            .padding(NotesGeometry.workspacePanelInset)
-            .background(NotesGeometry.workbenchColor)
-            .sheet(isPresented: Binding(
-                get: { auxiliaryListPresentation == "sheet" && (showingOutline || showingBacklinks) },
-                set: { if !$0 { showingOutline = false; showingBacklinks = false } }
-            )) {
-                auxiliaryListPanel.frame(width: 550, height: 610)
+                .padding(NotesGeometry.workspacePanelInset)
+                .background(NotesGeometry.workbenchColor)
+                .sheet(isPresented: Binding(
+                    get: {
+                        (auxiliaryListPresentation == "sheet" || !inlineAuxiliary)
+                            && (showingOutline || showingBacklinks)
+                    },
+                    set: { if !$0 { showingOutline = false; showingBacklinks = false } }
+                )) {
+                    auxiliaryListPanel.frame(width: 550, height: 610)
+                }
             }
         }
         .toolbarBackground(NotesGeometry.workbenchColor, for: .windowToolbar)
@@ -1208,6 +1235,7 @@ struct NotesWindow: View {
 
     private func toolbarSymbol(_ name: String) -> some View {
         Image(systemName: name)
+            .symbolRenderingMode(.hierarchical)
             .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
             .frame(width: NotesGeometry.toolbarTarget, height: NotesGeometry.toolbarTarget)
             .contentShape(Rectangle())
@@ -2796,7 +2824,8 @@ struct NotesWindow: View {
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) { sidebarTab = tab }
         } label: {
             Image(systemName: symbol)
-                .font(.system(size: 16, weight: selected ? .semibold : .medium))
+                .symbolRenderingMode(.hierarchical)
+                .font(.system(size: NotesGeometry.railSymbolSize, weight: selected ? .semibold : .medium))
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .frame(width: 40, height: 40)
                 .background(
@@ -3555,7 +3584,7 @@ struct NotesWindow: View {
                 // Small windows show one full-width surface; larger windows provide
                 // a balanced, user-resizable PDF + note workspace.
                 GeometryReader { geometry in
-                    let splitThreshold: CGFloat = showingMindMap ? 940 : 820
+                    let splitThreshold = NotesGeometry.studySplitThreshold(showingMindMap: showingMindMap)
                     let secondaryMinimumWidth: CGFloat = showingMindMap ? 460 : 340
                     if geometry.size.width >= splitThreshold {
                         HSplitView {
@@ -3718,6 +3747,8 @@ struct NotesWindow: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: showingMindMap ? "point.3.connected.trianglepath.dotted" : "note.text")
+                    .symbolRenderingMode(.hierarchical)
+                    .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(note.deletingPathExtension().lastPathComponent)
@@ -3740,8 +3771,7 @@ struct NotesWindow: View {
                             Task { @MainActor in editorFocused = true }
                         }
                     } label: {
-                        Image(systemName: mode == .read ? "square.and.pencil" : "book")
-                            .frame(width: 24, height: 24)
+                        toolbarSymbol(mode == .read ? "square.and.pencil" : "book")
                     }
                     .buttonStyle(.plain)
                     .help(language.text(mode == .read ? "Edit" : "Read"))
@@ -3754,9 +3784,7 @@ struct NotesWindow: View {
                     mode = .edit
                     Task { @MainActor in editorFocused = true }
                 } label: {
-                    Image(systemName: "arrow.up.right.square")
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(width: 24, height: 24)
+                    toolbarSymbol("arrow.up.right.square")
                 }
                 .buttonStyle(.plain)
                 .help(language.text("Open note only"))
@@ -3794,8 +3822,8 @@ struct NotesWindow: View {
                 .tint(theme.linkColor)
                 .scrollContentBackground(.hidden)
                 .frame(maxWidth: theme.typography.pageWidth + widthAdjustment)
-                .padding(.horizontal, 28)
-                .padding(.vertical, 24)
+                .padding(.horizontal, NotesGeometry.documentInset)
+                .padding(.vertical, NotesGeometry.documentInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(theme.canvas)
                 // Only the blank 20pt page gutter toggles back to Preview.
@@ -3930,7 +3958,7 @@ struct NotesWindow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .buttonStyle(.plain)
         .controlSize(.small)
-        .padding(.horizontal, 28)
+        .padding(.horizontal, NotesGeometry.documentInset)
         .frame(height: 36)
         .background(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
         .accessibilityIdentifier("pks-markdown-formatting-toolbar")

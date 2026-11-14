@@ -996,6 +996,8 @@ struct MindMapCanvas: View {
                 shortcutHelp
             }
         }
+        .symbolRenderingMode(.hierarchical)
+        .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
         .buttonStyle(.borderless)
         .controlSize(.small)
         .padding(.horizontal, 14)
