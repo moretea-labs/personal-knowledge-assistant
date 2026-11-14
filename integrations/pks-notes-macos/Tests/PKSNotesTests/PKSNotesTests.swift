@@ -3849,6 +3849,24 @@ extension PKSNotesTests {
             XCTAssertEqual(restored.height, original.height, accuracy: 0.00001)
         }
         XCTAssertEqual(model.selected, note.standardizedFileURL)
+
+        // Follow the persisted Markdown/Mind Map link all the way through PDFKit.
+        // Anchor metadata alone is insufficient: the reader must restore the exact
+        // selected passage and reject stale highlights visibly.
+        let reopenedDocument = try XCTUnwrap(PDFDocument(url: pdf))
+        let reopenedView = PDFView(frame: bounds)
+        let reopenedController = PDFReaderController()
+        defer { reopenedController.detach(view: reopenedView) }
+        reopenedController.attach(
+            view: reopenedView,
+            document: reopenedDocument,
+            url: pdf,
+            requestedPage: model.previewPDFPage,
+            requestedAnchor: finalRestoredAnchor
+        )
+        XCTAssertFalse(reopenedController.invalidRequestedSelection)
+        XCTAssertEqual(try XCTUnwrap(reopenedView.currentSelection?.string), selectedText)
+        XCTAssertEqual(reopenedController.referencePageForCurrentSelection(), anchor.page)
     }
 }
 
