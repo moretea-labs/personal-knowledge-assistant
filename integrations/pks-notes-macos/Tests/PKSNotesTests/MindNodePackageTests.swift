@@ -990,3 +990,40 @@ extension MindNodePackageTests {
         XCTAssertEqual(try Data(contentsOf: stickersURL), originalStickers)
     }
 }
+
+
+extension MindNodePackageTests {
+    func testClassicRichNotePreservesSafeLinksAndKeepsUnsafeSchemesInactive() throws {
+        let note = """
+        <p>Read <a data-href="javascript:alert(1)" href="https://example.com/a%28b%29?x=1&amp;y=2"><strong>the guide</strong></a> now.</p>
+        <p>Open <a href="javascript:alert(1)">unsafe</a>.</p>
+        <p>Plain note.</p>
+        """
+        let (base, package) = try fixture(node: [
+            "title": ["text": "<p>Root</p>"],
+            "note": ["text": note],
+            "subnodes": [
+                [
+                    "title": ["text": "<p><a data-href='javascript:alert(1)' href='https://title.example.org'>Child</a></p>"],
+                    "note": ["text": "<p>See <a href='https://nested.example.org'>the source</a>.</p>"],
+                    "subnodes": []
+                ]
+            ]
+        ])
+        defer { try? FileManager.default.removeItem(at: base) }
+        let contentsURL = package.appendingPathComponent("contents.xml")
+        let original = try Data(contentsOf: contentsURL)
+
+        let markdown = try MindNodePackage.importOutline(from: package)
+        XCTAssertEqual(
+            markdown,
+            "# Root\n> Read [the guide](https://example.com/a%28b%29?x=1&y=2) now.\n> Open unsafe.\n> Plain note.\n- Child\n  > See [the source](https://nested.example.org).\n  [Child](https://title.example.org)\n"
+        )
+        XCTAssertFalse(markdown.contains("javascript:"))
+        XCTAssertEqual(
+            MindMapOutline.linkOccurrences(in: markdown).map(\.link.target),
+            ["https://example.com/a%28b%29?x=1&y=2", "https://nested.example.org", "https://title.example.org"]
+        )
+        XCTAssertEqual(try Data(contentsOf: contentsURL), original)
+    }
+}

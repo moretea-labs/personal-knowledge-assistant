@@ -236,10 +236,9 @@ enum MindNodePackage {
         func emitNote(_ paragraphs: [String], indent: String) {
             guard !paragraphs.isEmpty else { return }
             for paragraph in paragraphs {
-                // Notes are imported as plain text, so Markdown syntax must remain literal.
+                // Paragraphs are already escaped; only validated HTTP(S) links remain active.
                 // Nested notes stay inside their list item when the branch moves.
-                let escaped = MindMapOutline.escapeInlineText(paragraph)
-                lines.append(indent + (escaped.isEmpty ? ">" : "> " + escaped))
+                lines.append(indent + (paragraph.isEmpty ? ">" : "> " + paragraph))
             }
         }
         func emitImage(_ marker: String?, indent: String) {
@@ -844,7 +843,7 @@ enum MindNodePackage {
     /// Unsafe schemes remain plain title text and are not activated.
     private static func titleLinks(_ html: String) -> [(label: String, target: String)] {
         let pattern = #"(?is)<a\b([^>]*)>(.*?)</a\s*>"#
-        let hrefPattern = #"(?i)\bhref\s*=\s*(['"])(.*?)\1"#
+        let hrefPattern = #"(?i)(?:^|\s)href\s*=\s*(['"])(.*?)\1"#
         guard let anchors = try? NSRegularExpression(pattern: pattern),
               let hrefs = try? NSRegularExpression(pattern: hrefPattern) else { return [] }
         let source = html as NSString
@@ -884,15 +883,83 @@ enum MindNodePackage {
     }
 
     /// MindNode notes are HTML paragraphs, commonly with Cocoa font spans.
-    /// Keep paragraph boundaries and all readable text rather than discarding
-    /// the note. Formatting remains in the untouched source package.
+    /// Preserve paragraph text and safe HTTP(S) links in the Markdown projection.
+    /// Other formatting remains in the untouched source package.
     private static func noteParagraphs(_ html: String) -> [String] {
         let parts = html.replacingOccurrences(
-            of: #"(?i)</p\s*>"#, with: "\n", options: .regularExpression
+            of: #"(?i)</p\s*>\s*"#, with: "\n", options: .regularExpression
         ).components(separatedBy: "\n")
-        let decoded = parts.map(plainTitle)
-        if decoded.allSatisfy(\.isEmpty) { return [] }
-        return decoded.last?.isEmpty == true ? Array(decoded.dropLast()) : decoded
+        let paragraphs = parts.map {
+            markdownNoteParagraph($0.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        if paragraphs.allSatisfy(\.isEmpty) { return [] }
+        return paragraphs.last?.isEmpty == true ? Array(paragraphs.dropLast()) : paragraphs
+    }
+
+    private static func markdownNoteParagraph(_ html: String) -> String {
+        let anchorPattern = #"(?is)<a\b([^>]*)>(.*?)</a\s*>"#
+        let hrefPattern = #"(?i)(?:^|\s)href\s*=\s*(['"])(.*?)\1"#
+        guard let anchors = try? NSRegularExpression(pattern: anchorPattern),
+              let hrefs = try? NSRegularExpression(pattern: hrefPattern) else {
+            return MindMapOutline.escapeInlineText(plainTitle(html))
+        }
+
+        let source = html as NSString
+        var result = ""
+        var cursor = 0
+        for match in anchors.matches(
+            in: html, range: NSRange(location: 0, length: source.length)
+        ) {
+            guard match.range.location >= cursor,
+                  match.range(at: 1).location != NSNotFound,
+                  match.range(at: 2).location != NSNotFound else { continue }
+            let prefix = source.substring(
+                with: NSRange(location: cursor, length: match.range.location - cursor)
+            )
+            result += escapedNoteFragment(prefix)
+
+            let label = escapedNoteFragment(source.substring(with: match.range(at: 2)))
+            let attributes = source.substring(with: match.range(at: 1))
+            let attributesSource = attributes as NSString
+            if let href = hrefs.firstMatch(
+                in: attributes,
+                range: NSRange(location: 0, length: attributesSource.length)
+            ), href.range(at: 2).location != NSNotFound {
+                let target = decodeHTMLEntities(attributesSource.substring(with: href.range(at: 2)))
+                if let parsed = URL(string: target),
+                   ["http", "https"].contains(parsed.scheme?.lowercased() ?? ""),
+                   parsed.host != nil {
+                    let destination = parsed.absoluteString
+                        .replacingOccurrences(of: "(", with: "%28")
+                        .replacingOccurrences(of: ")", with: "%29")
+                    result += "[\(label)](\(destination))"
+                } else {
+                    result += label
+                }
+            } else {
+                result += label
+            }
+            cursor = NSMaxRange(match.range)
+        }
+        result += escapedNoteFragment(source.substring(from: cursor))
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func escapedNoteFragment(_ html: String) -> String {
+        let linebreaks = html.replacingOccurrences(
+            of: #"(?i)<\s*(br\s*/?|/p|/div|/li)\s*>"#,
+            with: " ", options: .regularExpression
+        )
+        let stripped = linebreaks.replacingOccurrences(
+            of: "<[^>]*>", with: "", options: .regularExpression
+        )
+        let text = decodeHTMLEntities(stripped)
+        guard !text.isEmpty else { return "" }
+        if text.allSatisfy(\.isWhitespace) { return " " }
+
+        let leadingSpace = text.first?.isWhitespace == true ? " " : ""
+        let trailingSpace = text.last?.isWhitespace == true ? " " : ""
+        return leadingSpace + MindMapOutline.escapeInlineText(text) + trailingSpace
     }
 
     /// MindNode stores small HTML fragments in titles and note paragraphs.
