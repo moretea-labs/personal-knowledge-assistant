@@ -950,3 +950,36 @@ extension MindMapOutlineTests {
         XCTAssertTrue(linksStopped)
     }
 }
+
+
+extension MindMapOutlineTests {
+    func testInlineRenamePreservesConnectedSourcesWithoutExposingLinkSyntax() throws {
+        let source = "# Study\n- 观察🧠 [[Notes/资料|资料]] [原文](../Books/Study.pdf#page=3)\n  - Detail\n"
+        let node = try XCTUnwrap(MindMapOutline.nodes(in: source).first { $0.title.hasPrefix("观察") })
+        XCTAssertEqual(MindMapOutline.titleForInlineEditing(node.title), "观察🧠")
+        let updated = try XCTUnwrap(MindMapOutline.renameInlineTitle(in: source, nodeID: node.id, to: "新观察"))
+        XCTAssertEqual(updated, "# Study\n- 新观察 [[Notes/资料|资料]] [原文](../Books/Study.pdf#page=3)\n  - Detail\n")
+        XCTAssertEqual(MindMapOutline.links(in: try XCTUnwrap(MindMapOutline.nodes(in: updated).first { $0.id == node.id }).title).map(\.target), ["Notes/资料", "../Books/Study.pdf#page=3"])
+    }
+
+    func testInlineTaskRenameKeepsCheckboxAndCanonicalSourceLink() throws {
+        let source = "# Tasks\n- [x] Read chapter [[/Books/Chapter.pdf|Source]]\n"
+        let node = try XCTUnwrap(MindMapOutline.nodes(in: source).first { $0.title.hasPrefix("[x]") })
+        let visible = MindMapOutline.titleForInlineEditing(node.title)
+        XCTAssertEqual(MindMapTaskNode.titleForEditing(visible), "Read chapter")
+        let replacement = try XCTUnwrap(MindMapTaskNode.replacingTitle("Review chapter", in: visible))
+        XCTAssertEqual(MindMapOutline.renameInlineTitle(in: source, nodeID: node.id, to: replacement),
+                       "# Tasks\n- [x] Review chapter [[/Books/Chapter.pdf|Source]]\n")
+    }
+
+    func testInlineRenameOnlyRetainsActualTrailingLinks() throws {
+        let original = "# Root\n- Open [[Source|label]] and compare\n- \\[[Literal]]\n- [Only linked](../src.pdf)\n"
+        let nodes = MindMapOutline.nodes(in: original)
+        XCTAssertEqual(MindMapOutline.titleForInlineEditing(nodes[1].title), "Open [[Source|label]] and compare")
+        XCTAssertEqual(MindMapOutline.titleForInlineEditing(nodes[2].title), "\\[[Literal]]")
+        XCTAssertEqual(MindMapOutline.titleForInlineEditing(nodes[3].title), "[Only linked](../src.pdf)")
+        let renamed = try XCTUnwrap(MindMapOutline.renameInlineTitle(in: original, nodeID: nodes[1].id, to: "Changed"))
+        XCTAssertTrue(renamed.contains("- Changed\n"))
+        XCTAssertFalse(renamed.contains("Source|label"))
+    }
+}

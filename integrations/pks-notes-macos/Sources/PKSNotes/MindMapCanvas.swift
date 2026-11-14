@@ -2025,7 +2025,9 @@ struct MindMapCanvas: View {
     private func beginRename() {
         guard projectionIsCurrent,
               let node = nodes.first(where: { $0.id == selectedID }) else { return }
-        startEditingNode(node.id, title: MindMapTaskNode.titleForEditing(node.title))
+        startEditingNode(node.id, title: MindMapTaskNode.titleForEditing(
+            MindMapOutline.titleForInlineEditing(node.title)
+        ))
     }
 
     private func startEditingNode(_ id: Int, title: String, created: Bool = false) {
@@ -2044,8 +2046,12 @@ struct MindMapCanvas: View {
             // Invalid titles stay in the inline editor instead of silently
             // committing the placeholder/original text.
             guard let node = nodes.first(where: { $0.id == id }),
-                  let markdownTitle = MindMapTaskNode.replacingTitle(renameTitle, in: node.title),
-                  let updated = MindMapOutline.rename(in: source, nodeID: id, to: markdownTitle) else {
+                  let markdownTitle = MindMapTaskNode.replacingTitle(
+                    renameTitle, in: MindMapOutline.titleForInlineEditing(node.title)
+                  ),
+                  let updated = MindMapOutline.renameInlineTitle(
+                    in: source, nodeID: id, to: markdownTitle
+                  ) else {
                 interchangeError = language.text("Enter a nonempty, single-line node title.")
                 return
             }

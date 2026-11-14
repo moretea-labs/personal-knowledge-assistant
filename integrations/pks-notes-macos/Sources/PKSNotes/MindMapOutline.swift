@@ -1010,6 +1010,39 @@ extension MindMapOutline {
         parsedLinks(in: title).map(\.link)
     }
 
+    /// Inline node editing changes the readable label, not links attached through
+    /// the map's Connect actions. Only a whitespace-separated trailing run of
+    /// real Markdown/Wiki links is preserved; links inside prose remain editable.
+    private static func inlineTitleParts(_ rawTitle: String) -> (label: String, links: String) {
+        let nsTitle = rawTitle as NSString
+        let linkedRanges = parsedLinks(in: rawTitle).map(\.range)
+            .sorted { $0.location > $1.location }
+        var boundary = nsTitle.length
+        for range in linkedRanges {
+            guard NSMaxRange(range) == boundary else { break }
+            let before = nsTitle.substring(to: range.location)
+            let trailingWhitespace = String(before.reversed().prefix(while: \.isWhitespace).reversed())
+            guard !trailingWhitespace.isEmpty else { break }
+            boundary = range.location - trailingWhitespace.utf16.count
+        }
+        guard boundary < nsTitle.length else { return (rawTitle, "") }
+        let label = nsTitle.substring(to: boundary)
+        guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return (rawTitle, "")
+        }
+        return (label, nsTitle.substring(from: boundary))
+    }
+
+    static func titleForInlineEditing(_ rawTitle: String) -> String {
+        inlineTitleParts(rawTitle).label
+    }
+
+    static func renameInlineTitle(in source: String, nodeID: Int, to label: String) -> String? {
+        guard let node = nodes(in: source).first(where: { $0.id == nodeID }) else { return nil }
+        let links = inlineTitleParts(node.title).links
+        return rename(in: source, nodeID: nodeID, to: label + links)
+    }
+
     /// Display-only WikiLink conversion; Markdown source is never changed.
     static func previewMarkdown(in source: String) -> String {
         let linkedLines = Set(linkOccurrences(in: source).map(\.lineIndex))
