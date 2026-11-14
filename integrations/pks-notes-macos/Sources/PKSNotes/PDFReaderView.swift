@@ -984,21 +984,27 @@ struct NativePDFPreview: View {
             .padding(.horizontal, 12)
             .frame(minWidth: 860, minHeight: 38)
 
-            // A narrow PDF column gets two readable tool rows, never an
-            // overflowing single row of invisible / compressed controls.
+            // Preserve direct zoom controls when they fit beside search.
             VStack(spacing: 0) {
-                HStack(spacing: 8) {
-                    pdfOutlineControls
-                    pdfReloadControl
-                    pdfNavigationControls
-                    Spacer(minLength: 0)
-                    pdfCaptureControls
-                }
-                .frame(height: 36)
+                compactPDFPrimaryRow
                 HStack(spacing: 8) {
                     pdfSearchControls
                     Spacer(minLength: 0)
                     pdfZoomControls
+                }
+                .frame(height: 36)
+            }
+            .padding(.horizontal, 12)
+            .frame(minWidth: 560)
+
+            // In a split PDF pane, the 420pt minimum width must still expose
+            // page navigation, quote capture, search and zoom without clipping.
+            VStack(spacing: 0) {
+                compactPDFPrimaryRow
+                HStack(spacing: 8) {
+                    pdfSearchControls
+                    Spacer(minLength: 0)
+                    compactPDFZoomMenu
                 }
                 .frame(height: 36)
             }
@@ -1008,6 +1014,17 @@ struct NativePDFPreview: View {
         .symbolRenderingMode(.hierarchical)
         .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var compactPDFPrimaryRow: some View {
+        HStack(spacing: 8) {
+            pdfOutlineControls
+            pdfReloadControl
+            pdfNavigationControls
+            Spacer(minLength: 0)
+            pdfCaptureControls
+        }
+        .frame(height: 36)
     }
 
     private var pdfOutlineControls: some View {
@@ -1143,7 +1160,7 @@ struct NativePDFPreview: View {
                 Button {
                     controller.search(searchText)
                 } label: {
-                    Image(systemName: "magnifyingglass.circle")
+                    Image(systemName: "arrow.right")
                 }
                 .buttonStyle(.plain)
                 .disabled(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1224,6 +1241,45 @@ struct NativePDFPreview: View {
             .accessibilityLabel(language.text("Fit Width"))
             .accessibilityIdentifier("pks-pdf-fit-width")
         }
+    }
+
+    private var compactPDFZoomMenu: some View {
+        Menu {
+            Button {
+                controller.zoomOut()
+            } label: {
+                Label(language.text("Zoom Out"), systemImage: "minus.magnifyingglass")
+            }
+            Button {
+                controller.zoomIn()
+            } label: {
+                Label(language.text("Zoom In"), systemImage: "plus.magnifyingglass")
+            }
+            Button {
+                controller.actualSize()
+            } label: {
+                Label(language.text("Actual Size"), systemImage: "1.circle")
+            }
+            Button {
+                controller.fitWidth()
+            } label: {
+                Label(language.text("Fit Width"), systemImage: "arrow.left.and.right.square")
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text("\(controller.scalePercent)%")
+                    .font(.caption.monospacedDigit())
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .medium))
+            }
+            .frame(minWidth: 58, minHeight: 26)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .help(language.text("Zoom level"))
+        .accessibilityLabel(language.text("Zoom level"))
+        .accessibilityValue("\(controller.scalePercent)%")
+        .accessibilityIdentifier("pks-pdf-zoom-menu")
     }
 
     private func copyCurrentPageReference() {
