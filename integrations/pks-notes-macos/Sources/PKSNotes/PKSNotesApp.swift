@@ -3276,7 +3276,7 @@ struct NotesWindow: View {
                     } else {
                         ForEach(Array(outgoingLinks.enumerated()), id: \.offset) { _, link in
                             relationshipButton(
-                                title: link.label,
+                                title: MindMapOutline.displayMarkdownLinkLabel(link.label),
                                 detail: link.target,
                                 symbol: "arrow.up.right"
                             ) {

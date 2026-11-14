@@ -210,16 +210,8 @@ enum PDFPageReference {
         allowed.remove(charactersIn: "#?()%")
         guard let encoded = relative.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
 
-        // Escape HTML-significant characters in the readable filename so
-        // Markdown displays literal names (including entity-like text) without
-        // injecting markup or confusing the link-label parser. The target
-        // remains a separately URL-encoded canonical workspace path.
-        let label = canonicalURL.lastPathComponent
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "[", with: "&#91;")
-            .replacingOccurrences(of: "]", with: "&#93;")
+        // The display label and canonical URL path have separate escaping rules.
+        let label = MindMapOutline.escapeMarkdownLinkLabel(canonicalURL.lastPathComponent)
         let fragment = anchor?.page == page ? anchor!.fragment : "page=\(page)"
         return "[\(label) · p. \(page)](/\(encoded)#\(fragment))"
     }

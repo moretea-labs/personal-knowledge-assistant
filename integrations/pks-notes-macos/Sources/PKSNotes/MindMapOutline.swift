@@ -72,6 +72,42 @@ enum MindMapOutline {
         return escaped
     }
 
+    /// Encode a user-visible filename before embedding it in a Markdown link label.
+    /// Ampersands are escaped first so entity-like filenames remain literal.
+    static func escapeMarkdownLinkLabel(_ label: String) -> String {
+        label
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "[", with: "&#91;")
+            .replacingOccurrences(of: "]", with: "&#93;")
+    }
+
+    private static let markdownLinkDisplayEntities = [
+        "&amp;": "&",
+        "&lt;": "<",
+        "&gt;": ">",
+        "&#91;": "[",
+        "&#93;": "]"
+    ]
+
+    /// Decode one layer only; a filename literally named "&amp;" must display "&amp;".
+    static func displayMarkdownLinkLabel(_ label: String) -> String {
+        var result = ""
+        var cursor = label.startIndex
+        while cursor < label.endIndex {
+            if label[cursor] == "&",
+               let end = label[cursor...].firstIndex(of: ";"),
+               let decoded = markdownLinkDisplayEntities[String(label[cursor...end])] {
+                result.append(contentsOf: decoded)
+                cursor = label.index(after: end)
+            } else {
+                result.append(label[cursor])
+                cursor = label.index(after: cursor)
+            }
+        }
+        return result
+    }
 
     private static let wikiLinkRegex = try! NSRegularExpression(pattern: #"\[\[([^\]\n]+)\]\]"#)
     private static let markdownLinkRegex = try! NSRegularExpression(pattern: #"\[([^\]\n]+)\]\(([^)\n]+)\)"#)
@@ -1064,7 +1100,7 @@ extension MindMapOutline {
                     link: first.link
                 )
                 return (
-                    taskPrefix + first.link.label,
+                    taskPrefix + displayMarkdownLinkLabel(first.link.label),
                     nsContent.substring(from: NSMaxRange(first.range)),
                     primaryLink
                 )
@@ -1100,12 +1136,13 @@ extension MindMapOutline {
                 ? (MindMapTaskNode.parse(label)?.title ?? label) : label)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !cleanLabel.isEmpty, !cleanLabel.contains("\n"),
-                  !cleanLabel.contains("\r"), !cleanLabel.contains("]") else { return nil }
+                  !cleanLabel.contains("\r") else { return nil }
+            let escapedLabel = escapeMarkdownLinkLabel(cleanLabel)
             let rawTitle = node.title as NSString
             let target = rawTitle.substring(with: primaryLink.targetRange)
             let replacement = primaryLink.isWikiLink
-                ? "[[\(target)|\(cleanLabel)]]"
-                : "[\(cleanLabel)](\(target))"
+                ? "[[\(target)|\(escapedLabel)]]"
+                : "[\(escapedLabel)](\(target))"
             let updatedTitle = rawTitle.replacingCharacters(in: primaryLink.range, with: replacement)
             return rename(in: source, nodeID: nodeID, to: updatedTitle)
         }
@@ -1187,7 +1224,7 @@ extension MindMapOutline {
     ) -> String {
         let rendered = NSMutableString(string: line)
         for match in matches.sorted(by: { $0.range.location > $1.range.location }) {
-            rendered.replaceCharacters(in: match.range, with: match.link.label)
+            rendered.replaceCharacters(in: match.range, with: displayMarkdownLinkLabel(match.link.label))
         }
         var parts = [(rendered as String).trimmingCharacters(in: .whitespacesAndNewlines)]
         let hasPDF = matches.contains { match in
@@ -1281,7 +1318,7 @@ extension MindMapOutline {
                     with: NSRange(location: cursor, length: item.range.location - cursor)
                 )
             }
-            rendered += item.link.label
+            rendered += displayMarkdownLinkLabel(item.link.label)
             cursor = NSMaxRange(item.range)
         }
         if cursor < nsTitle.length {
@@ -1289,7 +1326,13 @@ extension MindMapOutline {
         }
 
         let clean = rendered.trimmingCharacters(in: .whitespacesAndNewlines)
-        return .init(title: clean.isEmpty ? title : clean, links: parsed.map(\.link))
+        let displayLinks = parsed.map {
+            MindMapLink(
+                label: displayMarkdownLinkLabel($0.link.label),
+                target: $0.link.target
+            )
+        }
+        return .init(title: clean.isEmpty ? title : clean, links: displayLinks)
     }
 
     /// Derive each node's links from its title plus the Markdown body attached

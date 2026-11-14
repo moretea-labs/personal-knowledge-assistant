@@ -1016,3 +1016,42 @@ extension MindMapOutlineTests {
         )
     }
 }
+
+
+extension MindMapOutlineTests {
+    func testPDFLinkLabelsRenderAndEditAsLiteralFilenamesAcrossMapAndBacklinks() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-PDF-MindMap-Link-Label-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let filename = "Plan &amp; [draft] <final>.pdf"
+        let pdf = root.appendingPathComponent(filename)
+        try Data().write(to: pdf)
+        let reference = try XCTUnwrap(PDFPageReference.markdown(for: pdf, page: 3, root: root))
+        let source = "# Root\n- \(reference)\n"
+        let node = try XCTUnwrap(MindMapOutline.nodes(in: source).first { $0.id == 1 })
+        let expected = "\(filename) · p. 3"
+
+        XCTAssertEqual(MindMapOutline.titleForInlineEditing(node.title), expected)
+        let presentation = MindMapOutline.presentation(for: node.title)
+        XCTAssertEqual(presentation.title, expected)
+        XCTAssertEqual(presentation.links.first?.label, expected)
+        XCTAssertEqual(
+            MindMapOutline.linkOccurrences(in: source, includeContext: true).first?.context,
+            "- \(expected)"
+        )
+
+        let replacementLabel = "Notes &amp; [draft] <final>"
+        let renamed = try XCTUnwrap(
+            MindMapOutline.renameInlineTitle(in: source, nodeID: node.id, to: replacementLabel)
+        )
+        let updatedNode = try XCTUnwrap(MindMapOutline.nodes(in: renamed).first { $0.id == node.id })
+        XCTAssertEqual(MindMapOutline.titleForInlineEditing(updatedNode.title), replacementLabel)
+        XCTAssertTrue(renamed.contains("[Notes &amp;amp; &#91;draft&#93; &lt;final&gt;]"))
+        XCTAssertEqual(
+            MindMapOutline.linkOccurrences(in: renamed).first?.link.target,
+            MindMapOutline.linkOccurrences(in: source).first?.link.target
+        )
+    }
+}
