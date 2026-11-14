@@ -255,6 +255,9 @@ enum NotesGeometry {
     static let symbolSize: CGFloat = 14
     static let toolbarTarget: CGFloat = 28
     static let selectionCorner: CGFloat = 9
+    static let workspacePanelRadius: CGFloat = 14
+    static let workspacePanelInset: CGFloat = 9
+    static let workspacePanelGap: CGFloat = 9
 
     static func workspaceTitle(_ root: URL?, language: AppLanguage) -> String {
         guard let root else { return language.text("Knowledge Library") }
@@ -717,14 +720,24 @@ struct NotesWindow: View {
             sidebar
                 .navigationSplitViewColumnWidth(min: 320, ideal: 368, max: 480)
         } detail: {
-            HStack(spacing: 0) {
+            HStack(spacing: NotesGeometry.workspacePanelGap) {
                 detail
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipShape(RoundedRectangle(
+                        cornerRadius: NotesGeometry.workspacePanelRadius,
+                        style: .continuous
+                    ))
                 if auxiliaryListPresentation != "sheet" && (showingOutline || showingBacklinks) {
                     auxiliaryListPanel
                         .frame(width: 312)
+                        .clipShape(RoundedRectangle(
+                            cornerRadius: NotesGeometry.workspacePanelRadius,
+                            style: .continuous
+                        ))
                 }
             }
+            .padding(NotesGeometry.workspacePanelInset)
+            .background(Color(nsColor: .underPageBackgroundColor))
             .sheet(isPresented: Binding(
                 get: { auxiliaryListPresentation == "sheet" && (showingOutline || showingBacklinks) },
                 set: { if !$0 { showingOutline = false; showingBacklinks = false } }
