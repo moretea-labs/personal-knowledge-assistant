@@ -400,7 +400,12 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
 
         let positions = try XCTUnwrap(defaults.dictionary(forKey: PDFReadingPositionStore.defaultsKey))
         XCTAssertEqual(positions.count, PDFReadingPositionStore.maxEntries)
-        XCTAssertEqual(positions[newest.standardizedFileURL.path] as? Int, 7)
+        XCTAssertEqual(
+            PDFReadingPositionStore.pageIndex(
+                for: newest, pageCount: 20, defaults: defaults
+            ),
+            7
+        )
     }
 
     func testPDFReadingPositionStoreDoesNotEvictHistoryForDefaultPageZero() throws {
@@ -928,5 +933,49 @@ extension PDFSourceAnchorControllerTests {
         let restoredText = try XCTUnwrap(restoredView.currentSelection?.string)
         XCTAssertEqual(restoredText, "Crop rotated evidence")
         XCTAssertTrue(anchor.matches(text: restoredText))
+    }
+}
+
+
+extension PDFSourceAnchorControllerTests {
+    func testPDFReadingPositionStoreEvictsLeastRecentlyReadEntryFirst() throws {
+        let suite = "PKSNotesPDFPositionLRU-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        var existing = Dictionary(uniqueKeysWithValues: (0..<198).map { index in
+            (
+                "/tmp/entry-\(index).pdf",
+                [
+                    "pageIndex": index + 1,
+                    "lastReadAt": TimeInterval(index + 2)
+                ] as [String: Any]
+            )
+        })
+        existing["/tmp/z-old.pdf"] = [
+            "pageIndex": 3,
+            "lastReadAt": 1.0
+        ] as [String: Any]
+        existing["/tmp/a-recent.pdf"] = [
+            "pageIndex": 4,
+            "lastReadAt": 500.0
+        ] as [String: Any]
+        defaults.set(existing, forKey: PDFReadingPositionStore.defaultsKey)
+
+        let newest = URL(fileURLWithPath: "/tmp/m-new.pdf")
+        PDFReadingPositionStore.save(pageIndex: 7, for: newest, defaults: defaults)
+
+        let positions = try XCTUnwrap(
+            defaults.dictionary(forKey: PDFReadingPositionStore.defaultsKey)
+        )
+        XCTAssertEqual(positions.count, PDFReadingPositionStore.maxEntries)
+        XCTAssertNil(positions["/tmp/z-old.pdf"])
+        XCTAssertNotNil(positions["/tmp/a-recent.pdf"])
+        XCTAssertEqual(
+            PDFReadingPositionStore.pageIndex(
+                for: newest, pageCount: 20, defaults: defaults
+            ),
+            7
+        )
     }
 }

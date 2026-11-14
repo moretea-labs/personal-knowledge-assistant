@@ -283,15 +283,19 @@ enum PDFReadingPositionStore {
     static let defaultsKey = "PKSNotesPDFReadingPositionsV1"
     static let maxEntries = 200
 
+    private static let storedPageIndexKey = "pageIndex"
+    private static let lastReadAtKey = "lastReadAt"
+
     static func pageIndex(
         for url: URL,
         pageCount: Int,
         defaults: UserDefaults = .standard
     ) -> Int? {
         guard pageCount > 0,
-              let stored = defaults.dictionary(forKey: defaultsKey)?[url.standardizedFileURL.path] as? Int
+              let stored = defaults.dictionary(forKey: defaultsKey)?[url.standardizedFileURL.path],
+              let pageIndex = storedPageIndex(in: stored)
         else { return nil }
-        return min(max(0, stored), pageCount - 1)
+        return min(max(0, pageIndex), pageCount - 1)
     }
 
     static func save(
@@ -308,20 +312,42 @@ enum PDFReadingPositionStore {
             }
             return
         }
-        if values[key] as? Int == normalized { return }
-        values[key] = normalized
+
+        let now = Date().timeIntervalSince1970
+        if let existing = values[key],
+           storedPageIndex(in: existing) == normalized {
+            let lastReadAt = lastReadAt(in: existing)
+            if now >= lastReadAt, now - lastReadAt < 60 {
+                return
+            }
+        }
+        values[key] = [
+            storedPageIndexKey: normalized,
+            lastReadAtKey: now
+        ]
         if values.count > maxEntries {
             let previousValues = values
-            let keep = previousValues.keys
-                .filter { $0 != key }
-                .sorted()
-                .suffix(maxEntries - 1)
+            let keep = previousValues.keys.sorted {
+                let lhs = lastReadAt(in: previousValues[$0])
+                let rhs = lastReadAt(in: previousValues[$1])
+                return lhs == rhs ? $0 > $1 : lhs > rhs
+            }.prefix(maxEntries)
             values = Dictionary(uniqueKeysWithValues: keep.compactMap { existingKey in
                 previousValues[existingKey].map { (existingKey, $0) }
             })
-            values[key] = normalized
         }
         defaults.set(values, forKey: defaultsKey)
+    }
+
+    private static func storedPageIndex(in value: Any) -> Int? {
+        if let legacyValue = value as? Int {
+            return legacyValue
+        }
+        return (value as? [String: Any])?[storedPageIndexKey] as? Int
+    }
+
+    private static func lastReadAt(in value: Any?) -> TimeInterval {
+        (value as? [String: Any])?[lastReadAtKey] as? TimeInterval ?? 0
     }
 }
 
