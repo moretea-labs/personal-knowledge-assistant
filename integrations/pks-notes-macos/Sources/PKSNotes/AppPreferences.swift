@@ -113,6 +113,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Heading 2": "二级标题",
         "Heading 3": "三级标题",
         "Bullet List": "项目列表",
+        "Numbered List": "有序列表",
         "Task": "任务",
         "Heading": "标题",
         "List": "列表",

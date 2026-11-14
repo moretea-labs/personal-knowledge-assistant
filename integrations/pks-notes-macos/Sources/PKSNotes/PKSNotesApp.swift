@@ -120,6 +120,8 @@ struct PKSNotesApp: App {
                 Divider()
                 Button(language.text("Bullet List")) { MarkdownNativeCommand.perform("bullet") }
                     .keyboardShortcut("8", modifiers: [.command, .shift])
+                Button(language.text("Numbered List")) { MarkdownNativeCommand.perform("ordered") }
+                    .keyboardShortcut("7", modifiers: [.command, .shift])
                 Button(language.text("Task")) { MarkdownNativeCommand.perform("task") }
                     .keyboardShortcut("9", modifiers: [.command, .shift])
                 Button(language.text("Quote")) { MarkdownNativeCommand.perform("quote") }
@@ -366,6 +368,7 @@ enum MarkdownNativeCommand {
         case "h3": .heading(3)
         case "bullet": .bullet
         case "task": .task
+        case "ordered": .ordered
         case "quote": .quote
         case "table": .table
         default: nil
@@ -3860,6 +3863,7 @@ struct NotesWindow: View {
 
                 Menu {
                     Button(language.text("Bullet List")) { applyMarkdownFormatting("bullet") }
+                    Button(language.text("Numbered List")) { applyMarkdownFormatting("ordered") }
                     Button(language.text("Task")) { applyMarkdownFormatting("task") }
                 } label: {
                     Label(language.text("List"), systemImage: "list.bullet")
@@ -3930,6 +3934,7 @@ struct NotesWindow: View {
                 Button(language.text("Heading 3")) { applyMarkdownFormatting("h3") }
                 Divider()
                 Button(language.text("Bullet List")) { applyMarkdownFormatting("bullet") }
+                Button(language.text("Numbered List")) { applyMarkdownFormatting("ordered") }
                 Button(language.text("Task")) { applyMarkdownFormatting("task") }
                 Button(language.text("Quote")) { applyMarkdownFormatting("quote") }
                 Button(language.text("Link")) { applyMarkdownFormatting("link") }

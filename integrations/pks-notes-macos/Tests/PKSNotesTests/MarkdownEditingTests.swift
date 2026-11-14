@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import PKSNotes
 
@@ -260,4 +261,64 @@ final class MarkdownEditingTests: XCTestCase {
         XCTAssertEqual(result.text, "> ")
     }
 
+}
+
+extension MarkdownEditingTests {
+    func testOrderedListCommandNumbersSiblingsAndNestedItemsAndTogglesOff() {
+        let source = "first\n  nested\nsecond\n"
+        let selection = NSRange(location: 0, length: (source as NSString).length)
+        let numbered = MarkdownEditing.apply(.ordered, to: source, selection: selection)
+        XCTAssertEqual(numbered.text, "1. first\n  1. nested\n2. second\n")
+        XCTAssertEqual(
+            MarkdownEditing.apply(.ordered, to: numbered.text, selection: numbered.selection).text,
+            source
+        )
+    }
+
+    func testListCommandsPreserveIndentationForUnmarkedNestedLines() {
+        let source = "parent\n  child\n"
+        let selection = NSRange(location: 0, length: (source as NSString).length)
+        XCTAssertEqual(MarkdownEditing.apply(.bullet, to: source, selection: selection).text,
+                       "- parent\n  - child\n")
+        XCTAssertEqual(MarkdownEditing.apply(.task, to: source, selection: selection).text,
+                       "- [ ] parent\n  - [ ] child\n")
+    }
+
+    func testOrderedListPreservesFencedCodeAndCreatesAnEmptyItem() {
+        let source = "first\n```swift\nprint(1)\n```\nlast\n"
+        let numbered = MarkdownEditing.apply(
+            .ordered, to: source, selection: NSRange(location: 0, length: (source as NSString).length)
+        )
+        XCTAssertEqual(numbered.text, "1. first\n  ```swift\n  print(1)\n  ```\n2. last\n")
+
+        let empty = MarkdownEditing.apply(.ordered, to: "", selection: NSRange(location: 0, length: 0))
+        XCTAssertEqual(empty.text, "1. ")
+        XCTAssertEqual(empty.selection, NSRange(location: 0, length: 3))
+    }
+
+    @MainActor
+    func testOrderedListNativeCommandUsesOneStepAppKitUndo() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),
+            styleMask: [],
+            backing: .buffered,
+            defer: true
+        )
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 240))
+        textView.allowsUndo = true
+        window.contentView = textView
+        window.makeFirstResponder(textView)
+        let source = "first\nsecond"
+        textView.string = source
+        textView.setSelectedRange(NSRange(location: 0, length: (source as NSString).length))
+        textView.undoManager?.removeAllActions()
+
+        XCTAssertTrue(MarkdownNativeCommand.perform("ordered", in: textView))
+        XCTAssertEqual(textView.string, "1. first\n2. second")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 0, length: (textView.string as NSString).length))
+        let undoManager = try XCTUnwrap(textView.undoManager)
+        XCTAssertTrue(undoManager.canUndo)
+        undoManager.undo()
+        XCTAssertEqual(textView.string, source)
+    }
 }

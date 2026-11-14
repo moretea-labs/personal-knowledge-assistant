@@ -13,6 +13,7 @@ enum MarkdownEditCommand {
     case heading(Int)
     case bullet
     case task
+    case ordered
     case quote
     case table
 }
@@ -68,9 +69,11 @@ enum MarkdownEditing {
         case .heading(let level):
             return setHeadingLevel(text, range: range, level: level)
         case .bullet:
-            return toggleListLines(text, range: range, asTask: false)
+            return toggleListLines(text, range: range, kind: .bullet)
         case .task:
-            return toggleListLines(text, range: range, asTask: true)
+            return toggleListLines(text, range: range, kind: .task)
+        case .ordered:
+            return toggleListLines(text, range: range, kind: .ordered)
         case .quote:
             return toggleQuoteLines(text, range: range)
         case .table:
@@ -112,6 +115,12 @@ enum MarkdownEditing {
         case ordered
     }
 
+    private enum ListOutputKind {
+        case bullet
+        case task
+        case ordered
+    }
+
     private struct ParsedListLine {
         let indentation: String
         let kind: ListLineKind
@@ -121,7 +130,7 @@ enum MarkdownEditing {
     private static func toggleListLines(
         _ text: String,
         range: NSRange,
-        asTask: Bool
+        kind: ListOutputKind
     ) -> MarkdownEditResult {
         let ns = text as NSString
         let lineRange = ns.lineRange(for: range)
@@ -143,11 +152,18 @@ enum MarkdownEditing {
         let hasExistingList = contentLines.contains { parseListLine($0) != nil }
         let removesExistingList = !contentLines.isEmpty && contentLines.allSatisfy { line in
             guard let parsed = parseListLine(line) else { return false }
-            if asTask, case .task(_) = parsed.kind { return true }
-            if !asTask, case .bullet = parsed.kind { return true }
+            switch kind {
+            case .bullet:
+                if case .bullet = parsed.kind { return true }
+            case .task:
+                if case .task = parsed.kind { return true }
+            case .ordered:
+                if case .ordered = parsed.kind { return true }
+            }
             return false
         }
 
+        var orderedIndexByIndentation: [String: Int] = [:]
         let formattedLines = lines.enumerated().map { offset, line -> String in
             let absoluteLine = firstLine + offset
             if codeLines[absoluteLine] {
@@ -159,18 +175,25 @@ enum MarkdownEditing {
             if line.trimmingCharacters(in: .whitespaces).isEmpty && lines.count > 1 { return line }
 
             let parsed = parseListLine(line)
-            let indentation = parsed?.indentation ?? ""
-            let content = parsed?.content ?? line
+            let indentation = parsed?.indentation
+                ?? String(line.prefix { $0 == " " || $0 == "\t" })
+            let content = parsed?.content ?? String(line.dropFirst(indentation.count))
             if removesExistingList {
                 return indentation + content
             }
-            if asTask {
+            switch kind {
+            case .bullet:
+                return indentation + "- " + content
+            case .task:
                 if let parsed, case let .task(checked) = parsed.kind {
                     return indentation + "- [\(checked)] " + parsed.content
                 }
                 return indentation + "- [ ] " + content
+            case .ordered:
+                let number = orderedIndexByIndentation[indentation, default: 1]
+                orderedIndexByIndentation[indentation] = number + 1
+                return indentation + "\(number). " + content
             }
-            return indentation + "- " + content
         }
 
         let replacement = formattedLines.joined(separator: "\n")
