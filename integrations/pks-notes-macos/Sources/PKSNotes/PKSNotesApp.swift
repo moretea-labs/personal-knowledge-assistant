@@ -103,6 +103,7 @@ struct PKSNotesApp: App {
                 .keyboardShortcut("i", modifiers: .command)
                 Button(language.text("Inline Code")) { MarkdownNativeCommand.perform("code") }
                     .keyboardShortcut("e", modifiers: .command)
+                Button(language.text("Code Block")) { MarkdownNativeCommand.perform("codeBlock") }
                 Button(language.text("Link")) { MarkdownNativeCommand.perform("link") }
                     .keyboardShortcut("k", modifiers: .command)
                 Button(language.text("Insert PDF Citation at Cursor")) {
@@ -363,6 +364,7 @@ enum MarkdownNativeCommand {
         case "bold": .bold
         case "italic": .italic
         case "code": .inlineCode
+        case "codeBlock": .codeBlock
         case "link": .link
         case "h1": .heading(1)
         case "h2": .heading(2)
@@ -3879,9 +3881,20 @@ struct NotesWindow: View {
                                       identifier: "pks-markdown-format-quote")
                 markdownCommandButton("link", title: "Link", symbol: "link",
                                       identifier: "pks-markdown-format-link")
-                markdownCommandButton("code", title: "Inline Code",
-                                      symbol: "chevron.left.forwardslash.chevron.right",
-                                      identifier: "pks-markdown-format-code")
+                Menu {
+                    Button(language.text("Inline Code")) { applyMarkdownFormatting("code") }
+                        .accessibilityIdentifier("pks-markdown-format-inline-code")
+                    Button(language.text("Code Block")) { applyMarkdownFormatting("codeBlock") }
+                        .accessibilityIdentifier("pks-markdown-format-code-block")
+                } label: {
+                    Label(language.text("Code"), systemImage: "chevron.left.forwardslash.chevron.right")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help(language.text("Code"))
+                .accessibilityLabel(language.text("Code"))
+                .accessibilityIdentifier("pks-markdown-format-code")
 
                 Menu {
                     Button(language.text("Insert Table"), systemImage: "tablecells") {
@@ -3940,6 +3953,7 @@ struct NotesWindow: View {
                 Button(language.text("Quote")) { applyMarkdownFormatting("quote") }
                 Button(language.text("Link")) { applyMarkdownFormatting("link") }
                 Button(language.text("Inline Code")) { applyMarkdownFormatting("code") }
+                Button(language.text("Code Block")) { applyMarkdownFormatting("codeBlock") }
             } label: {
                 Image(systemName: "textformat")
                     .frame(width: 24, height: 24)

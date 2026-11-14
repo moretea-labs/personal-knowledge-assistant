@@ -322,3 +322,62 @@ extension MarkdownEditingTests {
         XCTAssertEqual(textView.string, source)
     }
 }
+
+
+extension MarkdownEditingTests {
+    func testCodeBlockInsertsAnEmptyFenceAndLeavesCaretInside() {
+        let source = "Heading\n"
+        let result = MarkdownEditing.apply(
+            .codeBlock, to: source, selection: NSRange(location: (source as NSString).length, length: 0)
+        )
+        let fence = "```"
+
+        XCTAssertEqual(result.text, "Heading\n\n\(fence)\n\n\(fence)")
+        XCTAssertEqual(result.selection, NSRange(location: 13, length: 0))
+    }
+
+    func testCodeBlockWrapsUnicodeSelectionAndChoosesFenceLongerThanEmbeddedBackticks() {
+        let embeddedFence = "```"
+        let selected = "let marker = \"\(embeddedFence)\"\nprint(\"你好 😀\")"
+        let source = "Before \(selected) after"
+        let range = (source as NSString).range(of: selected)
+        let fence = "````"
+
+        let result = MarkdownEditing.apply(.codeBlock, to: source, selection: range)
+        let expected = "Before \n\n\(fence)\n\(selected)\n\(fence)\n\n after"
+        XCTAssertEqual(result.text, expected)
+        XCTAssertEqual(
+            (result.text as NSString).substring(with: result.selection),
+            selected
+        )
+        XCTAssertEqual(result.selection.location, range.location + 2 + fence.utf16.count + 1)
+        XCTAssertEqual(result.selection.length, (selected as NSString).length)
+    }
+
+    @MainActor
+    func testCodeBlockNativeCommandUsesOneStepAppKitUndo() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),
+            styleMask: [],
+            backing: .buffered,
+            defer: true
+        )
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 240))
+        textView.allowsUndo = true
+        window.contentView = textView
+        window.makeFirstResponder(textView)
+        let source = "let value = 1"
+        textView.string = source
+        textView.setSelectedRange(NSRange(location: 0, length: (source as NSString).length))
+        textView.undoManager?.removeAllActions()
+        let fence = "```"
+
+        XCTAssertTrue(MarkdownNativeCommand.perform("codeBlock", in: textView))
+        XCTAssertEqual(textView.string, "\(fence)\nlet value = 1\n\(fence)")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 4, length: (source as NSString).length))
+        let undoManager = try XCTUnwrap(textView.undoManager)
+        XCTAssertTrue(undoManager.canUndo)
+        undoManager.undo()
+        XCTAssertEqual(textView.string, source)
+    }
+}

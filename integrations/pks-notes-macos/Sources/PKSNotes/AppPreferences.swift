@@ -108,6 +108,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Bold": "粗体",
         "Italic": "斜体",
         "Inline Code": "行内代码",
+        "Code": "代码",
+        "Code Block": "代码块",
         "Link": "链接",
         "Heading 1": "一级标题",
         "Heading 2": "二级标题",

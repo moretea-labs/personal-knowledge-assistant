@@ -9,6 +9,7 @@ enum MarkdownEditCommand {
     case bold
     case italic
     case inlineCode
+    case codeBlock
     case link
     case heading(Int)
     case bullet
@@ -59,6 +60,7 @@ enum MarkdownEditing {
         case .bold: return toggleEmphasis(text, range: range, delimiterLength: 2)
         case .italic: return toggleEmphasis(text, range: range, delimiterLength: 1)
         case .inlineCode: return toggleInlineCode(text, range: range)
+        case .codeBlock: return insertCodeBlock(text, range: range)
         case .link:
             let selected = ns.substring(with: range)
             let label = escapedLinkLabel(selected)
@@ -80,12 +82,7 @@ enum MarkdownEditing {
             let table = "| Column 1 | Column 2 |\n| --- | --- |\n| Cell | Cell |"
             let before = ns.substring(to: range.location)
             let after = ns.substring(from: NSMaxRange(range))
-            let leading = before.isEmpty || before.hasSuffix("\n\n")
-                ? ""
-                : (before.hasSuffix("\n") ? "\n" : "\n\n")
-            let trailing = after.isEmpty || after.hasPrefix("\n\n")
-                ? ""
-                : (after.hasPrefix("\n") ? "\n" : "\n\n")
+            let (leading, trailing) = blockSeparators(before: before, after: after)
             let insertion = leading + table + trailing
             let updated = ns.replacingCharacters(in: range, with: insertion)
             let header = (table as NSString).range(of: "Column 1")
@@ -107,6 +104,42 @@ enum MarkdownEditing {
         let updated = ns.replacingCharacters(in: range, with: value)
         let cursor = location + (value as NSString).length
         return .init(text: updated, selection: NSRange(location: cursor, length: 0))
+    }
+
+    private static func insertCodeBlock(_ text: String, range: NSRange) -> MarkdownEditResult {
+        let ns = text as NSString
+        let selected = ns.substring(with: range)
+        let before = ns.substring(to: range.location)
+        let after = ns.substring(from: NSMaxRange(range))
+        let (leading, trailing) = blockSeparators(before: before, after: after)
+        // A fence longer than every backtick run in the selection cannot close
+        // early, even when the selected code already contains fenced examples.
+        let delimiter = String(
+            repeating: "`",
+            count: max(3, inlineCodeDelimiter(for: selected).count)
+        )
+        let closingLineBreak = selected.hasSuffix("\n") || selected.hasSuffix("\r")
+            ? ""
+            : "\n"
+        let block = delimiter + "\n" + selected + closingLineBreak + delimiter
+        let insertion = leading + block + trailing
+        let updated = ns.replacingCharacters(in: range, with: insertion)
+        let contentStart = range.location + (leading as NSString).length
+            + (delimiter as NSString).length + 1
+        return .init(
+            text: updated,
+            selection: NSRange(location: contentStart, length: (selected as NSString).length)
+        )
+    }
+
+    private static func blockSeparators(before: String, after: String) -> (String, String) {
+        let leading = before.isEmpty || before.hasSuffix("\n\n")
+            ? ""
+            : (before.hasSuffix("\n") ? "\n" : "\n\n")
+        let trailing = after.isEmpty || after.hasPrefix("\n\n")
+            ? ""
+            : (after.hasPrefix("\n") ? "\n" : "\n\n")
+        return (leading, trailing)
     }
 
     private enum ListLineKind {
