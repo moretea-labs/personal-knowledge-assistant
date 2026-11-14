@@ -873,3 +873,60 @@ extension PDFSourceAnchorControllerTests {
         ))
     }
 }
+
+
+extension PDFSourceAnchorControllerTests {
+    @MainActor
+    func testRotatedPageWithOffsetCropBoxRestoresExactPDFSelectionAnchor() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let textView = NSTextView(frame: bounds)
+        textView.string = "Crop rotated evidence\nSecond line"
+        let generated = try XCTUnwrap(
+            PDFDocument(data: textView.dataWithPDF(inside: bounds))
+        )
+        let generatedPage = try XCTUnwrap(generated.page(at: 0))
+        generatedPage.setBounds(NSRect(x: 0, y: 760, width: 612, height: 32), for: .cropBox)
+        generatedPage.rotation = 90
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Rotated-Crop-Anchor-\(UUID().uuidString).pdf")
+        XCTAssertTrue(generated.write(to: url))
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let sourceDocument = try XCTUnwrap(PDFDocument(url: url))
+        let sourcePage = try XCTUnwrap(sourceDocument.page(at: 0))
+        XCTAssertEqual(sourcePage.rotation, 90)
+        XCTAssertEqual(sourcePage.bounds(for: .cropBox).origin.y, 760, accuracy: 0.01)
+
+        let sourceView = PDFView(frame: bounds)
+        let sourceController = PDFReaderController()
+        let sourceSelection = try XCTUnwrap(
+            sourceDocument.findString("Crop rotated evidence", withOptions: []).first
+        )
+        sourceController.attach(
+            view: sourceView, document: sourceDocument, url: url,
+            requestedPage: nil, requestedAnchor: nil
+        )
+        sourceView.currentSelection = sourceSelection
+        let anchor = try XCTUnwrap(sourceController.selectedSourceAnchor())
+        XCTAssertEqual(anchor.page, 1)
+        XCTAssertEqual(anchor.normalizedRects.count, 1)
+
+        let restoredDocument = try XCTUnwrap(PDFDocument(url: url))
+        let restoredView = PDFView(frame: bounds)
+        let restoredController = PDFReaderController()
+        defer {
+            sourceController.detach(view: sourceView)
+            restoredController.detach(view: restoredView)
+        }
+        restoredController.attach(
+            view: restoredView, document: restoredDocument, url: url,
+            requestedPage: nil, requestedAnchor: anchor
+        )
+
+        XCTAssertFalse(restoredController.invalidRequestedSelection)
+        let restoredText = try XCTUnwrap(restoredView.currentSelection?.string)
+        XCTAssertEqual(restoredText, "Crop rotated evidence")
+        XCTAssertTrue(anchor.matches(text: restoredText))
+    }
+}
