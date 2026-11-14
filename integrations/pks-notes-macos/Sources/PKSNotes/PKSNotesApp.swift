@@ -3885,12 +3885,12 @@ struct NotesWindow: View {
                     Button(language.text("Heading 2")) { applyMarkdownFormatting("h2") }
                     Button(language.text("Heading 3")) { applyMarkdownFormatting("h3") }
                 } label: {
-                    Label(language.text("Heading"), systemImage: "textformat.size")
-                        .font(.system(size: 11, weight: .medium))
+                    toolbarSymbol("textformat.size")
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .help(language.text("Heading"))
+                .accessibilityLabel(language.text("Heading"))
                 .accessibilityIdentifier("pks-markdown-format-heading")
 
                 markdownCommandButton("bold", title: "Bold", symbol: "bold",
@@ -3903,12 +3903,12 @@ struct NotesWindow: View {
                     Button(language.text("Numbered List")) { applyMarkdownFormatting("ordered") }
                     Button(language.text("Task")) { applyMarkdownFormatting("task") }
                 } label: {
-                    Label(language.text("List"), systemImage: "list.bullet")
-                        .font(.system(size: 11, weight: .medium))
+                    toolbarSymbol("list.bullet")
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .help(language.text("List"))
+                .accessibilityLabel(language.text("List"))
                 .accessibilityIdentifier("pks-markdown-format-list")
 
                 markdownCommandButton("quote", title: "Quote", symbol: "text.quote",
@@ -3921,8 +3921,7 @@ struct NotesWindow: View {
                     Button(language.text("Code Block")) { applyMarkdownFormatting("codeBlock") }
                         .accessibilityIdentifier("pks-markdown-format-code-block")
                 } label: {
-                    Label(language.text("Code"), systemImage: "chevron.left.forwardslash.chevron.right")
-                        .font(.system(size: 11, weight: .medium))
+                    toolbarSymbol("chevron.left.forwardslash.chevron.right")
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
@@ -3942,12 +3941,12 @@ struct NotesWindow: View {
                     }
                     pdfCitationInsertMenuSection
                 } label: {
-                    Label(language.text("Insert"), systemImage: "plus")
-                        .font(.system(size: 11, weight: .medium))
+                    toolbarSymbol("plus")
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .help(language.text("Insert"))
+                .accessibilityLabel(language.text("Insert"))
                 .accessibilityIdentifier("pks-markdown-format-insert")
 
                 Spacer(minLength: 0)
@@ -3967,11 +3966,11 @@ struct NotesWindow: View {
 
     private var compactMarkdownFormattingToolbar: some View {
         HStack(spacing: 8) {
-            markdownCompactCommandButton(
+            markdownCommandButton(
                 "bold", title: "Bold", symbol: "bold",
                 identifier: "pks-markdown-format-bold"
             )
-            markdownCompactCommandButton(
+            markdownCommandButton(
                 "italic", title: "Italic", symbol: "italic",
                 identifier: "pks-markdown-format-italic"
             )
@@ -3989,8 +3988,7 @@ struct NotesWindow: View {
                 Button(language.text("Inline Code")) { applyMarkdownFormatting("code") }
                 Button(language.text("Code Block")) { applyMarkdownFormatting("codeBlock") }
             } label: {
-                Image(systemName: "textformat")
-                    .frame(width: 24, height: 24)
+                toolbarSymbol("textformat")
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -4010,8 +4008,7 @@ struct NotesWindow: View {
                 }
                 pdfCitationInsertMenuSection
             } label: {
-                Image(systemName: "plus")
-                    .frame(width: 24, height: 24)
+                toolbarSymbol("plus")
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -4023,24 +4020,6 @@ struct NotesWindow: View {
         }
     }
 
-    private func markdownCompactCommandButton(
-        _ command: String,
-        title: String,
-        symbol: String,
-        identifier: String
-    ) -> some View {
-        Button {
-            applyMarkdownFormatting(command)
-        } label: {
-            Image(systemName: symbol)
-                .frame(width: 24, height: 24)
-        }
-        .buttonStyle(.plain)
-        .help(language.text(title))
-        .accessibilityLabel(language.text(title))
-        .accessibilityIdentifier(identifier)
-    }
-
     private func markdownCommandButton(
         _ command: String,
         title: String,
@@ -4050,8 +4029,7 @@ struct NotesWindow: View {
         Button {
             applyMarkdownFormatting(command)
         } label: {
-            Label(language.text(title), systemImage: symbol)
-                .font(.system(size: 11, weight: .medium))
+            toolbarSymbol(symbol)
         }
         .buttonStyle(.plain)
         .help(language.text(title))
