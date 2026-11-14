@@ -739,7 +739,10 @@ final class PDFReaderController: ObservableObject {
         guard let view = pdfView,
               let document,
               let page = preferredPage ?? view.currentPage else { return }
-        let pageIndex = max(0, document.index(for: page))
+        let pageIndex = document.index(for: page)
+        // A page from a view that was just rebound belongs to another PDF.
+        // PDFKit returns NSNotFound, which must never become a stored page index.
+        guard pageIndex >= 0, pageIndex < document.pageCount else { return }
         if currentPageIndex != pageIndex {
             currentPageIndex = pageIndex
         }

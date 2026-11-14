@@ -496,6 +496,43 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testStalePDFViewDocumentCannotOverwriteCurrentReadingPosition() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let activeDocument = PDFDocument()
+        for text in ["First page", "Second page"] {
+            let textView = NSTextView(frame: bounds)
+            textView.string = text
+            let pageDocument = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: bounds)))
+            activeDocument.insert(try XCTUnwrap(pageDocument.page(at: 0)), at: activeDocument.pageCount)
+        }
+        let unrelatedText = NSTextView(frame: bounds)
+        unrelatedText.string = "Different PDF"
+        let unrelatedDocument = try XCTUnwrap(PDFDocument(data: unrelatedText.dataWithPDF(inside: bounds)))
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Stale-Page-\(UUID().uuidString).pdf")
+        defer { removeStoredReadingPosition(for: url) }
+
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        controller.attach(view: view, document: activeDocument, url: url,
+                          requestedPage: 2, requestedAnchor: nil)
+        XCTAssertEqual(controller.currentPageIndex, 1)
+        XCTAssertEqual(PDFReadingPositionStore.pageIndex(for: url, pageCount: 2), 1)
+
+        // A delayed view update must never write another PDF's page under this URL.
+        view.document = unrelatedDocument
+        let foreignPage = try XCTUnwrap(unrelatedDocument.page(at: 0))
+        view.go(to: foreignPage)
+        XCTAssertTrue(view.currentPage === foreignPage)
+        XCTAssertFalse((0..<activeDocument.pageCount).contains(activeDocument.index(for: foreignPage)))
+        controller.goNext()
+        XCTAssertEqual(controller.currentPageIndex, 1)
+        XCTAssertEqual(PDFReadingPositionStore.pageIndex(for: url, pageCount: 2), 1)
+        controller.detach(view: view)
+        XCTAssertEqual(PDFReadingPositionStore.pageIndex(for: url, pageCount: 2), 1)
+    }
+
+    @MainActor
     func testRepeatedPDFSelectionAnchorReturnsToPageTwoAfterPageOne() throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let firstText = NSTextView(frame: bounds)
