@@ -351,8 +351,9 @@ final class GlobalSearchResults: ObservableObject {
             guard let self else { return }
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard !Task.isCancelled else { return }
-            // System Spotlight handles file/folder names without a bundled search daemon.
-            // PKS remains the authority for document content, chunks and semantic results.
+            // Spotlight keeps app/file discovery available without a bundled search daemon.
+            // Local workspace Markdown uses the existing bounded reader; PKS adds indexed
+            // library chunks and semantic matches without becoming a prerequisite.
             self.spotlight.start(text) { [weak self] hits in
                 guard let self, self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 self.spotlightHits = hits
@@ -366,7 +367,7 @@ final class GlobalSearchResults: ObservableObject {
             }
             if let notesModel = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel {
                 self.workspaceSearchTask = Task { [weak self] in
-                    let hits = await notesModel.searchWorkspaceNames(text)
+                    let hits = await notesModel.searchWorkspace(text)
                     guard let self, !Task.isCancelled,
                           self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                     self.workspaceHits = hits
@@ -431,8 +432,8 @@ final class GlobalSearchResults: ObservableObject {
                 }
             } catch {
                 guard !Task.isCancelled, self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
-                // Ordinary filename search remains available through Spotlight.
-                self.statusMessage = "文档内容搜索暂不可用"
+                // Workspace and Spotlight results remain available without the PKS library.
+                self.statusMessage = AppLanguage.current.text("Library search unavailable")
             }
             self.loading = false
             self.searchTask = nil
@@ -706,7 +707,7 @@ private struct GlobalSearchPalette: View {
             }
             if let status = results.statusMessage {
                 Divider()
-                Text(AppLanguage.current.resolved == .simplifiedChinese ? status : "File search is unavailable")
+                Text(status)
                     .font(.system(size: 12)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 22).padding(.vertical, 10)
@@ -730,7 +731,7 @@ struct GlobalSearchSettingsView: View {
 
     var body: some View {
         Form {
-            Toggle(chinese ? "搜索 PKS 已索引文件夹" : "Search PKS indexed folders", isOn: $indexedFoldersEnabled)
+            Toggle(chinese ? "搜索工作区与 PKS 索引内容" : "Search workspace and PKS indexed content", isOn: $indexedFoldersEnabled)
             Toggle(chinese ? "启用全局快捷键" : "Enable global shortcut", isOn: $enabled)
             Picker(chinese ? "全局快捷键" : "Global shortcut", selection: $shortcut) {
                 ForEach(GlobalSearchShortcut.allCases) { choice in

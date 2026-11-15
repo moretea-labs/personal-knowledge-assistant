@@ -88,7 +88,7 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
-    func testGlobalSearchWorkspaceNameLookupFindsPinyinInActiveWorkspace() async throws {
+    func testGlobalSearchWorkspaceLookupFindsPinyinInActiveWorkspace() async throws {
         let defaults = UserDefaults.standard
         let previousWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
         let previousBookmark = defaults.object(forKey: "PKSNotesWorkspaceBookmark")
@@ -108,11 +108,38 @@ final class PKSNotesTests: XCTestCase {
 
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(root))
-        let hits = await model.searchWorkspaceNames("ye de gang qin qu")
+        let hits = await model.searchWorkspace("ye de gang qin qu")
 
         XCTAssertTrue(model.globalFileIndexReady)
         XCTAssertEqual(hits.map(\.uri), [note.path])
         XCTAssertNil(hits.first?.snippet)
+    }
+
+    @MainActor
+    func testGlobalSearchWorkspaceLookupFindsLocalMarkdownBodyWithoutPKS() async throws {
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
+        let previousBookmark = defaults.object(forKey: "PKSNotesWorkspaceBookmark")
+        defer {
+            if let previousWorkspace { defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousBookmark { defaults.set(previousBookmark, forKey: "PKSNotesWorkspaceBookmark") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = root.appendingPathComponent("Study notes.md")
+        try "# Study notes\nA body-only needle is stored in this paragraph.".write(
+            to: note, atomically: true, encoding: .utf8
+        )
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        let hits = await model.searchWorkspace("body-only needle")
+
+        XCTAssertEqual(hits.map(\.uri), [note.path])
+        XCTAssertTrue(try XCTUnwrap(hits.first?.snippet).contains("body-only needle"))
     }
 
     @MainActor
@@ -143,10 +170,10 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertFalse(model.loadingFiles)
         let clock = ContinuousClock()
         let indexStarted = clock.now
-        _ = await model.searchWorkspaceNames("no-match")
+        _ = await model.searchWorkspace("no-match")
         let indexElapsed = indexStarted.duration(to: clock.now)
         let searchStarted = clock.now
-        let hits = await model.searchWorkspaceNames("ye de gang qin qu")
+        let hits = await model.searchWorkspace("ye de gang qin qu")
         let searchElapsed = searchStarted.duration(to: clock.now)
 
         XCTAssertTrue(model.globalFileIndexReady)
