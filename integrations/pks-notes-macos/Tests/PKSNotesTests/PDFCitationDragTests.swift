@@ -4,6 +4,40 @@ import XCTest
 @testable import PKSNotes
 
 final class PDFCitationDragTests: XCTestCase {
+    func testWorkspaceFileDropsCreateCanonicalLinksWithoutImportingExternalFiles() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-File-Drop-\(UUID().uuidString)", isDirectory: true)
+        let root = base.appendingPathComponent("Workspace", isDirectory: true)
+        let outside = base.appendingPathComponent("Outside.pdf")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let note = root.appendingPathComponent("Study (v2).md")
+        let pdf = root.appendingPathComponent("Reading (v2).pdf")
+        let folder = root.appendingPathComponent("Folder", isDirectory: true)
+        try "Some text".write(to: note, atomically: true, encoding: .utf8)
+        try Data().write(to: pdf)
+        try Data().write(to: outside)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let noteLink = try XCTUnwrap(WorkspaceFiles.markdownLinkForDrop(for: note, in: root))
+        let pdfLink = try XCTUnwrap(WorkspaceFiles.markdownLinkForDrop(for: pdf, in: root))
+        XCTAssertEqual(noteLink, "[Study (v2)](/Study%20%28v2%29)")
+        XCTAssertEqual(pdfLink, "[Reading (v2).pdf](/Reading%20%28v2%29.pdf)")
+        XCTAssertEqual(
+            MindMapOutline.linkOccurrences(in: noteLink).first?.link.target,
+            "/Study%20%28v2%29"
+        )
+        XCTAssertNil(WorkspaceFiles.markdownLinkForDrop(for: folder, in: root))
+        XCTAssertNil(WorkspaceFiles.markdownLinkForDrop(for: outside, in: root))
+        XCTAssertNil(WorkspaceFiles.markdownLinkForDrop(
+            for: root.appendingPathComponent("Missing.md"), in: root
+        ))
+        XCTAssertNil(WorkspaceFiles.markdownLinkForDrop(
+            for: URL(string: "https://example.com/test.md")!, in: root
+        ))
+    }
+
     func testPDFReferencesEncodeLiteralPercentInWorkspaceFilenames() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("Leafspan-PDF-Percent-\(UUID().uuidString)", isDirectory: true)
@@ -533,6 +567,20 @@ final class PDFCitationDragTests: XCTestCase {
         XCTAssertEqual(textView.string, expected)
 
         let undoManager = try XCTUnwrap(textView.undoManager)
+        XCTAssertTrue(undoManager.canUndo)
+        undoManager.undo()
+        XCTAssertEqual(textView.string, "Before After")
+
+        let fileLink = "[Study](/Study)"
+        XCTAssertTrue(target.insert(
+            fileLink, currentNote: note,
+            currentDraftRevision: 7, canEdit: true, asFileLink: true
+        ))
+        let expectedFileLink = ("Before After" as NSString).replacingCharacters(
+            in: NSRange(location: expectedIndex, length: 0),
+            with: fileLink
+        )
+        XCTAssertEqual(textView.string, expectedFileLink)
         XCTAssertTrue(undoManager.canUndo)
         undoManager.undo()
         XCTAssertEqual(textView.string, "Before After")

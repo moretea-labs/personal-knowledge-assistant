@@ -514,7 +514,8 @@ final class PDFCitationDropTarget {
         _ citation: String,
         currentNote: URL?,
         currentDraftRevision: UInt64,
-        canEdit: Bool
+        canEdit: Bool,
+        asFileLink: Bool = false
     ) -> Bool {
         guard canEdit,
               currentNote == note,
@@ -524,7 +525,12 @@ final class PDFCitationDropTarget {
               textView.window === window,
               window.makeFirstResponder(textView) else { return false }
         let targetIndex = Self.citationInsertionOffset(in: textView.string, at: insertionIndex)
-        let formatted = Self.citationForInsertion(citation, in: textView.string, at: targetIndex)
+        // Ordinary file drops insert at the pointer. A drop on a node title
+        // becomes a body link rather than silently rewriting the heading.
+        let linkOnTitle = asFileLink && targetIndex != insertionIndex
+        let payload = linkOnTitle ? "\n\n\(citation)\n\n" : citation
+        let formatted = asFileLink && !linkOnTitle
+            ? payload : Self.citationForInsertion(payload, in: textView.string, at: targetIndex)
         return MarkdownNativeCommand.insertText(formatted, at: targetIndex, in: textView)
     }
 }
@@ -2990,12 +2996,15 @@ struct NotesWindow: View {
     }
 
     @MainActor
-    private func handlePDFCitationDrop(_ providers: [NSItemProvider]) -> Bool {
+    private func handleMarkdownDrop(_ providers: [NSItemProvider]) -> Bool {
         let dropScreenPoint = NSEvent.mouseLocation
         let typeIdentifier = PDFCitationPasteboard.type.rawValue
-        guard let provider = providers.first(where: {
+        let citationProvider = providers.first {
             $0.hasItemConformingToTypeIdentifier(typeIdentifier)
-        }),
+        }
+        let fileProvider = citationProvider == nil
+            ? providers.first { $0.canLoadObject(ofClass: NSURL.self) } : nil
+        guard citationProvider != nil || fileProvider != nil,
               let note = model.selected,
               model.externalBody == nil,
               !model.loadingNote,
@@ -3014,23 +3023,41 @@ struct NotesWindow: View {
                 textView: textView
               ) else { return false }
 
-        // Snapshot the actual editor, note revision and insertion caret before
-        // asynchronous provider loading. Never retarget a late payload to a
-        // different note or insert at a stale cursor position.
-        provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
-            guard let citation = PDFCitationPasteboard.markdown(from: item) else { return }
-
-            Task { @MainActor in
-                let canEdit = model.externalBody == nil
-                    && !model.loadingNote
-                    && !showingMindMap
-                    && mode != .read
-                _ = target.insert(
-                    citation,
-                    currentNote: model.selected,
-                    currentDraftRevision: model.draftRevision,
-                    canEdit: canEdit
-                )
+        // Snapshot editor, note revision and insertion caret before asynchronous
+        // provider loading. Never insert into a different note or stale draft.
+        if let citationProvider {
+            citationProvider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
+                guard let citation = PDFCitationPasteboard.markdown(from: item) else { return }
+                Task { @MainActor in
+                    let canEdit = model.externalBody == nil
+                        && !model.loadingNote
+                        && !showingMindMap
+                        && mode != .read
+                    _ = target.insert(
+                        citation, currentNote: model.selected,
+                        currentDraftRevision: model.draftRevision, canEdit: canEdit
+                    )
+                }
+            }
+        } else if let fileProvider {
+            fileProvider.loadObject(ofClass: NSURL.self) { item, _ in
+                guard let file = item as? URL else { return }
+                Task { @MainActor in
+                    guard let root = model.root,
+                          let link = WorkspaceFiles.markdownLinkForDrop(for: file, in: root) else {
+                        model.message = language.text("Link target not available in this workspace.")
+                        return
+                    }
+                    let canEdit = model.externalBody == nil
+                        && !model.loadingNote
+                        && !showingMindMap
+                        && mode != .read
+                    _ = target.insert(
+                        link, currentNote: model.selected,
+                        currentDraftRevision: model.draftRevision, canEdit: canEdit,
+                        asFileLink: true
+                    )
+                }
             }
         }
         return true
@@ -3838,10 +3865,13 @@ struct NotesWindow: View {
                 // The old draft remains intact until an off-main file load succeeds.
                 .disabled(model.loadingNote)
                 .onDrop(
-                    of: [UTType(exportedAs: PDFCitationPasteboard.type.rawValue, conformingTo: .plainText)],
+                    of: [
+                        UTType(exportedAs: PDFCitationPasteboard.type.rawValue, conformingTo: .plainText),
+                        .url, .fileURL
+                    ],
                     isTargeted: nil
                 ) { providers, _ in
-                    handlePDFCitationDrop(providers)
+                    handleMarkdownDrop(providers)
                 }
                 .accessibilityIdentifier("pks-markdown-editor")
                 .onAppear {

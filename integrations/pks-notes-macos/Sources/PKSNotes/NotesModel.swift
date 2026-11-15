@@ -390,6 +390,18 @@ enum WorkspaceFiles {
         return "/" + encoded
     }
 
+    /// File-tree drops use the same canonical workspace paths as existing links.
+    static func markdownLinkForDrop(for file: URL, in root: URL) -> String? {
+        guard file.isFileURL else { return nil }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue,
+              let destination = canonicalLinkTarget(for: file, in: root) else { return nil }
+        let markdownNote = ["md", "markdown"].contains(file.pathExtension.lowercased())
+        let title = markdownNote ? file.deletingPathExtension().lastPathComponent : file.lastPathComponent
+        return "[\(MindMapOutline.escapeMarkdownLinkLabel(title))](\(destination))"
+    }
+
     static func canonicalWikiTarget(
         for target: URL,
         in root: URL,
