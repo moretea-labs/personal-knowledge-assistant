@@ -839,6 +839,62 @@ final class PDFCitationDragTests: XCTestCase {
 
 extension PDFCitationDragTests {
     @MainActor
+    func testPDFCaptureDuringPendingNoteSwitchLeavesBothNotesUnchanged() async throws {
+        let defaults = UserDefaults.standard
+        let priorWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
+        let priorBookmark = defaults.object(forKey: "PKSNotesWorkspaceBookmark")
+        let priorNote = defaults.object(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let priorWorkspace { defaults.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let priorBookmark { defaults.set(priorBookmark, forKey: "PKSNotesWorkspaceBookmark") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+            if let priorNote { defaults.set(priorNote, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(
+            "Leafspan-Capture-Switch-\(UUID().uuidString)", isDirectory: true
+        )
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        defaults.removeObject(forKey: "PKSNotesWorkspace")
+        defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark")
+        defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown")
+
+        let oldNote = root.appendingPathComponent("Old.md")
+        let nextNote = root.appendingPathComponent("Next.md")
+        let pdf = root.appendingPathComponent("Source.pdf")
+        try "# Old\n\nKeep existing evidence.\n".write(to: oldNote, atomically: true, encoding: .utf8)
+        try "# Next\n\nKeep next note.\n".write(to: nextNote, atomically: true, encoding: .utf8)
+        try Data("%PDF-1.4\n%%EOF".utf8).write(to: pdf)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(oldNote)
+        for _ in 0..<400 where model.loadingNote {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.selected, oldNote.standardizedFileURL)
+        let priorDraft = model.draft
+
+        model.openNote(nextNote)
+        XCTAssertTrue(model.loadingNote)
+        let saved = await model.appendPDFReference(pdf: pdf, page: 1, to: oldNote)
+        XCTAssertFalse(saved, "A stale selected-note capture cannot be saved while navigation is pending")
+        XCTAssertEqual(model.draft, priorDraft, "A rejected capture must not alter the current editor")
+        XCTAssertEqual(try String(contentsOf: oldNote, encoding: .utf8), priorDraft)
+
+        for _ in 0..<400 where model.loadingNote {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.selected, nextNote.standardizedFileURL)
+        XCTAssertEqual(model.draft, "# Next\n\nKeep next note.\n")
+        XCTAssertEqual(try String(contentsOf: nextNote, encoding: .utf8), model.draft)
+    }
+
+    @MainActor
     func testAppendPDFReferencePersistsToActiveAndOtherNotesWithoutChangingActiveDraft() async throws {
         let defaults = UserDefaults.standard
         let previousWorkspace = defaults.object(forKey: "PKSNotesWorkspace")

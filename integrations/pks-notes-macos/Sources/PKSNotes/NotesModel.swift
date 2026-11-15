@@ -2299,6 +2299,11 @@ final class NotesModel: ObservableObject {
         }
 
         if selected?.standardizedFileURL == note.standardizedFileURL {
+            guard !loadingNote, requestedNote == nil else {
+                message = AppLanguage.current.text("Opening note…")
+                return false
+            }
+
             draft += "\n\n\(snippet)\n"
             save()
             guard !isDirty else { return false }
@@ -2325,6 +2330,12 @@ final class NotesModel: ObservableObject {
         guard self.root?.standardizedFileURL == root.standardizedFileURL,
               WorkspaceFiles.contains(note, in: root) else {
             message = AppLanguage.current.text("The original file is no longer available.")
+            return false
+        }
+        // A background capture target may become the active editor while
+        // File Provider hydration runs. Never bypass that editor's unsaved draft.
+        guard selected?.standardizedFileURL != note.standardizedFileURL else {
+            message = AppLanguage.current.text("Could not add PDF page to note.")
             return false
         }
         var hydratedInfo = Darwin.stat()
