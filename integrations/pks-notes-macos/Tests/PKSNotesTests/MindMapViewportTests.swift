@@ -443,6 +443,47 @@ final class MindMapViewportTests: XCTestCase {
         )
     }
 
+    func testSingleTallRootBranchCollapsesItsSubtreeWithoutSiblingSpread() throws {
+        let nodes = [
+            MindMapNode(id: 0, depth: 0, title: "Root"),
+            MindMapNode(id: 1, depth: 1, title: "Only branch")
+        ] + (2..<102).map { MindMapNode(id: $0, depth: 2, title: "Detail \($0)") }
+        let viewport = CGSize(width: 1000, height: 680)
+        let expanded = MindMapSpatialLayout.layout(nodes)
+        let root = try XCTUnwrap(expanded.placements.first { $0.id == 0 })
+        let branch = try XCTUnwrap(expanded.placements.first { $0.id == 1 })
+        XCTAssertLessThan(root.size.height, viewport.height * 0.80)
+        XCTAssertLessThan(branch.size.height, viewport.height * 0.80)
+        XCTAssertGreaterThan(expanded.size.height, viewport.height * 2)
+
+        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
+            nodes: nodes, layout: expanded, viewport: viewport
+        )
+        XCTAssertEqual(collapsed, Set([1]))
+
+        var hiddenBelow: Int?
+        let exposed = nodes.filter { node in
+            if let depth = hiddenBelow {
+                if node.depth > depth { return false }
+                hiddenBelow = nil
+            }
+            if collapsed.contains(node.id) { hiddenBelow = node.depth }
+            return true
+        }
+        XCTAssertEqual(exposed.map(\.id), [0, 1])
+        let overview = MindMapSpatialLayout.layout(exposed)
+        let overviewRoot = try XCTUnwrap(overview.placements.first { $0.parentID == nil })
+        let offset = MindMapViewportGeometry.initialRootOffset(
+            root: overviewRoot.center, mapSize: overview.size, viewport: viewport
+        )
+        XCTAssertEqual(
+            MindMapViewportGeometry.visibleNodeIDs(
+                in: overview, viewport: viewport, offset: offset, zoom: 1, overscan: 0
+            ),
+            Set([0, 1])
+        )
+    }
+
     func testCommittedLargeOutlineFixtureShowsFirstLevelNodesOnInitialViewport() throws {
         let fixture = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

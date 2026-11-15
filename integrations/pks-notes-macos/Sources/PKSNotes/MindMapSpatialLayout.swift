@@ -353,15 +353,43 @@ enum MindMapSpatialLayout {
         nodes: [MindMapNode], layout: MindMapLayoutSnapshot, viewport: CGSize
     ) -> Set<Int> {
         guard viewport.height > 0,
-              let root = layout.placements.first(where: { $0.parentID == nil }) else { return [] }
+              let root = layout.placements.first(where: { $0.parentID == nil }),
+              let rootIndex = nodes.firstIndex(where: { $0.id == root.id }) else { return [] }
         let branches = layout.placements.filter { $0.parentID == root.id }
         guard !branches.isEmpty else { return [] }
+        let expandableBranches = branches.filter { layout.parentIDs.contains($0.id) }
+        let threshold = viewport.height * 0.80
         let top = branches.map { $0.center.y - $0.size.height / 2 }.min() ?? 0
         let bottom = branches.map { $0.center.y + $0.size.height / 2 }.max() ?? 0
-        guard bottom - top > viewport.height * 0.80 else { return [] }
-        // A single nearby branch previously prevented *all* initial collapsing,
-        // leaving the other branches far outside the visible canvas.
-        return Set(branches.filter { layout.parentIDs.contains($0.id) }.map(\.id))
+        // When sibling branches are spread across a tall canvas, keep the
+        // existing compact overview behavior and collapse each expandable branch.
+        if bottom - top > threshold {
+            return Set(expandableBranches.map(\.id))
+        }
+
+        // A single deep branch can also create an enormous canvas while its
+        // first-level card stays beside the root. Measure each subtree separately.
+        let placementsByID = Dictionary(uniqueKeysWithValues: layout.placements.map { ($0.id, $0) })
+        var currentBranchID: Int?
+        var subtreeBounds: [Int: ClosedRange<CGFloat>] = [:]
+        for node in nodes.dropFirst(rootIndex + 1) {
+            if node.depth == 0 { break }
+            if node.depth == 1 { currentBranchID = node.id }
+            guard let branchID = currentBranchID,
+                  let placement = placementsByID[node.id] else { continue }
+            let nodeTop = placement.center.y - placement.size.height / 2
+            let nodeBottom = placement.center.y + placement.size.height / 2
+            if let bounds = subtreeBounds[branchID] {
+                subtreeBounds[branchID] = min(bounds.lowerBound, nodeTop)...max(bounds.upperBound, nodeBottom)
+            } else {
+                subtreeBounds[branchID] = nodeTop...nodeBottom
+            }
+        }
+        return Set(expandableBranches.compactMap { branch in
+            guard let bounds = subtreeBounds[branch.id],
+                  bounds.upperBound - bounds.lowerBound > threshold else { return nil }
+            return branch.id
+        })
     }
 
     static func layout(
