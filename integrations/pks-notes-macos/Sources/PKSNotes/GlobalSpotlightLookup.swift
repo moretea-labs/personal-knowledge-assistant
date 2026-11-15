@@ -11,7 +11,7 @@ final class GlobalSpotlightLookup {
     func start(_ text: String, completion: @escaping ([GlobalSearchItem]) -> Void) {
         cancel()
         let term = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard term.count >= 2 else { return }
+        guard GlobalSearchRanker.shouldStartDocumentSearch(for: term) else { return }
 
         let metadata = NSMetadataQuery()
         // IndexedLocalComputer omits some iCloud Drive files even when Finder

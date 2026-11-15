@@ -70,6 +70,23 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertFalse(GlobalSearchRanker.shouldStartDocumentSearch(for: " "))
     }
 
+    func testSingleHanSpotlightSearchUsesFilenameAndPathOnly() {
+        let predicate = GlobalSpotlightLookup.searchPredicate(for: "肾")
+        XCTAssertTrue(predicate.evaluate(with: [
+            NSMetadataItemFSNameKey: "肾宝宝.md",
+            NSMetadataItemPathKey: "/Users/test/肾宝宝.md"
+        ]))
+        XCTAssertTrue(predicate.evaluate(with: [
+            NSMetadataItemFSNameKey: "Study.md",
+            NSMetadataItemPathKey: "/Users/test/肾宝宝/Study.md"
+        ]))
+        XCTAssertFalse(predicate.evaluate(with: [
+            NSMetadataItemFSNameKey: "Study.md",
+            NSMetadataItemPathKey: "/Users/test/Study.md",
+            "kMDItemTextContent": "肾宝宝"
+        ]))
+    }
+
     func testSearchFoldIsCaseAndDiacriticInsensitive() {
         let apps = [
             GlobalSearchItem.application(URL(fileURLWithPath: "/Applications/Cafe.app"), title: "Café"),
