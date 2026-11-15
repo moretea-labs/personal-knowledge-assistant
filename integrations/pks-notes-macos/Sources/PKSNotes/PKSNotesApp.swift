@@ -1185,7 +1185,16 @@ struct NotesWindow: View {
             showingMindMapSourcePane = false
             showingOutline = false
             outlineHeadings = []
-            compactStudyShowsStudyPane = showingMindMap
+            // An explicit PDF page/selection link must reveal the PDF even
+            // when the note/map pane was the last compact surface.
+            compactStudyShowsStudyPane = showingMindMap && model.previewPDFPage == nil
+        }
+        .onChange(of: model.previewPDFNavigationSequence) { _, _ in
+            if model.previewPDF != nil {
+                // A link to the already-open PDF does not change previewPDF,
+                // but it must still make the requested source visible.
+                compactStudyShowsStudyPane = false
+            }
         }
         .onChange(of: model.loadingNote) { _, loading in
             if !loading, mode != .read {
