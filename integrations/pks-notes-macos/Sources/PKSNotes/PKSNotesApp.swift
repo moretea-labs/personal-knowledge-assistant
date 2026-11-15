@@ -545,6 +545,20 @@ final class PDFCitationDropTarget {
         ).text
     }
 
+    /// The menu action uses the same structural-node placement as a PDF drag,
+    /// without moving the editor's caret before the native undoable insertion.
+    @discardableResult
+    static func insertAtCaret(_ citation: String, in textView: NSTextView) -> Bool {
+        let selection = textView.selectedRange()
+        guard selection.length == 0,
+              !MindMapOutline.isInsideCode(in: textView.string, at: selection.location) else {
+            return false
+        }
+        let insertionIndex = citationInsertionOffset(in: textView.string, at: selection.location)
+        let formatted = citationForInsertion(citation, in: textView.string, at: insertionIndex)
+        return MarkdownNativeCommand.insertText(formatted, at: insertionIndex, in: textView)
+    }
+
     @discardableResult
     func insert(
         _ citation: String,
@@ -3171,10 +3185,7 @@ struct NotesWindow: View {
             model.message = language.text("Select PDF text and place the note cursor without selecting text.")
             return
         }
-        let formattedCitation = PDFCitationDropTarget.citationForInsertion(
-            citation, in: textView.string, at: textView.selectedRange().location
-        )
-        guard MarkdownNativeCommand.insertAtCaret(formattedCitation, in: textView) else {
+        guard PDFCitationDropTarget.insertAtCaret(citation, in: textView) else {
             model.message = language.text("Select PDF text and place the note cursor without selecting text.")
             return
         }

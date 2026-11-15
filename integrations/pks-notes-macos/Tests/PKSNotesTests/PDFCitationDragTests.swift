@@ -207,6 +207,55 @@ final class PDFCitationDragTests: XCTestCase {
         XCTAssertEqual(textView.string, "Before After")
     }
 
+    @MainActor
+    func testPDFCitationMenuInsertionKeepsHeadingAndListTitlesIntactWithNativeUndo() async throws {
+        let citation = "\n\n[Reading.pdf · p. 1](/Reading.pdf#page=1)\n\n> Important fact\n\n"
+        for (markdown, titleFragment, nodeTitle) in [
+            ("# 😀Root\n## Next\n", "Root", "😀Root"),
+            ("# Root\n- 😀Concept\n- Next\n", "Concept", "😀Concept")
+        ] {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 520, height: 240),
+                styleMask: [], backing: .buffered, defer: true
+            )
+            let editor = NSTextView(frame: window.contentView?.bounds ?? .zero)
+            editor.allowsUndo = true
+            window.contentView = editor
+            XCTAssertTrue(window.makeFirstResponder(editor))
+            editor.string = markdown
+            editor.undoManager?.removeAllActions()
+            let caret = (markdown as NSString).range(of: titleFragment).location + 2
+            editor.setSelectedRange(NSRange(location: caret, length: 0))
+
+            XCTAssertTrue(PDFCitationDropTarget.insertAtCaret(citation, in: editor))
+            let nodes = MindMapOutline.nodes(in: editor.string)
+            let node = try XCTUnwrap(nodes.first(where: { $0.title == nodeTitle }))
+            let links = MindMapOutline.presentations(in: editor.string, nodes: nodes)
+            XCTAssertEqual(links[node.id]?.links.map(\.target), ["/Reading.pdf#page=1"])
+            XCTAssertTrue(editor.string.contains("> Important fact"))
+            XCTAssertEqual(nodes.count, MindMapOutline.nodes(in: markdown).count)
+
+            await Task.yield()
+            let undoManager = try XCTUnwrap(editor.undoManager)
+            XCTAssertTrue(undoManager.canUndo)
+            undoManager.undo()
+            XCTAssertEqual(editor.string, markdown)
+        }
+    }
+
+    @MainActor
+    func testPDFCitationMenuInsertionRejectsSelectedTextAndCode() {
+        let editor = NSTextView()
+        let markdown = "# Root\n`code`\n"
+        editor.string = markdown
+        let codeLocation = (markdown as NSString).range(of: "code").location + 1
+        editor.setSelectedRange(NSRange(location: codeLocation, length: 0))
+        XCTAssertFalse(PDFCitationDropTarget.insertAtCaret("\n\n> Quote\n\n", in: editor))
+        editor.setSelectedRange(NSRange(location: 2, length: 2))
+        XCTAssertFalse(PDFCitationDropTarget.insertAtCaret("\n\n> Quote\n\n", in: editor))
+        XCTAssertEqual(editor.string, markdown)
+    }
+
     func testPDFCitationDropInsideMindMapListKeepsTheGeneratedAnchorMovableWithItsNode() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("Leafspan-PDF-Map-\(UUID().uuidString)", isDirectory: true)
