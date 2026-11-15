@@ -576,6 +576,30 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Reveal selected node in Markdown"), "在 Markdown 中定位所选节点")
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Selected"), "已选择")
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Show in Markdown"), "在 Markdown 中显示")
+        XCTAssertEqual(
+            AppLanguage.simplifiedChinese.text("Could not read the PDF citation. Try dragging the selection again."),
+            "无法读取 PDF 引用，请重新拖动所选内容。"
+        )
+        XCTAssertEqual(
+            AppLanguage.simplifiedChinese.text("Return to the Markdown editor in Edit mode to insert the PDF citation."),
+            "请返回 Markdown 编辑模式，再插入 PDF 引用。"
+        )
+        XCTAssertEqual(
+            AppLanguage.simplifiedChinese.text("The note or editor changed before the citation was inserted. Drag the PDF selection again."),
+            "插入前笔记或编辑器状态已变化，请重新拖动 PDF 选区。"
+        )
+        XCTAssertEqual(
+            AppLanguage.simplifiedChinese.text("Could not read the dropped file. Try dropping it again."),
+            "无法读取拖入的文件，请重试。"
+        )
+        XCTAssertEqual(
+            AppLanguage.simplifiedChinese.text("Return to the Markdown editor in Edit mode to insert the file link."),
+            "请返回 Markdown 编辑模式，再插入文件链接。"
+        )
+        XCTAssertEqual(
+            AppLanguage.simplifiedChinese.text("The note or editor changed before the file link was inserted. Drop the file again."),
+            "插入前笔记或编辑器状态已变化，请重新拖入文件。"
+        )
     }
 
     func testReadingThemeDefaultsAndParsedPreviewCacheIdentity() {

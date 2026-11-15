@@ -3035,21 +3035,46 @@ struct NotesWindow: View {
         // provider loading. Never insert into a different note or stale draft.
         if let citationProvider {
             citationProvider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
-                guard let citation = PDFCitationPasteboard.markdown(from: item) else { return }
+                guard let citation = PDFCitationPasteboard.markdown(from: item) else {
+                    Task { @MainActor in
+                        model.message = language.text(
+                            "Could not read the PDF citation. Try dragging the selection again."
+                        )
+                    }
+                    return
+                }
                 Task { @MainActor in
                     let canEdit = model.externalBody == nil
                         && !model.loadingNote
                         && !showingMindMap
                         && mode != .read
-                    _ = target.insert(
+                    guard canEdit else {
+                        model.message = language.text(
+                            "Return to the Markdown editor in Edit mode to insert the PDF citation."
+                        )
+                        return
+                    }
+                    guard target.insert(
                         citation, currentNote: model.selected,
-                        currentDraftRevision: model.draftRevision, canEdit: canEdit
-                    )
+                        currentDraftRevision: model.draftRevision, canEdit: true
+                    ) else {
+                        model.message = language.text(
+                            "The note or editor changed before the citation was inserted. Drag the PDF selection again."
+                        )
+                        return
+                    }
                 }
             }
         } else if let fileProvider {
             fileProvider.loadObject(ofClass: NSURL.self) { item, _ in
-                guard let file = item as? URL else { return }
+                guard let file = item as? URL else {
+                    Task { @MainActor in
+                        model.message = language.text(
+                            "Could not read the dropped file. Try dropping it again."
+                        )
+                    }
+                    return
+                }
                 Task { @MainActor in
                     guard let root = model.root,
                           let link = WorkspaceFiles.markdownLinkForDrop(for: file, in: root) else {
@@ -3060,11 +3085,22 @@ struct NotesWindow: View {
                         && !model.loadingNote
                         && !showingMindMap
                         && mode != .read
-                    _ = target.insert(
+                    guard canEdit else {
+                        model.message = language.text(
+                            "Return to the Markdown editor in Edit mode to insert the file link."
+                        )
+                        return
+                    }
+                    guard target.insert(
                         link, currentNote: model.selected,
-                        currentDraftRevision: model.draftRevision, canEdit: canEdit,
+                        currentDraftRevision: model.draftRevision, canEdit: true,
                         asFileLink: true
-                    )
+                    ) else {
+                        model.message = language.text(
+                            "The note or editor changed before the file link was inserted. Drop the file again."
+                        )
+                        return
+                    }
                 }
             }
         }
