@@ -261,9 +261,12 @@ enum MindMapOutline {
         baseIndent: Int
     ) -> Int {
         guard let previousNode, lines.indices.contains(previousNode.id),
-              isListLine(lines[previousNode.id]) else { return baseIndent + 4 }
-        let parentIndent = lines[previousNode.id].prefix(while: { $0 == " " }).count
-        return parentIndent + 6
+              let continuationIndent = listContinuationIndent(in: lines[previousNode.id])
+        else { return baseIndent + 4 }
+        // CommonMark's indented code threshold is four columns beyond the
+        // list item's actual content start, including multi-digit markers and
+        // any extra padding after the marker (e.g. `10.    item`).
+        return continuationIndent + 4
     }
 
     private static func isIndentedCodeLine(
@@ -615,17 +618,22 @@ extension MindMapOutline {
             .first(where: { $0.depth > node.depth })?.id ?? fallback
     }
 
-    /// Markdown list continuation starts after the full marker (e.g. `10. `),
-    /// not at a fixed two-space indent. Reuse the outline's marker parser.
+    /// Markdown list continuation starts after the full marker and its
+    /// original padding (e.g. `10.    `), not at a fixed two-space indent.
+    private static func listContinuationIndent(in line: String) -> Int? {
+        let baseIndent = line.prefix(while: { $0 == " " }).count
+        guard listMarker(in: line) != nil else { return nil }
+        let content = line.dropFirst(baseIndent)
+        // Preserve the original marker width: 001. and 1. are different.
+        let markerWidth = content.prefix(while: { !$0.isWhitespace }).count
+        let paddingWidth = content.dropFirst(markerWidth).prefix(while: { $0 == " " }).count
+        return baseIndent + markerWidth + max(1, paddingWidth)
+    }
+
     static func listContinuationIndent(in source: String, nodeID: Int) -> Int? {
         let lines = source.components(separatedBy: "\n")
-        guard lines.indices.contains(nodeID),
-              listMarker(in: lines[nodeID]) != nil else { return nil }
-        let line = lines[nodeID]
-        let baseIndent = line.prefix(while: { $0 == " " }).count
-        // Use the original marker's width: 001. and 1. are different lengths.
-        let tokenWidth = line.dropFirst(baseIndent).prefix(while: { !$0.isWhitespace }).count
-        return baseIndent + tokenWidth + 1
+        guard lines.indices.contains(nodeID) else { return nil }
+        return listContinuationIndent(in: lines[nodeID])
     }
 
     static func isListNode(in source: String, nodeID: Int) -> Bool {
@@ -1427,9 +1435,7 @@ extension MindMapOutline {
                 : ""
 
             let nodeLine = lines[node.id]
-            let baseIndent = isListLine(nodeLine)
-                ? nodeLine.prefix(while: { $0 == " " }).count + 2
-                : 0
+            let baseIndent = listContinuationIndent(in: nodeLine) ?? 0
             var links = title.links
             var seen = Set(links.map { $0.target + "\u{0}" + $0.label })
             let occurrences = linkOccurrences(in: body, baseIndent: baseIndent)

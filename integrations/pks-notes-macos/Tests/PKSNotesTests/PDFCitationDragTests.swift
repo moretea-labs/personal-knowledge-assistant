@@ -309,6 +309,31 @@ final class PDFCitationDragTests: XCTestCase {
         XCTAssertTrue(trailingInsertion.contains("\n  > Important fact"))
     }
 
+    func testPDFCitationInsertedIntoPaddedNumberedListStaysWithinItsMarkdownItem() throws {
+        let markdown = "# Root\n10.    Concept\n11. Next\n"
+        let citation = "\n\n[Reading.pdf · p. 1](/Reading.pdf#page=1)\n\n> Evidence\n\n"
+        let offset = (markdown as NSString).range(of: "Concept").location + 3
+        let targetIndex = PDFCitationDropTarget.citationInsertionOffset(in: markdown, at: offset)
+        let formatted = PDFCitationDropTarget.citationForInsertion(
+            citation, in: markdown, at: targetIndex
+        )
+        let fromMenu = MarkdownEditing.insert(
+            formatted, into: markdown, selection: NSRange(location: targetIndex, length: 0)
+        ).text
+        let fromMap = try XCTUnwrap(PDFCitationDropTarget.citationForNodeInsertion(
+            citation, in: markdown, nodeID: 1
+        ))
+        for rendered in [fromMenu, fromMap] {
+            XCTAssertTrue(rendered.contains("\n       [Reading.pdf · p. 1]"))
+            XCTAssertTrue(rendered.contains("\n       > Evidence"))
+            let nodes = MindMapOutline.nodes(in: rendered)
+            let concept = try XCTUnwrap(nodes.first(where: { $0.title == "Concept" }))
+            let links = MindMapOutline.presentations(in: rendered, nodes: nodes)
+            XCTAssertEqual(links[concept.id]?.links.map(\.target), ["/Reading.pdf#page=1"])
+        }
+        XCTAssertEqual(MindMapOutline.listContinuationIndent(in: markdown, nodeID: 1), 7)
+    }
+
     func testPDFCitationInsertedIntoNumberedListStaysWithinItsMarkdownItem() throws {
         let markdown = "# Root\n10. Concept\n11. Next\n"
         let citation = "\n\n[Reading.pdf · p. 1](/Reading.pdf#page=1)\n\n> Evidence\n\n"
