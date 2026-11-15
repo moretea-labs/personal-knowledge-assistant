@@ -126,17 +126,32 @@ enum MindMapVisualStyle: String, CaseIterable, Identifiable {
 
     var usesBranchColors: Bool { self == .colorful }
     var angularConnectors: Bool { self == .minimal }
-    var connectorWidth: CGFloat { self == .colorful ? 2.2 : (self == .minimal ? 1.2 : 1.5) }
-    var cardRadius: CGFloat { self == .minimal ? 6 : (self == .colorful ? 15 : 11) }
-    var nodeShadowRadius: CGFloat { self == .minimal ? 0 : 4 }
-    var nodeShadowYOffset: CGFloat { self == .minimal ? 0 : 1 }
+    var connectorWidth: CGFloat {
+        switch self {
+        case .classic: 1.25
+        case .colorful: 2.0
+        case .minimal: 1.2
+        }
+    }
+    var connectorOpacity: Double {
+        switch self {
+        case .classic: 0.22
+        case .colorful: 0.50
+        case .minimal: 0.34
+        }
+    }
+    var cardRadius: CGFloat { self == .minimal ? 6 : (self == .colorful ? 15 : 18) }
+    var nodeShadowRadius: CGFloat { self == .colorful ? 2 : 0 }
+    var nodeShadowYOffset: CGFloat { self == .colorful ? 1 : 0 }
 
     func nodeShadowOpacity(depth: Int) -> Double {
-        guard self != .minimal else { return 0 }
-        return depth == 0 ? 0.035 : 0.015
+        guard self == .colorful else { return 0 }
+        return depth == 0 ? 0.018 : 0.008
     }
 
-    var unselectedOutlineWidth: CGFloat { self == .minimal ? 0.8 : 0.85 }
+    var unselectedOutlineWidth: CGFloat {
+        self == .classic ? 0.55 : (self == .minimal ? 0.8 : 0.85)
+    }
 
     // Reuse the palette across nodes and connectors; large maps must not
     // allocate six SwiftUI Color values on every node render.
@@ -157,7 +172,9 @@ enum MindMapVisualStyle: String, CaseIterable, Identifiable {
     func fill(depth: Int, branch: Int, scheme: ColorScheme) -> Color {
         switch self {
         case .classic:
-            return depth == 0 ? .accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor)
+            return depth == 0
+                ? .accentColor.opacity(scheme == .dark ? 0.16 : 0.10)
+                : Color(nsColor: .controlBackgroundColor)
         case .colorful:
             return branchColor(branch).opacity(depth == 0
                 ? (scheme == .dark ? 0.28 : 0.19)
@@ -171,7 +188,7 @@ enum MindMapVisualStyle: String, CaseIterable, Identifiable {
 
     func outlineOpacity(depth: Int) -> Double {
         switch self {
-        case .classic: 0.06
+        case .classic: 0.025
         case .colorful: depth == 0 ? 0.68 : 0.44
         case .minimal: depth == 0 ? 0.14 : 0.09
         }
@@ -1400,9 +1417,9 @@ struct MindMapCanvas: View {
                         control2: connector.control2
                     )
                 }
-                let color = mapStyle == .colorful
-                    ? mapStyle.branchColor(connector.branch).opacity(0.67)
-                    : Color.secondary.opacity(mapStyle == .minimal ? 0.43 : 0.30)
+                let color = mapStyle.usesBranchColors
+                    ? mapStyle.branchColor(connector.branch).opacity(mapStyle.connectorOpacity)
+                    : Color.secondary.opacity(mapStyle.connectorOpacity)
                 context.stroke(
                     path,
                     with: .color(color),
@@ -1463,7 +1480,7 @@ struct MindMapCanvas: View {
         let accent = mapStyle.branchColor(branch)
         let scheme: ColorScheme = exporting ? .light : colorScheme
         let highlighted = !exporting && selectedID == node.id
-        let cardRadius = node.depth == 0 && mapStyle != .minimal ? 15 : mapStyle.cardRadius
+        let cardRadius = mapStyle.cardRadius
         HStack(spacing: 9) {
             if mapStyle.usesBranchColors && node.depth > 0 {
                 Capsule()
@@ -1620,7 +1637,7 @@ struct MindMapCanvas: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(
-            highlighted ? accent.opacity(scheme == .dark ? 0.30 : 0.19)
+            highlighted ? accent.opacity(scheme == .dark ? 0.32 : 0.22)
                         : mapStyle.fill(depth: node.depth, branch: branch, scheme: scheme),
             in: RoundedRectangle(cornerRadius: cardRadius)
         )
