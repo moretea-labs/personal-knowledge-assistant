@@ -353,6 +353,24 @@ extension MarkdownEditingTests {
         XCTAssertEqual(result.selection, NSRange(location: 13, length: 0))
     }
 
+    func testCodeBlockAndTableInsertionsPreserveCRLFLineEndings() {
+        let source = "Before\r\nAfter"
+        let cursor = NSRange(location: ("Before" as NSString).length, length: 0)
+
+        let codeBlock = MarkdownEditing.apply(.codeBlock, to: source, selection: cursor)
+        XCTAssertEqual(codeBlock.text, "Before\r\n\r\n```\r\n\r\n```\r\n\r\nAfter")
+
+        let table = MarkdownEditing.apply(.table, to: source, selection: cursor)
+        XCTAssertEqual(
+            table.text,
+            "Before\r\n\r\n| Column 1 | Column 2 |\r\n| --- | --- |\r\n| Cell | Cell |\r\n\r\nAfter"
+        )
+        XCTAssertEqual(
+            (table.text as NSString).substring(with: table.selection),
+            "Column 1"
+        )
+    }
+
     func testCodeBlockWrapsUnicodeSelectionAndChoosesFenceLongerThanEmbeddedBackticks() {
         let embeddedFence = "```"
         let selected = "let marker = \"\(embeddedFence)\"\nprint(\"你好 😀\")"

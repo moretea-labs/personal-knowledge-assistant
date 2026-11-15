@@ -79,10 +79,14 @@ enum MarkdownEditing {
         case .quote:
             return toggleQuoteLines(text, range: range)
         case .table:
-            let table = "| Column 1 | Column 2 |\n| --- | --- |\n| Cell | Cell |"
             let before = ns.substring(to: range.location)
             let after = ns.substring(from: NSMaxRange(range))
-            let (leading, trailing) = blockSeparators(before: before, after: after)
+            let (leading, trailing, lineEnding) = blockSeparators(before: before, after: after)
+            let table = [
+                "| Column 1 | Column 2 |",
+                "| --- | --- |",
+                "| Cell | Cell |"
+            ].joined(separator: lineEnding)
             let insertion = leading + table + trailing
             let updated = ns.replacingCharacters(in: range, with: insertion)
             let header = (table as NSString).range(of: "Column 1")
@@ -111,7 +115,7 @@ enum MarkdownEditing {
         let selected = ns.substring(with: range)
         let before = ns.substring(to: range.location)
         let after = ns.substring(from: NSMaxRange(range))
-        let (leading, trailing) = blockSeparators(before: before, after: after)
+        let (leading, trailing, lineEnding) = blockSeparators(before: before, after: after)
         // A fence longer than every backtick run in the selection cannot close
         // early, even when the selected code already contains fenced examples.
         let delimiter = String(
@@ -120,8 +124,8 @@ enum MarkdownEditing {
         )
         let closingLineBreak = selected.hasSuffix("\n") || selected.hasSuffix("\r")
             ? ""
-            : "\n"
-        let block = delimiter + "\n" + selected + closingLineBreak + delimiter
+            : lineEnding
+        let block = delimiter + lineEnding + selected + closingLineBreak + delimiter
         let insertion = leading + block + trailing
         let updated = ns.replacingCharacters(in: range, with: insertion)
         let contentStart = range.location + (leading as NSString).length
@@ -132,14 +136,33 @@ enum MarkdownEditing {
         )
     }
 
-    private static func blockSeparators(before: String, after: String) -> (String, String) {
-        let leading = before.isEmpty || before.hasSuffix("\n\n")
+    private static func blockSeparators(before: String, after: String) -> (String, String, String) {
+        let lineEnding: String
+        if before.hasSuffix("\r\n") || after.hasPrefix("\r\n") {
+            lineEnding = "\r\n"
+        } else if before.hasSuffix("\n") || after.hasPrefix("\n") {
+            lineEnding = "\n"
+        } else if before.hasSuffix("\r") || after.hasPrefix("\r") {
+            lineEnding = "\r"
+        } else {
+            let surrounding = before + after
+            if surrounding.contains("\r\n") {
+                lineEnding = "\r\n"
+            } else if surrounding.contains("\r") {
+                lineEnding = "\r"
+            } else {
+                lineEnding = "\n"
+            }
+        }
+
+        let doubleLineEnding = lineEnding + lineEnding
+        let leading = before.isEmpty || before.hasSuffix(doubleLineEnding)
             ? ""
-            : (before.hasSuffix("\n") ? "\n" : "\n\n")
-        let trailing = after.isEmpty || after.hasPrefix("\n\n")
+            : (before.hasSuffix(lineEnding) ? lineEnding : doubleLineEnding)
+        let trailing = after.isEmpty || after.hasPrefix(doubleLineEnding)
             ? ""
-            : (after.hasPrefix("\n") ? "\n" : "\n\n")
-        return (leading, trailing)
+            : (after.hasPrefix(lineEnding) ? lineEnding : doubleLineEnding)
+        return (leading, trailing, lineEnding)
     }
 
     private enum ListLineKind {
