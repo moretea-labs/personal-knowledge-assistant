@@ -309,6 +309,37 @@ final class PDFCitationDragTests: XCTestCase {
         XCTAssertTrue(trailingInsertion.contains("\n  > Important fact"))
     }
 
+    func testPDFCitationInsertedIntoNumberedListStaysWithinItsMarkdownItem() throws {
+        let markdown = "# Root\n10. Concept\n11. Next\n"
+        let citation = "\n\n[Reading.pdf · p. 1](/Reading.pdf#page=1)\n\n> Evidence\n\n"
+        let offset = (markdown as NSString).range(of: "Concept").location + 3
+        let targetIndex = PDFCitationDropTarget.citationInsertionOffset(in: markdown, at: offset)
+        let formatted = PDFCitationDropTarget.citationForInsertion(
+            citation, in: markdown, at: targetIndex
+        )
+        let fromMenu = MarkdownEditing.insert(
+            formatted, into: markdown, selection: NSRange(location: targetIndex, length: 0)
+        ).text
+        let fromMap = try XCTUnwrap(PDFCitationDropTarget.citationForNodeInsertion(
+            citation, in: markdown, nodeID: 1
+        ))
+        for rendered in [fromMenu, fromMap] {
+            XCTAssertTrue(rendered.contains("\n    [Reading.pdf · p. 1]"))
+            XCTAssertTrue(rendered.contains("\n    > Evidence"))
+            XCTAssertTrue(rendered.contains("\n11. Next\n"))
+            let nodes = MindMapOutline.nodes(in: rendered)
+            let concept = try XCTUnwrap(nodes.first(where: { $0.title == "Concept" }))
+            let next = try XCTUnwrap(nodes.first(where: { $0.title == "Next" }))
+            let links = MindMapOutline.presentations(in: rendered, nodes: nodes)
+            XCTAssertEqual(links[concept.id]?.links.map(\.target), ["/Reading.pdf#page=1"])
+            XCTAssertEqual(links[next.id]?.links, [])
+        }
+        XCTAssertEqual(MindMapOutline.listContinuationIndent(in: markdown, nodeID: 1), 4)
+        XCTAssertEqual(MindMapOutline.listContinuationIndent(in: "001. Concept\n", nodeID: 0), 5)
+        XCTAssertEqual(MindMapOutline.listContinuationIndent(in: "1) Concept\n", nodeID: 0), 3)
+        XCTAssertEqual(MindMapOutline.listContinuationIndent(in: "- Concept\n", nodeID: 0), 2)
+    }
+
     func testPDFCitationDropOnMindMapListNodeAttachesToItsOwnMarkdownBody() throws {
         let citation = "\n\n[Reading (v2).pdf · p. 1](/Reading%20%28v2%29.pdf#page=1&rects=...)\n\n> Important fact\n\n"
         let markdown = "# Root\n- 😀Concept\n  Existing note\n  - Child\n    Child note\n- Next\n"

@@ -485,8 +485,9 @@ final class PDFCitationDropTarget {
             return citation
         }
 
-        let structuralIndent = lines[nodeID].prefix(while: { $0 == " " }).count
-        let continuationIndent = structuralIndent + 2
+        guard let continuationIndent = MindMapOutline.listContinuationIndent(
+            in: markdown, nodeID: nodeID
+        ) else { return citation }
         let currentLine = lines[currentLineIndex]
         let currentLineIndent = currentLine.prefix(while: { $0 == " " }).count
         let blankContinuation = currentLineIndex > nodeID
@@ -530,8 +531,9 @@ final class PDFCitationDropTarget {
         } + (lines[insertionLine] as NSString).length
 
         let nodeIndent = lines[nodeID].prefix(while: { $0 == " " }).count
-        let continuationIndent = MindMapOutline.isListNode(in: markdown, nodeID: nodeID)
-            ? nodeIndent + 2 : nodeIndent
+        let continuationIndent = MindMapOutline.listContinuationIndent(
+            in: markdown, nodeID: nodeID
+        ) ?? nodeIndent
         let citationLines = citation.trimmingCharacters(in: .newlines).components(separatedBy: "\n")
         guard citationLines.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
             return nil

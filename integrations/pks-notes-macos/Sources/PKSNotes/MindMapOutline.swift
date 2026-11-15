@@ -615,6 +615,19 @@ extension MindMapOutline {
             .first(where: { $0.depth > node.depth })?.id ?? fallback
     }
 
+    /// Markdown list continuation starts after the full marker (e.g. `10. `),
+    /// not at a fixed two-space indent. Reuse the outline's marker parser.
+    static func listContinuationIndent(in source: String, nodeID: Int) -> Int? {
+        let lines = source.components(separatedBy: "\n")
+        guard lines.indices.contains(nodeID),
+              listMarker(in: lines[nodeID]) != nil else { return nil }
+        let line = lines[nodeID]
+        let baseIndent = line.prefix(while: { $0 == " " }).count
+        // Use the original marker's width: 001. and 1. are different lengths.
+        let tokenWidth = line.dropFirst(baseIndent).prefix(while: { !$0.isWhitespace }).count
+        return baseIndent + tokenWidth + 1
+    }
+
     static func isListNode(in source: String, nodeID: Int) -> Bool {
         let lines = source.components(separatedBy: "\n")
         return lines.indices.contains(nodeID) && isListLine(lines[nodeID])
