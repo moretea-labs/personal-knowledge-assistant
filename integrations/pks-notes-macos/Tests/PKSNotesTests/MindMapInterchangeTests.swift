@@ -69,6 +69,40 @@ final class MindMapInterchangeTests: XCTestCase {
         XCTAssertEqual(lineStarts.count, source.components(separatedBy: "\n").count)
     }
 
+    func testNodeCaretRangeUsesCachedUTF16LineStarts() throws {
+        let source = "# Study\n\n- 第一\n  supporting 😀 text\n- 第二\n"
+        let nodes = MindMapOutline.nodes(in: source)
+        let lineStarts = MindMapOutline.lineStartOffsets(in: source)
+        let first = try XCTUnwrap(nodes.first(where: { $0.title == "第一" }))
+        let second = try XCTUnwrap(nodes.first(where: { $0.title == "第二" }))
+        let text = source as NSString
+
+        let firstCaret = try XCTUnwrap(MindMapOutline.caretRange(
+            atNodeID: first.id, lineStartOffsets: lineStarts
+        ))
+        let secondCaret = try XCTUnwrap(MindMapOutline.caretRange(
+            atNodeID: second.id, lineStartOffsets: lineStarts
+        ))
+
+        XCTAssertEqual(firstCaret, NSRange(location: text.range(of: "- 第一").location, length: 0))
+        XCTAssertEqual(secondCaret, NSRange(location: text.range(of: "- 第二").location, length: 0))
+        XCTAssertEqual(
+            MindMapOutline.nodeID(
+                atUTF16Offset: firstCaret.location, lineStartOffsets: lineStarts, nodes: nodes
+            ),
+            first.id
+        )
+        XCTAssertEqual(
+            MindMapOutline.nodeID(
+                atUTF16Offset: secondCaret.location, lineStartOffsets: lineStarts, nodes: nodes
+            ),
+            second.id
+        )
+        XCTAssertNil(MindMapOutline.caretRange(
+            atNodeID: lineStarts.count, lineStartOffsets: lineStarts
+        ))
+    }
+
     func testEmptyMapCanStartWithOneCanonicalMarkdownHeading() {
         XCTAssertEqual(MindMapOutline.createMap(), "# New Mind Map\n")
         XCTAssertEqual(MindMapOutline.nodes(in: MindMapOutline.createMap()).map(\.title), ["New Mind Map"])

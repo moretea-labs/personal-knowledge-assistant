@@ -292,6 +292,7 @@ struct MindMapCanvas: View {
     @Binding var selectedID: Int?
     let revision: UInt64
     let hidesNodeDetails: Bool
+    let activeMarkdownTextView: () -> NSTextView?
     let openLink: (String) -> Void
     let connectNote: (Int) -> Void
     let connectSection: (Int) -> Void
@@ -538,6 +539,7 @@ struct MindMapCanvas: View {
                     .onChange(of: selectedID) { _, selected in
                         guard let selected,
                               let position = mapLayout.placements.first(where: { $0.id == selected }) else { return }
+                        syncMarkdownCaretFromMap(selected)
                         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
                             viewportOffset = MindMapViewportGeometry.centeredOffset(
                                 for: position.center, mapSize: mapLayout.size, zoom: zoom
@@ -2102,6 +2104,26 @@ struct MindMapCanvas: View {
         createdNodeDraftSnapshot = created ? source : nil
         canvasFocused = false
         titleEditorFocused = false
+    }
+
+    private func syncMarkdownCaretFromMap(_ nodeID: Int) {
+        guard hidesNodeDetails, projectionIsCurrent,
+              let textView = activeMarkdownTextView(),
+              textView.isEditable, !textView.isFieldEditor,
+              textView.string == source else { return }
+        let selection = textView.selectedRange()
+        guard selection.location != NSNotFound,
+              MindMapOutline.nodeID(
+                atUTF16Offset: selection.location,
+                lineStartOffsets: lineStartOffsets,
+                nodes: nodes
+              ) != nodeID,
+              let caret = MindMapOutline.caretRange(
+                atNodeID: nodeID, lineStartOffsets: lineStartOffsets
+              ) else { return }
+        // Keep keyboard focus on the map; update only the editor's insertion point.
+        textView.setSelectedRange(caret)
+        textView.scrollRangeToVisible(caret)
     }
 
     private func syncSelectedNodeFromMarkdownEditor(_ textView: NSTextView?) {

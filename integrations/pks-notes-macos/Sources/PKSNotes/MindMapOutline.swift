@@ -501,6 +501,13 @@ enum MindMapOutline {
         return offsets
     }
 
+    /// Resolve a projected node's canonical Markdown line to a zero-length editor caret.
+    /// Node IDs are line indexes, so this reuses the same cached UTF-16 offsets as caret lookup.
+    static func caretRange(atNodeID nodeID: Int, lineStartOffsets: [Int]) -> NSRange? {
+        guard lineStartOffsets.indices.contains(nodeID) else { return nil }
+        return NSRange(location: lineStartOffsets[nodeID], length: 0)
+    }
+
     /// Resolve an editor caret/selection position to the nearest preceding outline node.
     /// Prose below a heading/list item therefore stays associated with its structural parent.
     static func nodeID(

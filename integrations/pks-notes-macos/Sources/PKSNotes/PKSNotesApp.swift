@@ -3738,6 +3738,7 @@ struct NotesWindow: View {
             selectedID: $mindMapSelectionLine,
             revision: model.draftRevision,
             hidesNodeDetails: showingMindMapSourcePane,
+            activeMarkdownTextView: { markdownTextView(in: NSApp.keyWindow?.contentView) },
             openLink: { target in
                 _ = model.openKnowledgeLink(
                     target,
