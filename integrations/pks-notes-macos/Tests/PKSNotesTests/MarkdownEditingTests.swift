@@ -284,6 +284,23 @@ extension MarkdownEditingTests {
                        "- [ ] parent\n  - [ ] child\n")
     }
 
+    func testListCommandsPreserveBlankCRLFLinesAndToggleBackExactly() {
+        let source = "first\r\n\r\nlast\r\n"
+        let selection = NSRange(location: 0, length: (source as NSString).length)
+        let cases: [(MarkdownEditCommand, String)] = [
+            (.bullet, "- first\r\n\r\n- last\r\n"),
+            (.task, "- [ ] first\r\n\r\n- [ ] last\r\n"),
+            (.ordered, "1. first\r\n\r\n2. last\r\n")
+        ]
+
+        for (command, expected) in cases {
+            let formatted = MarkdownEditing.apply(command, to: source, selection: selection)
+            XCTAssertEqual(formatted.text, expected, "Unexpected CRLF formatting for \(command)")
+            let restored = MarkdownEditing.apply(command, to: formatted.text, selection: formatted.selection)
+            XCTAssertEqual(restored.text, source, "CRLF round-trip failed for \(command)")
+        }
+    }
+
     func testOrderedListPreservesFencedCodeAndCreatesAnEmptyItem() {
         let source = "first\n```swift\nprint(1)\n```\nlast\n"
         let numbered = MarkdownEditing.apply(

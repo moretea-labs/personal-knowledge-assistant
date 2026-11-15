@@ -179,7 +179,7 @@ enum MarkdownEditing {
         let contentLines = lines.enumerated().compactMap { offset, line -> String? in
             let absoluteLine = firstLine + offset
             guard !codeLines[absoluteLine],
-                  !line.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+                  !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             return line
         }
         let hasExistingList = contentLines.contains { parseListLine($0) != nil }
@@ -205,7 +205,7 @@ enum MarkdownEditing {
                 }
                 return hasExistingList ? line : "  " + line
             }
-            if line.trimmingCharacters(in: .whitespaces).isEmpty && lines.count > 1 { return line }
+            if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && lines.count > 1 { return line }
 
             let parsed = parseListLine(line)
             let indentation = parsed?.indentation
