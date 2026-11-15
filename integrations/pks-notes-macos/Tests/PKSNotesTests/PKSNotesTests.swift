@@ -2539,7 +2539,7 @@ extension PKSNotesTests {
         )
     }
 
-    func testMarkdownReplacementPreservesUnchangedTextAndUnicodeOffsets() {
+    func testMarkdownReplacementPreservesUnchangedTextAndUnicodeOffsets() throws {
         XCTAssertEqual(
             MarkdownEditing.minimalChange(from: "alpha beta", to: "alpha **beta**"),
             MarkdownReplacement(range: NSRange(location: 6, length: 4), text: "**beta**")
@@ -2549,6 +2549,26 @@ extension PKSNotesTests {
             MarkdownReplacement(range: NSRange(location: 2, length: 2), text: "**测试**")
         )
         XCTAssertNil(MarkdownEditing.minimalChange(from: "same", to: "same"))
+
+        let sharedHighSurrogate = try XCTUnwrap(
+            MarkdownEditing.minimalChange(from: "😀x", to: "😁x")
+        )
+        XCTAssertEqual(sharedHighSurrogate.range, NSRange(location: 0, length: 2))
+        XCTAssertEqual(sharedHighSurrogate.text, "😁")
+
+        let sharedLowSurrogate = try XCTUnwrap(
+            MarkdownEditing.minimalChange(from: "\u{10000}x", to: "\u{10400}x")
+        )
+        XCTAssertEqual(sharedLowSurrogate.range, NSRange(location: 0, length: 2))
+        XCTAssertEqual(sharedLowSurrogate.text, "\u{10400}")
+
+        for (original, updated) in [("😀x", "😁x"), ("\u{10000}x", "\u{10400}x")] {
+            let replacement = try XCTUnwrap(MarkdownEditing.minimalChange(from: original, to: updated))
+            XCTAssertEqual(
+                (original as NSString).replacingCharacters(in: replacement.range, with: replacement.text),
+                updated
+            )
+        }
     }
 
     func testMarkdownEditingInsertsAtSelection() {

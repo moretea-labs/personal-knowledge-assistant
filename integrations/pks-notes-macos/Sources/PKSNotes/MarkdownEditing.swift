@@ -34,6 +34,12 @@ enum MarkdownEditing {
               before.character(at: prefix) == after.character(at: prefix) {
             prefix += 1
         }
+        // NSString offsets are UTF-16 code units. A common high surrogate
+        // is not a safe replacement boundary when the following low surrogate differs.
+        while prefix > 0 &&
+                (splitsSurrogatePair(before, at: prefix) || splitsSurrogatePair(after, at: prefix)) {
+            prefix -= 1
+        }
         if prefix == before.length && prefix == after.length { return nil }
 
         var suffix = 0
@@ -42,12 +48,26 @@ enum MarkdownEditing {
                 == after.character(at: after.length - suffix - 1) {
             suffix += 1
         }
+        // The same applies when a shared low surrogate was counted as suffix.
+        while suffix > 0 &&
+                (splitsSurrogatePair(before, at: before.length - suffix)
+                    || splitsSurrogatePair(after, at: after.length - suffix)) {
+            suffix -= 1
+        }
         return MarkdownReplacement(
             range: NSRange(location: prefix, length: before.length - prefix - suffix),
             text: after.substring(
                 with: NSRange(location: prefix, length: after.length - prefix - suffix)
             )
         )
+    }
+
+    private static func splitsSurrogatePair(_ text: NSString, at offset: Int) -> Bool {
+        guard offset > 0, offset < text.length else { return false }
+        let previous = text.character(at: offset - 1)
+        let current = text.character(at: offset)
+        return previous >= 0xD800 && previous <= 0xDBFF
+            && current >= 0xDC00 && current <= 0xDFFF
     }
 
     static func apply(_ command: MarkdownEditCommand, to text: String, selection: NSRange) -> MarkdownEditResult {
