@@ -143,6 +143,15 @@ enum GlobalApplicationCatalog {
 /// Presentation-only ranker: one visible result per path, regardless of the
 /// separate OS application/Spotlight and PKS content result providers.
 enum GlobalSearchRanker {
+    static func shouldStartDocumentSearch(for query: String) -> Bool {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        if text.count >= 2 { return true }
+        // A single Han ideograph is a meaningful Chinese search term; do not
+        // suppress local document search just because it is one grapheme.
+        return text.unicodeScalars.first?.properties.isIdeographic == true
+    }
+
     // Extra suggestions require at least two meaningful terms or a longer Han
     // phrase. The PKS "related" mode independently requires multiple
     // matching content signals; never infer relatedness from names alone.
@@ -329,7 +338,7 @@ final class GlobalSearchResults: ObservableObject {
         spotlightHits = []
         publish()
         loading = false
-        guard text.count >= 2 else { return }
+        guard GlobalSearchRanker.shouldStartDocumentSearch(for: text) else { return }
         loading = true
         searchTask = Task { [weak self] in
             guard let self else { return }

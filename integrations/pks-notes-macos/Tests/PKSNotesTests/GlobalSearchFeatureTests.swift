@@ -14,6 +14,13 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertEqual(results.map(\.title), ["Code", "Xcode", "Visual Studio Code"])
     }
 
+    func testGlobalSearchAllowsSingleHanCharacterDocumentQueries() {
+        XCTAssertTrue(GlobalSearchRanker.shouldStartDocumentSearch(for: "肾"))
+        XCTAssertTrue(GlobalSearchRanker.shouldStartDocumentSearch(for: "AB"))
+        XCTAssertFalse(GlobalSearchRanker.shouldStartDocumentSearch(for: "a"))
+        XCTAssertFalse(GlobalSearchRanker.shouldStartDocumentSearch(for: " "))
+    }
+
     func testSearchFoldIsCaseAndDiacriticInsensitive() {
         let apps = [
             GlobalSearchItem.application(URL(fileURLWithPath: "/Applications/Cafe.app"), title: "Café"),
