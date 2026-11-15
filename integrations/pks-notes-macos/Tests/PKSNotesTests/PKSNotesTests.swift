@@ -2990,6 +2990,74 @@ extension PKSNotesTests {
     }
 
     @MainActor
+    func testLinkedNotesRefreshWhenTheOpenStudyTargetChanges() async throws {
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
+        let previousBookmark = defaults.object(forKey: "PKSNotesWorkspaceBookmark")
+        let previousNote = defaults.object(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let previousWorkspace { defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousBookmark { defaults.set(previousBookmark, forKey: "PKSNotesWorkspaceBookmark") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+            if let previousNote { defaults.set(previousNote, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(
+            "Leafspan-Relationship-Switch-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let study = root.appendingPathComponent("Study.md")
+        let other = root.appendingPathComponent("Other.md")
+        let pdf = root.appendingPathComponent("Source.pdf")
+        try "# Study\n\n[Source.pdf · p. 1](/Source.pdf#page=1)\n".write(
+            to: study, atomically: true, encoding: .utf8
+        )
+        try "# Other\n\n[Study](/Study.md)\n".write(
+            to: other, atomically: true, encoding: .utf8
+        )
+        try Data("%PDF-1.4\n%%EOF".utf8).write(to: pdf)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        for _ in 0..<200 where model.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.openNote(study)
+        await waitForNote(model, study)
+
+        // The open relationships panel starts on the selected Markdown note.
+        model.loadRelationships()
+        for _ in 0..<400 where model.loadingBacklinks {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.backlinks.map(\.source), [other.standardizedFileURL])
+
+        // Opening a PDF keeps the selected note, but changes the relationship target.
+        model.openFile(pdf)
+        XCTAssertEqual(model.selected, study.standardizedFileURL)
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        model.loadRelationships()
+        for _ in 0..<400 where model.loadingBacklinks {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.backlinks.map(\.source), [study.standardizedFileURL])
+
+        // Closing the PDF returns the same open panel to the selected note.
+        model.closePDFPreview()
+        model.loadRelationships()
+        for _ in 0..<400 where model.loadingBacklinks {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.backlinks.map(\.source), [other.standardizedFileURL])
+    }
+
+    @MainActor
     func testOpeningPDFLinkedNoteKeepsThePDFStudyPaneVisible() async throws {
         let defaults = UserDefaults.standard
         let previousRoot = defaults.string(forKey: "PKSNotesWorkspace")

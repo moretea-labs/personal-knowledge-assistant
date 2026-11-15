@@ -1163,6 +1163,12 @@ struct NotesWindow: View {
             previewCache = nil
         }
         .onChange(of: model.previewPDF) { _, pdf in
+            if showingBacklinks {
+                // The selected Markdown note can remain unchanged while the
+                // PDF target changes. Keep an open Linked Notes panel bound to
+                // the document currently shown in the study workspace.
+                model.loadRelationships()
+            }
             guard pdf != nil else { return }
             showingMindMapSourcePane = false
             showingOutline = false
