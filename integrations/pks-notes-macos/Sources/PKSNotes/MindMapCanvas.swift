@@ -534,8 +534,9 @@ struct MindMapCanvas: View {
                         }
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .pksMindMapFit)) { _ in
-                        guard fitToContent(viewport: viewport.size) else { return }
-                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { viewportOffset = .zero }
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                            _ = fitToContent(viewport: viewport.size)
+                        }
                     }
                     .onChange(of: selectedID) { _, selected in
                         guard let selected,
