@@ -2267,6 +2267,48 @@ extension PKSNotesTests {
         XCTAssertEqual(backlinks.map(\.count), [2, 1])
     }
 
+    func testWorkspaceBacklinksFindPDFSourceLocationsAndQuotedContext() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let books = root.appendingPathComponent("Books", isDirectory: true)
+        let notes = root.appendingPathComponent("Notes", isDirectory: true)
+        try fm.createDirectory(at: books, withIntermediateDirectories: true)
+        try fm.createDirectory(at: notes, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let pdf = books.appendingPathComponent("Study (v2).pdf")
+        let study = root.appendingPathComponent("Study.md")
+        let review = notes.appendingPathComponent("Review.md")
+        let unrelated = root.appendingPathComponent("Other.md")
+        let otherPDF = books.appendingPathComponent("Other.pdf")
+        try Data("%PDF-1.4\n%%EOF".utf8).write(to: pdf)
+        try Data("%PDF-1.4\n%%EOF".utf8).write(to: otherPDF)
+        try "# Study\n[Chapter 5](/Books/Study%20%28v2%29.pdf#page=5&rects=...)\n\n> Evidence from page five\n[Chapter 6](/Books/Study%20%28v2%29.pdf#page=6&rects=...)\n\n> Evidence from page six\n".write(
+            to: study, atomically: true, encoding: .utf8
+        )
+        try "# Review\n[Page 2](../Books/Study%20%28v2%29.pdf#page=2&rects=...)\n\n> Review excerpt\n".write(
+            to: review, atomically: true, encoding: .utf8
+        )
+        try "# Other\n[Different source](/Books/Other.pdf#page=1)\n".write(
+            to: unrelated, atomically: true, encoding: .utf8
+        )
+
+        let backlinks = WorkspaceBacklinks.find(
+            target: pdf, root: root, files: WorkspaceFiles.tree(in: root)
+        )
+
+        XCTAssertEqual(backlinks.map(\.source), [study, review])
+        XCTAssertEqual(backlinks.map(\.count), [2, 1])
+        XCTAssertEqual(backlinks[0].locations.map(\.lineIndex), [1, 4])
+        XCTAssertTrue(backlinks[0].locations[0].context.contains("Chapter 5"))
+        XCTAssertTrue(backlinks[0].locations[0].context.contains("Evidence from page five"))
+        XCTAssertTrue(backlinks[0].locations[1].context.contains("Chapter 6"))
+        XCTAssertTrue(backlinks[0].locations[1].context.contains("Evidence from page six"))
+        XCTAssertTrue(backlinks[1].locations[0].context.contains("Page 2"))
+        XCTAssertTrue(backlinks[1].locations[0].context.contains("Review excerpt"))
+        XCTAssertFalse(backlinks.contains { $0.source == unrelated })
+    }
+
     func testKnowledgeTargetResolverUsesSuppliedCandidatesForUniqueBasename() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
