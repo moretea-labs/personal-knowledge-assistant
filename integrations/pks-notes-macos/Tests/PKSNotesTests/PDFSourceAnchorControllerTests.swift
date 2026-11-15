@@ -534,6 +534,49 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testManualPageNavigationClearsStaleReferenceWarnings() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let document = PDFDocument()
+        for text in ["First page", "Second page"] {
+            let textView = NSTextView(frame: bounds)
+            textView.string = text
+            let pageDocument = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: bounds)))
+            document.insert(try XCTUnwrap(pageDocument.page(at: 0)), at: document.pageCount)
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PDF-navigation-\(UUID().uuidString).pdf")
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        defer {
+            controller.detach(view: view)
+            removeStoredReadingPosition(for: url)
+        }
+
+        controller.attach(
+            view: view, document: document, url: url,
+            requestedPage: 99, requestedAnchor: nil
+        )
+        XCTAssertEqual(controller.invalidRequestedPage, 99)
+        controller.goNext()
+        XCTAssertNil(controller.invalidRequestedPage)
+        XCTAssertEqual(controller.currentPageIndex, 1)
+
+        let anchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 2, normalizedRects: [CGRect(x: 0.1, y: 0.1, width: 0.5, height: 0.1)],
+            fingerprint: "0000000000000000"
+        ))
+        controller.attach(
+            view: view, document: document, url: url,
+            requestedPage: nil, requestedAnchor: anchor
+        )
+        XCTAssertTrue(controller.invalidRequestedSelection)
+        controller.goPrevious()
+        XCTAssertFalse(controller.invalidRequestedSelection)
+        XCTAssertNil(controller.invalidRequestedPage)
+        XCTAssertEqual(controller.currentPageIndex, 0)
+    }
+
+    @MainActor
     func testRepeatedPDFSelectionAnchorReturnsToPageTwoAfterPageOne() throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let firstText = NSTextView(frame: bounds)

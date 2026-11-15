@@ -682,11 +682,15 @@ final class PDFReaderController: ObservableObject {
     }
 
     func goPrevious() {
+        invalidRequestedPage = nil
+        invalidRequestedSelection = false
         pdfView?.goToPreviousPage(nil)
         syncFromView()
     }
 
     func goNext() {
+        invalidRequestedPage = nil
+        invalidRequestedSelection = false
         pdfView?.goToNextPage(nil)
         syncFromView()
     }
