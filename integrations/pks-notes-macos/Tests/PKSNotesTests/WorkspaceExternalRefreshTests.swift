@@ -7,6 +7,7 @@ final class WorkspaceExternalRefreshTests: XCTestCase {
     @MainActor
     private func awaitCondition(
         timeout: Duration = .seconds(3),
+        message: String = "The workspace did not reflect the filesystem within the observation window.",
         _ condition: @escaping @MainActor () -> Bool
     ) async throws {
         let clock = ContinuousClock()
@@ -14,7 +15,7 @@ final class WorkspaceExternalRefreshTests: XCTestCase {
         while !condition() && clock.now < deadline {
             try await Task.sleep(for: .milliseconds(25))
         }
-        XCTAssertTrue(condition(), "The workspace did not reflect the filesystem within the observation window.")
+        XCTAssertTrue(condition(), message)
     }
 
     func testFSEventLossFlagsRequireFullRescan() {
@@ -93,6 +94,53 @@ final class WorkspaceExternalRefreshTests: XCTestCase {
         }
         XCTAssertTrue(model.globalQuickOpenEntries.isEmpty,
                       "The full-vault index must remain lazy after an event.")
+    }
+
+    @MainActor
+    func testExternalRenameBackRescansPreviouslyExpandedDirectory() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LeafspanRenameBack-\(UUID().uuidString)", isDirectory: true)
+        let original = root.appendingPathComponent("Projects", isDirectory: true)
+        let nested = original.appendingPathComponent("Deep", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = nested.appendingPathComponent("Original.md")
+        try "# Original".write(to: note, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        try await awaitCondition { !model.loadingFiles }
+        model.loadExpandedFolders([original.path])
+        try await awaitCondition(message: "The original folder did not load its nested directory.") {
+            model.files.first(where: { $0.url == original })?.children?.contains(where: { $0.url == nested }) == true
+        }
+        model.loadExpandedFolders([nested.path])
+        try await awaitCondition(message: "The original nested directory did not load its note.") {
+            model.files.first(where: { $0.url == original })?.children?
+                .first(where: { $0.url == nested })?.children?.contains(where: { $0.url == note }) == true
+        }
+
+        let renamed = root.appendingPathComponent("Archive", isDirectory: true)
+        try FileManager.default.moveItem(at: original, to: renamed)
+        model.noteExternalPaths([original.path, renamed.path], in: root)
+        try await awaitCondition(timeout: .seconds(5), message: "The file tree did not replace the renamed folder with Archive.") {
+            model.files.contains(where: { $0.url == renamed })
+        }
+
+        try FileManager.default.moveItem(at: renamed, to: original)
+        model.noteExternalPaths([renamed.path, original.path], in: root)
+        try await awaitCondition(timeout: .seconds(5), message: "The file tree did not show Projects after renaming Archive back.") {
+            model.files.contains(where: { $0.url == original })
+        }
+        model.loadExpandedFolders([original.path])
+        try await awaitCondition(timeout: .seconds(5), message: "The recreated Projects folder was not rescanned.") {
+            model.files.first(where: { $0.url == original })?.children?.contains(where: { $0.url == nested }) == true
+        }
+        model.loadExpandedFolders([nested.path])
+        try await awaitCondition(timeout: .seconds(5), message: "The recreated Projects/Deep folder was not rescanned.") {
+            model.files.first(where: { $0.url == original })?.children?
+                .first(where: { $0.url == nested })?.children?.contains(where: { $0.url == note }) == true
+        }
     }
 
     @MainActor

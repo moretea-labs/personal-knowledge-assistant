@@ -1338,6 +1338,7 @@ final class NotesModel: ObservableObject {
             let changed = self.pendingExternalPaths
             self.pendingExternalPaths.removeAll()
             self.externalRefreshTask = nil
+            self.discardMissingLoadedSubtrees()
             if let previewPDF = self.previewPDF?.standardizedFileURL.resolvingSymlinksInPath(),
                changed.contains(where: {
                    URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath() == previewPDF
@@ -1414,6 +1415,19 @@ final class NotesModel: ObservableObject {
             }
         }
         startPendingMutationRefresh()
+    }
+
+    private func discardMissingLoadedSubtrees() {
+        let missing = loadedFolderPaths.filter { path in
+            let url = URL(fileURLWithPath: path, isDirectory: true)
+            guard !WorkspaceFiles.isOpaqueDocumentPackage(url) else { return true }
+            var info = Darwin.stat()
+            let status = path.withCString { Darwin.lstat($0, &info) }
+            return status != 0 || (info.st_mode & mode_t(S_IFMT)) != mode_t(S_IFDIR)
+        }
+        for path in missing.sorted(by: { $0.count < $1.count }) {
+            discardLoadedSubtree(URL(fileURLWithPath: path, isDirectory: true))
+        }
     }
 
     private func discardLoadedSubtree(_ item: URL) {
