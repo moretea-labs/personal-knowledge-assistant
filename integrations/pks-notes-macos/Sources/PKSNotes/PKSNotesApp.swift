@@ -2446,11 +2446,11 @@ struct NotesWindow: View {
                         }
                     }
                         .padding(.leading, CGFloat(row.depth) * NotesGeometry.treeIndent)
-                        .background(isSelected ? Color.primary.opacity(colorScheme == .dark ? 0.15 : 0.075)
+                        .background(isSelected ? Color.accentColor.opacity(colorScheme == .dark ? 0.20 : 0.11)
                                     : fileDropTargetPath == row.id
                                         ? theme.linkColor.opacity(0.12)
                                         : treeFocused && treeCursorPath == row.id
-                                            ? Color.primary.opacity(0.04) : .clear,
+                                            ? Color.accentColor.opacity(0.075) : .clear,
                                     in: RoundedRectangle(cornerRadius: NotesGeometry.selectionCorner))
                         .overlay {
                             if row.item.isFolder && fileDropTargetPath == row.id {
@@ -2503,7 +2503,7 @@ struct NotesWindow: View {
                     Image(systemName: row.item.iconName)
                         .font(.system(size: NotesGeometry.symbolSize))
                         .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                         .frame(width: NotesGeometry.treeIconWidth,
                                height: NotesGeometry.treeRowHeight)
                 }
