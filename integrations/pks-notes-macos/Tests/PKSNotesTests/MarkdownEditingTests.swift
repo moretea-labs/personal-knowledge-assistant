@@ -369,6 +369,19 @@ extension MarkdownEditingTests {
             (table.text as NSString).substring(with: table.selection),
             "Column 1"
         )
+
+        // If the selection is the entire document, neither surrounding slice
+        // contains a newline. The replaced content still owns the line-ending style.
+        let selectedSource = "First\r\nSecond"
+        let fullSelection = NSRange(location: 0, length: (selectedSource as NSString).length)
+        let selectedCode = MarkdownEditing.apply(.codeBlock, to: selectedSource, selection: fullSelection)
+        XCTAssertEqual(selectedCode.text, "```\r\nFirst\r\nSecond\r\n```")
+
+        let selectedTable = MarkdownEditing.apply(.table, to: selectedSource, selection: fullSelection)
+        XCTAssertEqual(
+            selectedTable.text,
+            "| Column 1 | Column 2 |\r\n| --- | --- |\r\n| Cell | Cell |"
+        )
     }
 
     func testCodeBlockWrapsUnicodeSelectionAndChoosesFenceLongerThanEmbeddedBackticks() {

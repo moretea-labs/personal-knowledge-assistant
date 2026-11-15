@@ -79,9 +79,12 @@ enum MarkdownEditing {
         case .quote:
             return toggleQuoteLines(text, range: range)
         case .table:
+            let selected = ns.substring(with: range)
             let before = ns.substring(to: range.location)
             let after = ns.substring(from: NSMaxRange(range))
-            let (leading, trailing, lineEnding) = blockSeparators(before: before, after: after)
+            let (leading, trailing, lineEnding) = blockSeparators(
+                before: before, selected: selected, after: after
+            )
             let table = [
                 "| Column 1 | Column 2 |",
                 "| --- | --- |",
@@ -115,7 +118,9 @@ enum MarkdownEditing {
         let selected = ns.substring(with: range)
         let before = ns.substring(to: range.location)
         let after = ns.substring(from: NSMaxRange(range))
-        let (leading, trailing, lineEnding) = blockSeparators(before: before, after: after)
+        let (leading, trailing, lineEnding) = blockSeparators(
+            before: before, selected: selected, after: after
+        )
         // A fence longer than every backtick run in the selection cannot close
         // early, even when the selected code already contains fenced examples.
         let delimiter = String(
@@ -136,7 +141,9 @@ enum MarkdownEditing {
         )
     }
 
-    private static func blockSeparators(before: String, after: String) -> (String, String, String) {
+    private static func blockSeparators(
+        before: String, selected: String, after: String
+    ) -> (String, String, String) {
         let lineEnding: String
         if before.hasSuffix("\r\n") || after.hasPrefix("\r\n") {
             lineEnding = "\r\n"
@@ -145,7 +152,7 @@ enum MarkdownEditing {
         } else if before.hasSuffix("\r") || after.hasPrefix("\r") {
             lineEnding = "\r"
         } else {
-            let surrounding = before + after
+            let surrounding = before + selected + after
             if surrounding.contains("\r\n") {
                 lineEnding = "\r\n"
             } else if surrounding.contains("\r") {
