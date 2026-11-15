@@ -2520,8 +2520,8 @@ final class NotesModel: ObservableObject {
 
     /// Search the active workspace with the existing bounded Markdown body reader.
     /// Quick Open remains the file inventory; this does not create another index.
-    func searchWorkspace(_ query: String) async -> [SearchHit] {
-        await localWorkspaceSearch(query, searchBodies: true).hits
+    func searchWorkspace(_ query: String) async -> WorkspaceSearch.Result {
+        await localWorkspaceSearch(query, searchBodies: true)
     }
 
     private func localWorkspaceSearch(

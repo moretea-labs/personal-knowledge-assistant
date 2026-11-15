@@ -3,6 +3,29 @@ import XCTest
 @testable import PKSNotes
 
 final class GlobalSearchFeatureTests: XCTestCase {
+    @MainActor
+    func testGlobalSearchStatusDisclosesIncompleteWorkspaceCoverage() {
+        var coverage = WorkspaceSearch.Coverage()
+        coverage.limited = true
+        coverage.skippedFiles = 3
+
+        XCTAssertEqual(
+            GlobalSearchResults.makeStatusMessage(
+                coverage: coverage,
+                libraryUnavailable: true,
+                language: .simplifiedChinese
+            ),
+            "资料库搜索当前不可用 · 工作区搜索结果不完整 · 3 篇笔记正文未参与搜索"
+        )
+        XCTAssertNil(
+            GlobalSearchResults.makeStatusMessage(
+                coverage: WorkspaceSearch.Coverage(),
+                libraryUnavailable: false,
+                language: .english
+            )
+        )
+    }
+
     func testApplicationRankingIsExactPrefixThenSubstring() {
         let apps = [
             GlobalSearchItem.application(URL(fileURLWithPath: "/Applications/Visual Studio Code.app"), title: "Visual Studio Code"),

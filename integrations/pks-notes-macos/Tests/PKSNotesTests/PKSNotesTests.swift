@@ -108,11 +108,11 @@ final class PKSNotesTests: XCTestCase {
 
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(root))
-        let hits = await model.searchWorkspace("ye de gang qin qu")
+        let result = await model.searchWorkspace("ye de gang qin qu")
 
         XCTAssertTrue(model.globalFileIndexReady)
-        XCTAssertEqual(hits.map(\.uri), [note.path])
-        XCTAssertNil(hits.first?.snippet)
+        XCTAssertEqual(result.hits.map(\.uri), [note.path])
+        XCTAssertNil(result.hits.first?.snippet)
     }
 
     @MainActor
@@ -136,10 +136,13 @@ final class PKSNotesTests: XCTestCase {
 
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(root))
-        let hits = await model.searchWorkspace("body-only needle")
+        let result = await model.searchWorkspace("body-only needle")
 
-        XCTAssertEqual(hits.map(\.uri), [note.path])
-        XCTAssertTrue(try XCTUnwrap(hits.first?.snippet).contains("body-only needle"))
+        XCTAssertEqual(result.hits.map(\.uri), [note.path])
+        XCTAssertTrue(try XCTUnwrap(result.hits.first?.snippet).contains("body-only needle"))
+        XCTAssertEqual(result.coverage.readFiles, 1)
+        XCTAssertEqual(result.coverage.skippedFiles, 0)
+        XCTAssertFalse(result.coverage.limited)
     }
 
     @MainActor
@@ -173,12 +176,15 @@ final class PKSNotesTests: XCTestCase {
         _ = await model.searchWorkspace("no-match")
         let indexElapsed = indexStarted.duration(to: clock.now)
         let searchStarted = clock.now
-        let hits = await model.searchWorkspace("ye de gang qin qu")
+        let result = await model.searchWorkspace("ye de gang qin qu")
         let searchElapsed = searchStarted.duration(to: clock.now)
 
         XCTAssertTrue(model.globalFileIndexReady)
-        XCTAssertEqual(hits.map(\.uri), [root.appendingPathComponent("Folder-0999/夜的钢琴曲五.md").path])
-        XCTAssertNil(hits.first?.snippet)
+        XCTAssertEqual(result.hits.map(\.uri), [root.appendingPathComponent("Folder-0999/夜的钢琴曲五.md").path])
+        XCTAssertNil(result.hits.first?.snippet)
+        XCTAssertEqual(result.coverage.readFiles, 999)
+        XCTAssertEqual(result.coverage.skippedFiles, 0)
+        XCTAssertFalse(result.coverage.limited)
         XCTAssertLessThan(indexElapsed, .seconds(10))
         XCTAssertLessThan(searchElapsed, .seconds(2))
         print("PKS_PERF global_pinyin_active_workspace_1000 index=\(indexElapsed) warm_search=\(searchElapsed)")

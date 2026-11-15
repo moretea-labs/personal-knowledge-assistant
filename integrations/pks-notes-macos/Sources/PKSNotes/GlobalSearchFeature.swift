@@ -295,6 +295,8 @@ final class GlobalSearchResults: ObservableObject {
     private var spotlightHits: [GlobalSearchItem] = []
     private var searchTask: Task<Void, Never>?
     private var workspaceSearchTask: Task<Void, Never>?
+    private var workspaceCoverage = WorkspaceSearch.Coverage()
+    private var librarySearchUnavailable = false
 
     func start() {
         if applications.isEmpty {
@@ -303,6 +305,8 @@ final class GlobalSearchResults: ObservableObject {
         query = ""
         items = []
         selectedIndex = 0
+        workspaceCoverage = WorkspaceSearch.Coverage()
+        librarySearchUnavailable = false
         statusMessage = nil
     }
 
@@ -312,6 +316,35 @@ final class GlobalSearchResults: ObservableObject {
         workspaceSearchTask?.cancel()
         workspaceSearchTask = nil
         spotlight.cancel()
+    }
+
+    static func makeStatusMessage(
+        coverage: WorkspaceSearch.Coverage,
+        libraryUnavailable: Bool,
+        language: AppLanguage
+    ) -> String? {
+        var messages: [String] = []
+        if libraryUnavailable {
+            messages.append(language.text("Library search unavailable"))
+        }
+        if coverage.limited {
+            messages.append(language.text("Partial workspace results"))
+        }
+        if coverage.skippedFiles > 0 {
+            messages.append(String(
+                format: language.text("%d note bodies not searched"),
+                coverage.skippedFiles
+            ))
+        }
+        return messages.isEmpty ? nil : messages.joined(separator: " · ")
+    }
+
+    private func updateStatusMessage() {
+        statusMessage = Self.makeStatusMessage(
+            coverage: workspaceCoverage,
+            libraryUnavailable: librarySearchUnavailable,
+            language: .current
+        )
     }
 
     private func publish() {
@@ -337,6 +370,8 @@ final class GlobalSearchResults: ObservableObject {
         cancel()
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         selectedIndex = 0
+        workspaceCoverage = WorkspaceSearch.Coverage()
+        librarySearchUnavailable = false
         statusMessage = nil
         appHits = GlobalApplicationCatalog.matches(applications, query: text)
         pksHits = []
@@ -367,10 +402,12 @@ final class GlobalSearchResults: ObservableObject {
             }
             if let notesModel = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel {
                 self.workspaceSearchTask = Task { [weak self] in
-                    let hits = await notesModel.searchWorkspace(text)
+                    let result = await notesModel.searchWorkspace(text)
                     guard let self, !Task.isCancelled,
                           self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
-                    self.workspaceHits = hits
+                    self.workspaceHits = result.hits
+                    self.workspaceCoverage = result.coverage
+                    self.updateStatusMessage()
                     self.publish()
                 }
             }
@@ -394,7 +431,8 @@ final class GlobalSearchResults: ObservableObject {
                     guard let file = hit.localFileURL else { return false }
                     return seen.insert(file.standardizedFileURL.path).inserted
                 }
-                self.statusMessage = nil
+                self.librarySearchUnavailable = false
+                self.updateStatusMessage()
                 // Primary results are ready; optional related retrieval must not hold the main spinner.
                 self.loading = false
                 self.publish()
@@ -433,7 +471,8 @@ final class GlobalSearchResults: ObservableObject {
             } catch {
                 guard !Task.isCancelled, self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 // Workspace and Spotlight results remain available without the PKS library.
-                self.statusMessage = AppLanguage.current.text("Library search unavailable")
+                self.librarySearchUnavailable = true
+                self.updateStatusMessage()
             }
             self.loading = false
             self.searchTask = nil

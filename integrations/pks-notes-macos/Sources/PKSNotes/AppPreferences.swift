@@ -201,6 +201,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Finding related knowledge…": "正在查找相关知识…",
         "No related results.": "没有相关结果。",
         "Related search unavailable.": "相关搜索当前不可用；本地笔记与反向链接不受影响。",
+        "Partial workspace results": "工作区搜索结果不完整",
+        "%d note bodies not searched": "%d 篇笔记正文未参与搜索",
         "Saving Markdown automatically…": "正在自动保存 Markdown…",
         "Quick Open Note…": "快速打开笔记…",
         "New Mind Map": "新建思维导图",
