@@ -14,6 +14,32 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertEqual(results.map(\.title), ["Code", "Xcode", "Visual Studio Code"])
     }
 
+    func testSpotlightWorkspaceMarkdownAndPDFUseLeafspanOpenPath() {
+        let root = URL(fileURLWithPath: "/Users/test/Notes", isDirectory: true)
+        let note = GlobalSearchItem.spotlight(
+            root.appendingPathComponent("Research.md"), title: "Research.md", isFolder: false
+        )
+        let pdf = GlobalSearchItem.spotlight(
+            root.appendingPathComponent("Source.pdf"), title: "Source.pdf", isFolder: false
+        )
+        let folder = GlobalSearchItem.spotlight(
+            root.appendingPathComponent("Archive", isDirectory: true), title: "Archive", isFolder: true
+        )
+        let outside = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Desktop/Other.md"), title: "Other.md", isFolder: false
+        )
+        let other = GlobalSearchItem.spotlight(
+            root.appendingPathComponent("Image.png"), title: "Image.png", isFolder: false
+        )
+
+        XCTAssertTrue(GlobalSearchItem.isLeafspanWorkspaceDocument(note, in: root))
+        XCTAssertTrue(GlobalSearchItem.isLeafspanWorkspaceDocument(pdf, in: root))
+        XCTAssertFalse(GlobalSearchItem.isLeafspanWorkspaceDocument(folder, in: root))
+        XCTAssertFalse(GlobalSearchItem.isLeafspanWorkspaceDocument(outside, in: root))
+        XCTAssertFalse(GlobalSearchItem.isLeafspanWorkspaceDocument(other, in: root))
+        XCTAssertFalse(GlobalSearchItem.isLeafspanWorkspaceDocument(note, in: nil))
+    }
+
     func testGlobalSearchAllowsSingleHanCharacterDocumentQueries() {
         XCTAssertTrue(GlobalSearchRanker.shouldStartDocumentSearch(for: "肾"))
         XCTAssertTrue(GlobalSearchRanker.shouldStartDocumentSearch(for: "AB"))

@@ -81,6 +81,13 @@ struct GlobalSearchItem: Identifiable, Sendable {
               snippet: nil, sourceHit: nil, isRelated: false,
               spotlightContentMatch: contentMatch, spotlightRelevance: relevance)
     }
+
+    static func isLeafspanWorkspaceDocument(_ item: GlobalSearchItem, in root: URL?) -> Bool {
+        guard case .file = item.kind,
+              let root,
+              WorkspaceFiles.contains(item.url, in: root) else { return false }
+        return ["md", "markdown", "pdf"].contains(item.url.pathExtension.lowercased())
+    }
 }
 
 // Only regular application bundles in conventional installation locations.
@@ -568,6 +575,16 @@ final class GlobalSearchController: NSObject, ObservableObject {
                     $0.isVisible && !($0 is NSPanel)
                 })?.makeKeyAndOrderFront(nil)
                 model.openResult(hit)
+            } else if let model = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel,
+                      GlobalSearchItem.isLeafspanWorkspaceDocument(item, in: model.root) {
+                dismiss()
+                NSApp.activate(ignoringOtherApps: true)
+                NSApp.windows.first(where: {
+                    $0.isVisible && !($0 is NSPanel)
+                })?.makeKeyAndOrderFront(nil)
+                // Spotlight results in the active workspace have no PKS hit,
+                // but still use the same dirty-draft, PDF and Markdown opener.
+                model.openFile(item.url)
             } else {
                 let opened = NSWorkspace.shared.open(item.url)
                 dismiss()
