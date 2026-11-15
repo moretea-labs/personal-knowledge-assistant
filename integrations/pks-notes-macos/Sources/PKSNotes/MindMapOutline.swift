@@ -1470,6 +1470,63 @@ extension MindMapOutline {
         return result
     }
 
+    /// Append a Markdown block to the body owned by one structural node.
+    /// PDF citations and workspace-file links share this insertion path.
+    static func appendBlockToNodeBody(
+        _ block: String,
+        in source: String,
+        nodeID: Int
+    ) -> String? {
+        let parsed = nodes(in: source)
+        guard let position = parsed.firstIndex(where: { $0.id == nodeID }) else { return nil }
+        let lines = source.components(separatedBy: "\n")
+        guard lines.indices.contains(nodeID) else { return nil }
+        let bodyEnd = parsed.dropFirst(position + 1).first?.id ?? lines.count
+        guard bodyEnd > nodeID, bodyEnd <= lines.count else { return nil }
+
+        let insertionLine = (nodeID..<bodyEnd).reversed().first {
+            !lines[$0].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        } ?? nodeID
+        let insertionOffset = lines[..<insertionLine].reduce(into: 0) { offset, line in
+            offset += (line as NSString).length + 1
+        } + (lines[insertionLine] as NSString).length
+
+        let nodeIndent = leadingIndentColumns(in: lines[nodeID])
+        let continuationIndent = listContinuationIndent(in: source, nodeID: nodeID) ?? nodeIndent
+        let blockLines = block.trimmingCharacters(in: .newlines).components(separatedBy: "\n")
+        guard blockLines.contains(where: {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) else { return nil }
+
+        let indentation = String(repeating: " ", count: continuationIndent)
+        let indentedBlock = blockLines.map {
+            $0.isEmpty ? $0 : indentation + $0
+        }.joined(separator: "\n")
+        return MarkdownEditing.insert(
+            "\n\n\(indentedBlock)\n\n",
+            into: source,
+            selection: NSRange(location: insertionOffset, length: 0)
+        ).text
+    }
+
+    /// Insert one workspace-file Markdown link under a node. Repeated drops
+    /// of the same target are idempotent.
+    static func appendMarkdownLinkToNodeBody(
+        _ markdownLink: String,
+        in source: String,
+        nodeID: Int
+    ) -> String? {
+        let block = markdownLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !block.contains("\n") else { return nil }
+        let incoming = links(in: block)
+        guard incoming.count == 1, let link = incoming.first else { return nil }
+
+        let parsed = nodes(in: source)
+        let existing = presentations(in: source, nodes: parsed)[nodeID]?.links ?? []
+        if existing.contains(where: { $0.target == link.target }) { return source }
+        return appendBlockToNodeBody(block, in: source, nodeID: nodeID)
+    }
+
     /// Add one canonical WikiLink to an existing structural node. The source
     /// Markdown line remains the only persistence authority.
     static func appendWikiLink(

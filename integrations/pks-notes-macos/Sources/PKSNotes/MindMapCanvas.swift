@@ -312,6 +312,7 @@ struct MindMapCanvas: View {
     let hidesNodeDetails: Bool
     let activeMarkdownTextView: () -> NSTextView?
     let openLink: (String) -> Void
+    let linkForDroppedFile: (URL) -> String?
     let connectNote: (Int) -> Void
     let connectSection: (Int) -> Void
     let createLinkedNote: (Int) -> Void
@@ -1238,6 +1239,58 @@ struct MindMapCanvas: View {
         return true
     }
 
+    @MainActor
+    private func handleWorkspaceFileDrop(_ providers: [NSItemProvider], onto nodeID: Int) -> Bool {
+        guard projectionIsCurrent, editingNodeID == nil,
+              let provider = providers.first(where: {
+                  $0.canLoadObject(ofClass: NSURL.self)
+              }) else { return false }
+
+        let expectedSource = source
+        let expectedRevision = revision
+        let expectedSession = dragSessionID
+        provider.loadObject(ofClass: NSURL.self) { item, _ in
+            guard let file = item as? URL else {
+                Task { @MainActor in
+                    guard dragSessionID == expectedSession else { return }
+                    interchangeError = language.text(
+                        "Could not read the dropped file. Try dropping it again."
+                    )
+                    dropTargetID = nil
+                }
+                return
+            }
+
+            Task { @MainActor in
+                guard dragSessionID == expectedSession else { return }
+                guard validateSource(expectedRevision, expectedSource),
+                      projectionIsCurrent, editingNodeID == nil else {
+                    interchangeError = language.text(
+                        "The note or editor changed before the file link was inserted. Drop the file again."
+                    )
+                    dropTargetID = nil
+                    return
+                }
+                guard let link = linkForDroppedFile(file),
+                      let updated = MindMapOutline.appendMarkdownLinkToNodeBody(
+                        link, in: source, nodeID: nodeID
+                      ) else {
+                    interchangeError = language.text(
+                        "Link target not available in this workspace."
+                    )
+                    dropTargetID = nil
+                    return
+                }
+                interchangeError = nil
+                source = updated
+                selectedID = nodeID
+                dropTargetID = nil
+                requestCanvasFocus()
+            }
+        }
+        return true
+    }
+
     private func selectNode(_ nodeID: Int) {
         guard projectionIsCurrent, editingNodeID != nodeID else { return }
         if editingNodeID != nil {
@@ -1727,7 +1780,11 @@ struct MindMapCanvas: View {
             }
         }
         .onDrop(
-            of: [UTType(exportedAs: PDFCitationPasteboard.type.rawValue, conformingTo: .plainText)],
+            of: [
+                UTType(exportedAs: PDFCitationPasteboard.type.rawValue, conformingTo: .plainText),
+                .url,
+                .fileURL
+            ],
             isTargeted: Binding(
                 get: { !exporting && dropTargetID == node.id },
                 set: { targeted in
@@ -1741,7 +1798,8 @@ struct MindMapCanvas: View {
             )
         ) { providers in
             guard !exporting else { return false }
-            return handlePDFCitationDrop(providers, onto: node.id)
+            if handlePDFCitationDrop(providers, onto: node.id) { return true }
+            return handleWorkspaceFileDrop(providers, onto: node.id)
         }
         .contextMenu {
             let availability = MindMapOutline.actionAvailability(in: source, nodeID: node.id)

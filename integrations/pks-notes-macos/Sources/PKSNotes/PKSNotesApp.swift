@@ -516,35 +516,7 @@ final class PDFCitationDropTarget {
     nonisolated static func citationForNodeInsertion(
         _ citation: String, in markdown: String, nodeID: Int
     ) -> String? {
-        let parsed = MindMapOutline.nodes(in: markdown)
-        guard let position = parsed.firstIndex(where: { $0.id == nodeID }) else { return nil }
-        let lines = markdown.components(separatedBy: "\n")
-        guard lines.indices.contains(nodeID) else { return nil }
-        let bodyEnd = parsed.dropFirst(position + 1).first?.id ?? lines.count
-        guard bodyEnd > nodeID, bodyEnd <= lines.count else { return nil }
-
-        let insertionLine = (nodeID..<bodyEnd).reversed().first {
-            !lines[$0].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        } ?? nodeID
-        let insertionOffset = lines[..<insertionLine].reduce(into: 0) { offset, line in
-            offset += (line as NSString).length + 1
-        } + (lines[insertionLine] as NSString).length
-
-        let nodeIndent = lines[nodeID].prefix(while: { $0 == " " }).count
-        let continuationIndent = MindMapOutline.listContinuationIndent(
-            in: markdown, nodeID: nodeID
-        ) ?? nodeIndent
-        let citationLines = citation.trimmingCharacters(in: .newlines).components(separatedBy: "\n")
-        guard citationLines.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
-            return nil
-        }
-        let indentation = String(repeating: " ", count: continuationIndent)
-        let block = citationLines.map { $0.isEmpty ? "" : indentation + $0 }.joined(separator: "\n")
-        return MarkdownEditing.insert(
-            "\n\n\(block)\n\n",
-            into: markdown,
-            selection: NSRange(location: insertionOffset, length: 0)
-        ).text
+        MindMapOutline.appendBlockToNodeBody(citation, in: markdown, nodeID: nodeID)
     }
 
     /// The menu action uses the same structural-node placement as a PDF drag,
@@ -3812,6 +3784,10 @@ struct NotesWindow: View {
                     target,
                     onUnresolved: { beginLinkRepair(target) }
                 )
+            },
+            linkForDroppedFile: { file in
+                guard let root = model.root else { return nil }
+                return WorkspaceFiles.markdownLinkForDrop(for: file, in: root)
             },
             connectNote: { nodeID in beginMindMapLink(nodeID: nodeID) },
             connectSection: { nodeID in beginMindMapLink(nodeID: nodeID, section: true) },

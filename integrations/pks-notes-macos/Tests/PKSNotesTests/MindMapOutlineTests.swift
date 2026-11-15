@@ -42,6 +42,75 @@ final class MindMapOutlineTests: XCTestCase {
         XCTAssertEqual(MindMapOutline.linkOccurrences(in: markdown).map { $0.link.target }, ["/child.pdf"])
     }
 
+    func testWorkspaceFileLinksAttachToOnlyTheTargetListNodeAndAreIdempotent() throws {
+        let markdown = "# Root\n- Parent\n  - Child\n- Sibling\n"
+        let noteLink = "[Study](/Study.md)"
+        let pdfLink = "[Reading.pdf](/Reading.pdf)"
+        let withNote = try XCTUnwrap(
+            MindMapOutline.appendMarkdownLinkToNodeBody(noteLink, in: markdown, nodeID: 1)
+        )
+        let withPDF = try XCTUnwrap(
+            MindMapOutline.appendMarkdownLinkToNodeBody(pdfLink, in: withNote, nodeID: 1)
+        )
+        let nodes = MindMapOutline.nodes(in: withPDF)
+        let parent = try XCTUnwrap(nodes.first(where: { $0.title == "Parent" }))
+        let child = try XCTUnwrap(nodes.first(where: { $0.title == "Child" }))
+        let sibling = try XCTUnwrap(nodes.first(where: { $0.title == "Sibling" }))
+        let links = MindMapOutline.presentations(in: withPDF, nodes: nodes)
+
+        XCTAssertEqual(
+            Set(links[parent.id]?.links.map(\.target) ?? []),
+            Set(["/Study.md", "/Reading.pdf"])
+        )
+        XCTAssertTrue(links[child.id]?.links.isEmpty ?? true)
+        XCTAssertTrue(links[sibling.id]?.links.isEmpty ?? true)
+        XCTAssertEqual(
+            MindMapOutline.appendMarkdownLinkToNodeBody(pdfLink, in: withPDF, nodeID: parent.id),
+            withPDF
+        )
+    }
+
+    func testWorkspaceFileLinksCanAttachToHeadingNodes() throws {
+        let markdown = "# Root\n## Child\n"
+        let updated = try XCTUnwrap(
+            MindMapOutline.appendMarkdownLinkToNodeBody("[Guide](/Guide.md)", in: markdown, nodeID: 0)
+        )
+        let nodes = MindMapOutline.nodes(in: updated)
+        let root = try XCTUnwrap(nodes.first(where: { $0.title == "Root" }))
+        let child = try XCTUnwrap(nodes.first(where: { $0.title == "Child" }))
+        let links = MindMapOutline.presentations(in: updated, nodes: nodes)
+
+        XCTAssertEqual(links[root.id]?.links.map(\.target), ["/Guide.md"])
+        XCTAssertTrue(links[child.id]?.links.isEmpty ?? true)
+    }
+
+    func testWorkspaceFileDropLinkResolvesToTheOriginalPDF() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-MindMap-File-Drop-\(UUID().uuidString)", isDirectory: true)
+        let root = base.appendingPathComponent("Workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let activeNote = root.appendingPathComponent("Active.md")
+        let pdf = root.appendingPathComponent("Reading (v2).pdf")
+        try "# Active".write(to: activeNote, atomically: true, encoding: .utf8)
+        try Data().write(to: pdf)
+
+        let link = try XCTUnwrap(WorkspaceFiles.markdownLinkForDrop(for: pdf, in: root))
+        let markdown = "# Root\n- Reading\n"
+        let updated = try XCTUnwrap(
+            MindMapOutline.appendMarkdownLinkToNodeBody(link, in: markdown, nodeID: 1)
+        )
+        let nodes = MindMapOutline.nodes(in: updated)
+        let reading = try XCTUnwrap(nodes.first(where: { $0.title == "Reading" }))
+        let target = try XCTUnwrap(
+            MindMapOutline.presentations(in: updated, nodes: nodes)[reading.id]?.links.first?.target
+        )
+        let resolved = WorkspaceFiles.resolveLinkedTarget(target, from: activeNote, in: root)
+
+        XCTAssertEqual(resolved?.standardizedFileURL, pdf.standardizedFileURL)
+    }
+
     func testCollapsedNodeLineIndexMapTracksInsertedAndDeletedMarkdownLines() {
         let original = MindMapOutline.nodes(in: "# Root\n- A\n  - A1\n- B\n- C")
         let inserted = MindMapOutline.nodes(in: "# Root\n- A\n  - New\n  - A1\n- B\n- C")
