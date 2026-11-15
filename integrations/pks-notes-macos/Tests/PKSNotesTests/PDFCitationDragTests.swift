@@ -761,6 +761,16 @@ final class PDFCitationDragTests: XCTestCase {
         XCTAssertTrue(undoManager.canUndo)
         undoManager.undo()
         XCTAssertEqual(textView.string, "Before After")
+
+        // Provider loading is asynchronous. If the editor changes while the
+        // drop payload is being read, the old pointer offset is no longer safe.
+        textView.string = "Changed while the drop payload was loading"
+        let changedText = textView.string
+        XCTAssertFalse(target.insert(
+            citation, currentNote: note,
+            currentDraftRevision: 7, canEdit: true
+        ))
+        XCTAssertEqual(textView.string, changedText)
     }
 
     @MainActor

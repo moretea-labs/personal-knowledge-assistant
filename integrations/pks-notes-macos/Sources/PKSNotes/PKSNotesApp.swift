@@ -407,6 +407,7 @@ final class PDFCitationDropTarget {
     private weak var window: NSWindow?
     private let note: URL
     private let draftRevision: UInt64
+    private let originalText: String
     let insertionIndex: Int
 
     static func window(at screenPoint: NSPoint, in orderedWindows: [NSWindow]) -> NSWindow? {
@@ -443,6 +444,7 @@ final class PDFCitationDropTarget {
         self.window = window
         self.note = note
         self.draftRevision = draftRevision
+        self.originalText = textView.string
         self.insertionIndex = insertionIndex
     }
 
@@ -550,6 +552,7 @@ final class PDFCitationDropTarget {
               currentNote == note,
               currentDraftRevision == draftRevision,
               let textView,
+              textView.string == originalText,
               let window,
               textView.window === window,
               window.makeFirstResponder(textView) else { return false }
