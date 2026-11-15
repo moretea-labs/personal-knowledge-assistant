@@ -842,6 +842,9 @@ final class PDFReaderController: ObservableObject {
             self.activeSearchSelection = nil
         }
         let hasSelectedText = selectedText() != nil
+        if hasSelectedText {
+            clearInvalidRequestedSourceWarning()
+        }
         selectionNeedsPageOnlyReference = hasSelectedText && selectedSourceAnchor() == nil
     }
 
