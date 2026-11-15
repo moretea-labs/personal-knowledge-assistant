@@ -2532,6 +2532,7 @@ struct NotesWindow: View {
         }
         .buttonStyle(.plain)
         .draggable(row.item.url)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier("pks-note-\(row.item.name)")
     }
 
