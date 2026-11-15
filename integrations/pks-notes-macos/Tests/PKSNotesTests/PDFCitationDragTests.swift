@@ -546,6 +546,30 @@ final class PDFCitationDragTests: XCTestCase {
         )
     }
 
+
+    func testPDFCitationDropOnCRLFListTitleAttachesToNodeBody() throws {
+        let markdown = "# Root\r\n- Concept\r\n- Next\r\n"
+        let offset = (markdown as NSString).range(of: "Concept").location + 3
+        let targetOffset = PDFCitationDropTarget.citationInsertionOffset(in: markdown, at: offset)
+        XCTAssertEqual((markdown as NSString).substring(to: targetOffset), "# Root\r\n- Concept")
+
+        let citation = "\n\n[Reading.pdf · p. 2](/Reading.pdf#page=2)\n\n> Evidence\n\n"
+        let formatted = PDFCitationDropTarget.citationForInsertion(citation, in: markdown, at: targetOffset)
+        let inserted = MarkdownEditing.insert(
+            formatted, into: markdown, selection: NSRange(location: targetOffset, length: 0)
+        ).text
+
+        XCTAssertTrue(inserted.contains("\r\n  [Reading.pdf · p. 2]"))
+        XCTAssertFalse(inserted.replacingOccurrences(of: "\r\n", with: "").contains("\n"))
+        let nodes = MindMapOutline.nodes(in: inserted)
+        let concept = try XCTUnwrap(nodes.first(where: { $0.title == "Concept" }))
+        let next = try XCTUnwrap(nodes.first(where: { $0.title == "Next" }))
+        XCTAssertGreaterThan(next.id, concept.id)
+        let presentations = MindMapOutline.presentations(in: inserted, nodes: nodes)
+        XCTAssertEqual(presentations[concept.id]?.links.map(\.target), ["/Reading.pdf#page=2"])
+        XCTAssertEqual(presentations[next.id]?.links, [])
+    }
+
     func testPDFCitationDropRejectsFencedAndInlineCodeRegions() throws {
         let fenced = """
         # Root

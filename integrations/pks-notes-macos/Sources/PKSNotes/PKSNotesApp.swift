@@ -457,8 +457,8 @@ final class PDFCitationDropTarget {
         guard let nodeID = MindMapOutline.nodeID(atUTF16Offset: safeOffset, in: markdown) else {
             return safeOffset
         }
-        let lineIndex = source.substring(to: safeOffset).reduce(into: 0) { index, character in
-            if character == "\n" { index += 1 }
+        let lineIndex = markdown.utf16.prefix(safeOffset).reduce(into: 0) { index, unit in
+            if unit == 10 { index += 1 }
         }
         // List and heading titles are both structural node labels. Attach a
         // citation to their body rather than splitting the title at the pointer.
@@ -479,22 +479,26 @@ final class PDFCitationDropTarget {
     nonisolated static func citationForInsertion(_ citation: String, in markdown: String, at offset: Int) -> String {
         let source = markdown as NSString
         let safeOffset = min(max(0, offset), source.length)
+        // Adapt only the inserted PDFKit payload; the Markdown file stays untouched.
+        let lineEnding = markdown.contains("\r\n") ? "\r\n" : "\n"
+        let normalizedCitation = citation.replacingOccurrences(of: "\r\n", with: "\n")
+        let adaptedCitation = normalizedCitation.replacingOccurrences(of: "\n", with: lineEnding)
         guard let nodeID = MindMapOutline.nodeID(atUTF16Offset: safeOffset, in: markdown),
               MindMapOutline.isListNode(in: markdown, nodeID: nodeID) else {
-            return citation
+            return adaptedCitation
         }
 
         let lines = markdown.components(separatedBy: "\n")
-        let currentLineIndex = source.substring(to: safeOffset).reduce(into: 0) { index, character in
-            if character == "\n" { index += 1 }
+        let currentLineIndex = markdown.utf16.prefix(safeOffset).reduce(into: 0) { index, unit in
+            if unit == 10 { index += 1 }
         }
         guard lines.indices.contains(nodeID), lines.indices.contains(currentLineIndex) else {
-            return citation
+            return adaptedCitation
         }
 
         guard let continuationIndent = MindMapOutline.listContinuationIndent(
             in: markdown, nodeID: nodeID
-        ) else { return citation }
+        ) else { return adaptedCitation }
         let currentLine = lines[currentLineIndex]
         let currentLineIndent = currentLine.prefix(while: { $0 == " " }).count
         let blankContinuation = currentLineIndex > nodeID
@@ -509,12 +513,12 @@ final class PDFCitationDropTarget {
         guard currentLineIndex == nodeID
                 || currentLineIndent >= continuationIndent
                 || blankContinuation else {
-            return citation
+            return adaptedCitation
         }
 
-        return citation.components(separatedBy: "\n").map { line in
+        return normalizedCitation.components(separatedBy: "\n").map { line in
             line.isEmpty ? line : String(repeating: " ", count: continuationIndent) + line
-        }.joined(separator: "\n")
+        }.joined(separator: lineEnding)
     }
 
     /// Insert a PDF citation into the selected node's own Markdown body.

@@ -439,7 +439,7 @@ enum MindMapOutline {
         let lines = markdown.components(separatedBy: "\n")
         for (index, line) in lines.enumerated() {
             if index.isMultiple(of: 128), Task.isCancelled { return [] }
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if let fence = activeFence {
                 if closesFence(line, matching: fence) { activeFence = nil }
                 continue
@@ -455,14 +455,14 @@ enum MindMapOutline {
             let hashes = trimmed.prefix(while: { $0 == "#" }).count
             if (1...6).contains(hashes), trimmed.dropFirst(hashes).first == " " {
                 headingDepth = hashes
-                let title = String(trimmed.dropFirst(hashes)).trimmingCharacters(in: .whitespaces)
+                let title = String(trimmed.dropFirst(hashes)).trimmingCharacters(in: .whitespacesAndNewlines)
                 if !title.isEmpty { result.append(.init(id: index, depth: hashes - 1, title: title)) }
                 continue
             }
             let indent = leadingIndentColumns(in: line)
             if let marker = listMarker(in: trimmed) {
                 let title = String(trimmed.dropFirst(marker.markdownPrefix.count))
-                    .trimmingCharacters(in: .whitespaces)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
                 if !title.isEmpty {
                     result.append(.init(id: index, depth: headingDepth + indent / 2, title: title))
                 }
