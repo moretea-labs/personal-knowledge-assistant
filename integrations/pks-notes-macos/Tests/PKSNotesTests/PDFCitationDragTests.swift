@@ -1131,7 +1131,7 @@ extension PDFCitationDragTests {
         let otherNote = root.appendingPathComponent("Other.md")
         XCTAssertTrue(FileManager.default.createFile(atPath: pdf.path, contents: Data()))
         try "# Active\n".write(to: activeNote, atomically: true, encoding: .utf8)
-        try "# Other\n".write(to: otherNote, atomically: true, encoding: .utf8)
+        try "# Other\r\nNotes\r\n".write(to: otherNote, atomically: true, encoding: .utf8)
 
         let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Important fact"))
         let anchor = try XCTUnwrap(PDFSourceAnchor(
@@ -1179,8 +1179,12 @@ extension PDFCitationDragTests {
         XCTAssertFalse(model.isDirty)
 
         let otherContent = try String(contentsOf: otherNote, encoding: .utf8)
-        XCTAssertTrue(otherContent.hasPrefix("# Other\n"))
-        XCTAssertTrue(otherContent.contains(otherSnippet))
+        XCTAssertTrue(otherContent.hasPrefix("# Other\r\nNotes\r\n"))
+        XCTAssertTrue(otherContent.contains(otherSnippet.replacingOccurrences(of: "\n", with: "\r\n")))
+        XCTAssertFalse(
+            otherContent.replacingOccurrences(of: "\r\n", with: "").contains("\n"),
+            "Appending PDF evidence must not introduce bare LF into a CRLF note."
+        )
         XCTAssertTrue(otherContent.contains(anchor.fragment))
     }
 }

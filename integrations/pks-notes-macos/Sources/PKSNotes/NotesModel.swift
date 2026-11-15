@@ -2378,7 +2378,7 @@ final class NotesModel: ObservableObject {
         }
 
         let descriptor = note.path.withCString {
-            Darwin.open($0, O_WRONLY | O_APPEND)
+            Darwin.open($0, O_RDWR | O_APPEND)
         }
         guard descriptor >= 0 else {
             message = AppLanguage.current.text("Could not add PDF page to note.")
@@ -2387,7 +2387,23 @@ final class NotesModel: ObservableObject {
 
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
-            try handle.write(contentsOf: Data("\n\n\(snippet)\n".utf8))
+            // Inspect a bounded prefix of the same file descriptor before the
+            // additive write; a CRLF note must not gain bare LF on PDF capture.
+            var prefix = [UInt8](repeating: 0, count: 8_192)
+            let count = prefix.withUnsafeMutableBytes {
+                Darwin.pread(descriptor, $0.baseAddress, $0.count, 0)
+            }
+            guard count >= 0 else { throw CocoaError(.fileReadUnknown) }
+            let lineEnding: String
+            if let index = prefix[..<count].firstIndex(where: { $0 == 10 || $0 == 13 }) {
+                lineEnding = prefix[index] == 13
+                    ? (index + 1 < count && prefix[index + 1] == 10 ? "\r\n" : "\r")
+                    : "\n"
+            } else {
+                lineEnding = "\n"
+            }
+            let adaptedSnippet = snippet.replacingOccurrences(of: "\n", with: lineEnding)
+            try handle.write(contentsOf: Data("\(lineEnding)\(lineEnding)\(adaptedSnippet)\(lineEnding)".utf8))
             try handle.close()
             // Appending to an existing note does not alter file-tree shape.
             message = "\(AppLanguage.current.text("Added PDF page to note")): \(note.deletingPathExtension().lastPathComponent)"
