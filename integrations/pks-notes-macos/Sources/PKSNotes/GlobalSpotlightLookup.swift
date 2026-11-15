@@ -33,6 +33,7 @@ final class GlobalSpotlightLookup {
                 // A broad content query can return many matches. Inspect a
                 // bounded projection, then prefer filename hits over body hits.
                 // The old 250-row prefix truncated useful matches prematurely.
+                var metadataByPath: [String: NSMetadataItem] = [:]
                 let hits: [GlobalSearchItem] = metadata.results.prefix(5000).compactMap { value in
                     guard let result = value as? NSMetadataItem,
                           let url = Self.fileURL(
@@ -40,6 +41,7 @@ final class GlobalSpotlightLookup {
                               metadataPath: result.value(forAttribute: NSMetadataItemPathKey) as? String
                           ),
                           url.pathExtension.lowercased() != "app" else { return nil }
+                    metadataByPath[url.path] = result
                     let name = result.value(forAttribute: NSMetadataItemFSNameKey) as? String
                         ?? url.lastPathComponent
                     let type = result.value(forAttribute: NSMetadataItemContentTypeKey) as? String
@@ -63,8 +65,15 @@ final class GlobalSpotlightLookup {
                                                       contentMatch: contentOnly,
                                                       relevance: relevance)
                 }
+                let ranked = GlobalSpotlightLookup.rank(hits, for: term)
+                let enriched = ranked.map { item in
+                    guard let result = metadataByPath[item.url.path],
+                          let content = result.value(forAttribute: "kMDItemTextContent") as? String,
+                          let snippet = Self.contentSnippet(content, matching: term) else { return item }
+                    return item.withSnippet(snippet)
+                }
                 self.cancel()
-                completion(GlobalSpotlightLookup.rank(hits, for: term))
+                completion(enriched)
             }
         }
         if !metadata.start() { cancel() }
@@ -86,6 +95,33 @@ final class GlobalSpotlightLookup {
             "kMDItemTextContent", term,
             NSMetadataItemPathKey, term
         )
+    }
+
+    /// Extract a short excerpt from Spotlight's existing indexed content. This reads
+    /// metadata only; it never opens or hydrates the matched document.
+    nonisolated static func contentSnippet(
+        _ content: String?, matching term: String, limit: Int = 120
+    ) -> String? {
+        let maximum = max(1, limit)
+        guard let content, !content.isEmpty, !term.isEmpty, term.count <= maximum,
+              let match = content.range(
+                  of: term, options: [.caseInsensitive, .diacriticInsensitive]
+              ) else { return nil }
+
+        let context = max(8, (maximum - term.count) / 2)
+        let start = content.index(
+            match.lowerBound, offsetBy: -context, limitedBy: content.startIndex
+        ) ?? content.startIndex
+        let end = content.index(
+            match.upperBound, offsetBy: context, limitedBy: content.endIndex
+        ) ?? content.endIndex
+        let excerpt = content[start..<end]
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        let clipped = String(excerpt.prefix(maximum))
+        guard !clipped.isEmpty else { return nil }
+        return (start > content.startIndex ? "…" : "") + clipped
+            + (end < content.endIndex ? "…" : "")
     }
 
     // NSMetadataItemURLKey can be absent for iCloud Drive and local results;

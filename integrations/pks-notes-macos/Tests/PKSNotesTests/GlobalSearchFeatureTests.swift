@@ -87,6 +87,30 @@ final class GlobalSearchFeatureTests: XCTestCase {
         ]))
     }
 
+    func testSpotlightSnippetUsesCJKContextAndNormalizesWhitespace() {
+        let snippet = GlobalSpotlightLookup.contentSnippet(
+            "第一段\n\n肾脏计划\t继续", matching: "肾脏"
+        )
+        XCTAssertEqual(snippet, "第一段 肾脏计划 继续")
+    }
+
+    func testSpotlightSnippetMatchesCaseAndDiacriticsWithinBoundedContext() {
+        let content = String(repeating: "前", count: 80)
+            + " Café " + String(repeating: "后", count: 80)
+        let snippet = GlobalSpotlightLookup.contentSnippet(
+            content, matching: "cafe", limit: 40
+        )
+        XCTAssertTrue(snippet?.contains("Café") == true)
+        XCTAssertTrue(snippet?.hasPrefix("…") == true)
+        XCTAssertTrue(snippet?.hasSuffix("…") == true)
+        XCTAssertLessThanOrEqual(snippet?.count ?? 0, 42)
+    }
+
+    func testSpotlightSnippetReturnsNilWhenContentDoesNotContainQuery() {
+        XCTAssertNil(GlobalSpotlightLookup.contentSnippet("Unrelated source text", matching: "missing"))
+        XCTAssertNil(GlobalSpotlightLookup.contentSnippet(nil, matching: "source"))
+    }
+
     func testSearchFoldIsCaseAndDiacriticInsensitive() {
         let apps = [
             GlobalSearchItem.application(URL(fileURLWithPath: "/Applications/Cafe.app"), title: "Café"),

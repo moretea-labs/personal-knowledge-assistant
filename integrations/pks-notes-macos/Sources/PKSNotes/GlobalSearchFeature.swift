@@ -82,6 +82,13 @@ struct GlobalSearchItem: Identifiable, Sendable {
               spotlightContentMatch: contentMatch, spotlightRelevance: relevance)
     }
 
+    func withSnippet(_ snippet: String) -> GlobalSearchItem {
+        .init(id: id, kind: kind, title: title, subtitle: subtitle, url: url,
+              snippet: snippet, sourceHit: sourceHit, isRelated: isRelated,
+              spotlightContentMatch: spotlightContentMatch,
+              spotlightRelevance: spotlightRelevance)
+    }
+
     static func isLeafspanWorkspaceDocument(_ item: GlobalSearchItem, in root: URL?) -> Bool {
         guard case .file = item.kind,
               let root,
@@ -699,13 +706,13 @@ private struct GlobalSearchPalette: View {
                                         Text(item.title).lineLimit(1).font(.system(size: 14, weight: .medium))
                                         Text(item.subtitle).lineLimit(1).font(.system(size: 11))
                                             .foregroundStyle(.secondary)
-                                        if item.spotlightContentMatch {
+                                        if let snippet = item.snippet, !snippet.isEmpty, snippet != item.subtitle {
+                                            Text(snippet).lineLimit(1).font(.system(size: 11))
+                                                .foregroundStyle(.secondary)
+                                        } else if item.spotlightContentMatch {
                                             Text(AppLanguage.current.resolved == .simplifiedChinese
                                                  ? "正文匹配" : "Content match")
                                                 .lineLimit(1).font(.system(size: 11))
-                                                .foregroundStyle(.secondary)
-                                        } else if let snippet = item.snippet, !snippet.isEmpty, snippet != item.subtitle {
-                                            Text(snippet).lineLimit(1).font(.system(size: 11))
                                                 .foregroundStyle(.secondary)
                                         }
                                     }
