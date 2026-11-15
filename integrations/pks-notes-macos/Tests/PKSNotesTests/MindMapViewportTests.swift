@@ -452,6 +452,26 @@ final class MindMapViewportTests: XCTestCase {
         })
     }
 
+    func testInitialDisclosureDoesNotCollapseBranchesOfAnotherRoot() {
+        let nodes = [
+            MindMapNode(id: 0, depth: 0, title: "First root"),
+            MindMapNode(id: 1, depth: 1, title: "First branch")
+        ] + (2..<102).map { MindMapNode(id: $0, depth: 2, title: "First detail \\($0)") }
+        + [MindMapNode(id: 102, depth: 1, title: "Second branch")]
+        + (103..<203).map { MindMapNode(id: $0, depth: 2, title: "Second detail \\($0)") }
+        + [
+            MindMapNode(id: 203, depth: 0, title: "Other root"),
+            MindMapNode(id: 204, depth: 1, title: "Other root branch")
+        ]
+        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
+            nodes: nodes,
+            layout: MindMapSpatialLayout.layout(nodes),
+            viewport: CGSize(width: 1000, height: 680)
+        )
+        XCTAssertEqual(collapsed, Set([1, 102]))
+        XCTAssertFalse(collapsed.contains(204))
+    }
+
     func testShortMapKeepsBranchesExpandedOnFirstOpen() {
         let nodes = [
             MindMapNode(id: 0, depth: 0, title: "Root"),

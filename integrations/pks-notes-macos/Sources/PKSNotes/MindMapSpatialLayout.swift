@@ -358,7 +358,7 @@ enum MindMapSpatialLayout {
         guard !branches.isEmpty,
               branches.allSatisfy({ abs($0.center.y - root.center.y) > viewport.height * 0.42 })
         else { return [] }
-        return Set(nodes.filter { $0.depth == 1 }.map(\.id))
+        return Set(branches.map(\.id))
     }
 
     static func layout(
