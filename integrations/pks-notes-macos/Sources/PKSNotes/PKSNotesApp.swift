@@ -4256,6 +4256,10 @@ struct NotesWindow: View {
         } else {
             showingMindMap = false
             showingMindMapSourcePane = false
+            if model.previewPDF != nil {
+                // A PDF backlink targets this Markdown line, not the PDF pane.
+                compactStudyShowsStudyPane = true
+            }
         }
         mode = .edit
         Task { @MainActor in
