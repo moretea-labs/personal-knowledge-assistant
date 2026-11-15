@@ -682,15 +682,13 @@ final class PDFReaderController: ObservableObject {
     }
 
     func goPrevious() {
-        invalidRequestedPage = nil
-        invalidRequestedSelection = false
+        clearInvalidRequestedSourceWarning()
         pdfView?.goToPreviousPage(nil)
         syncFromView()
     }
 
     func goNext() {
-        invalidRequestedPage = nil
-        invalidRequestedSelection = false
+        clearInvalidRequestedSourceWarning()
         pdfView?.goToNextPage(nil)
         syncFromView()
     }
@@ -705,8 +703,7 @@ final class PDFReaderController: ObservableObject {
             return
         }
         guard let page = document.page(at: oneBasedPage - 1) else { return }
-        invalidRequestedPage = nil
-        invalidRequestedSelection = false
+        clearInvalidRequestedSourceWarning()
         pdfView?.go(to: page)
         syncFromView()
     }
@@ -863,9 +860,15 @@ final class PDFReaderController: ObservableObject {
         ]
     }
 
+    private func clearInvalidRequestedSourceWarning() {
+        invalidRequestedPage = nil
+        invalidRequestedSelection = false
+    }
+
     private func revealSearchMatch() {
         guard searchMatches.indices.contains(searchMatchIndex),
               let view = pdfView else { return }
+        clearInvalidRequestedSourceWarning()
         let selection = searchMatches[searchMatchIndex]
         selection.color = NSColor.systemYellow.withAlphaComponent(0.45)
         view.currentSelection = selection

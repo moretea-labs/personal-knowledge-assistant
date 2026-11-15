@@ -534,6 +534,37 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testSearchNavigationClearsStaleRequestedSelectionWarning() async throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let textView = NSTextView(frame: bounds)
+        textView.string = "Searchable PDF source"
+        let document = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: bounds)))
+        let anchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 1, normalizedRects: [CGRect(x: 0.1, y: 0.1, width: 0.5, height: 0.1)],
+            fingerprint: "0000000000000000"
+        ))
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PDF-search-warning-\(UUID().uuidString).pdf")
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        defer {
+            controller.detach(view: view)
+            removeStoredReadingPosition(for: url)
+        }
+
+        controller.attach(view: view, document: document, url: url, requestedPage: nil, requestedAnchor: anchor)
+        XCTAssertTrue(controller.invalidRequestedSelection)
+        controller.search("Searchable")
+        for _ in 0..<100 where controller.isSearching {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertFalse(controller.isSearching)
+        XCTAssertFalse(controller.invalidRequestedSelection)
+        XCTAssertEqual(controller.selectedText(), "Searchable")
+    }
+
+    @MainActor
     func testManualPageNavigationClearsStaleReferenceWarnings() throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let document = PDFDocument()
