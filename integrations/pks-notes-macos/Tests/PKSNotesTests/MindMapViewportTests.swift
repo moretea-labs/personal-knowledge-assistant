@@ -676,18 +676,58 @@ final class MindMapViewportTests: XCTestCase {
         XCTAssertEqual(original[0]?.links, updated[0]?.links)
     }
 
-    func testFitCanShowMapsFarLargerThanTheViewport() {
-        let scale = MindMapViewportGeometry.fittingZoom(
-            mapSize: CGSize(width: 20000, height: 150000),
-            viewport: CGSize(width: 800, height: 650)
+    func testFitCanShowMapsFarLargerThanTheViewport() throws {
+        let placement = MindMapPlacement(
+            node: MindMapNode(id: 0, depth: 0, title: "Large map"),
+            parentID: nil,
+            center: CGPoint(x: 10_000, y: 75_000),
+            size: CGSize(width: 20_000, height: 150_000)
         )
-        XCTAssertGreaterThan(scale, 0)
-        XCTAssertLessThanOrEqual(150000 * scale, 650 - 36 + 0.01)
-        XCTAssertLessThanOrEqual(20000 * scale, 800 - 36 + 0.01)
-        XCTAssertEqual(MindMapViewportGeometry.fittingZoom(
-            mapSize: CGSize(width: 400, height: 300),
-            viewport: CGSize(width: 1000, height: 800)
-        ), 1.25)
+        let fitted = try XCTUnwrap(MindMapViewportGeometry.fittingViewport(
+            placements: [placement],
+            mapSize: CGSize(width: 20_000, height: 150_000),
+            viewport: CGSize(width: 800, height: 650)
+        ))
+        XCTAssertGreaterThan(fitted.zoom, 0)
+        XCTAssertLessThanOrEqual(150_000 * fitted.zoom, 650 - 36 + 0.01)
+        XCTAssertLessThanOrEqual(20_000 * fitted.zoom, 800 - 36 + 0.01)
+    }
+
+    func testFitUsesVisibleNodeBoundsInsteadOfPaddedCanvasBounds() throws {
+        let placements = [
+            MindMapPlacement(
+                node: MindMapNode(id: 0, depth: 0, title: "Root"),
+                parentID: nil,
+                center: CGPoint(x: 140, y: 160),
+                size: CGSize(width: 220, height: 64)
+            ),
+            MindMapPlacement(
+                node: MindMapNode(id: 1, depth: 1, title: "Branch"),
+                parentID: 0,
+                center: CGPoint(x: 430, y: 160),
+                size: CGSize(width: 240, height: 60)
+            )
+        ]
+        let mapSize = CGSize(width: 1_000, height: 1_000)
+        let viewport = CGSize(width: 800, height: 600)
+        let fitted = try XCTUnwrap(MindMapViewportGeometry.fittingViewport(
+            placements: placements,
+            mapSize: mapSize,
+            viewport: viewport
+        ))
+        let contentBounds = CGRect(x: 30, y: 128, width: 520, height: 64)
+        let screenMinX = viewport.width / 2 + fitted.offset.width
+            + (contentBounds.minX - mapSize.width / 2) * fitted.zoom
+        let screenMinY = viewport.height / 2 + fitted.offset.height
+            + (contentBounds.minY - mapSize.height / 2) * fitted.zoom
+
+        XCTAssertEqual(fitted.zoom, 1.25, accuracy: 0.001)
+        XCTAssertEqual(screenMinX, (viewport.width - contentBounds.width * fitted.zoom) / 2, accuracy: 0.001)
+        XCTAssertEqual(screenMinY, (viewport.height - contentBounds.height * fitted.zoom) / 2, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(screenMinX, 18)
+        XCTAssertGreaterThanOrEqual(screenMinY, 18)
+        XCTAssertLessThanOrEqual(screenMinX + contentBounds.width * fitted.zoom, viewport.width - 18)
+        XCTAssertLessThanOrEqual(screenMinY + contentBounds.height * fitted.zoom, viewport.height - 18)
     }
 
     func testLayoutSnapshotPrecomputesStyleAwareConnectorGeometryAndStrokeBounds() throws {

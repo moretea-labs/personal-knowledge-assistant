@@ -2061,11 +2061,13 @@ struct MindMapCanvas: View {
     }
 
     private func fitToContent(viewport: CGSize) -> Bool {
-        guard !mapLayout.placements.isEmpty else { return false }
-        zoom = MindMapViewportGeometry.fittingZoom(
-            mapSize: mapLayout.size, viewport: viewport
-        )
-        viewportOffset = .zero
+        guard let fitted = MindMapViewportGeometry.fittingViewport(
+            placements: mapLayout.placements,
+            mapSize: mapLayout.size,
+            viewport: viewport
+        ) else { return false }
+        zoom = fitted.zoom
+        viewportOffset = fitted.offset
         return true
     }
 

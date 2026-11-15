@@ -79,14 +79,46 @@ enum MindMapViewportGeometry {
         return bounds.intersects(viewport)
     }
 
-    static func fittingZoom(mapSize: CGSize, viewport: CGSize) -> CGFloat {
-        guard mapSize.width > 0, mapSize.height > 0,
+    /// Fit the visible node cards, not the padded infinite-canvas extent.
+    /// Center the actual content bounds inside the viewport with the same 18pt inset.
+    static func fittingViewport(
+        placements: [MindMapPlacement],
+        mapSize: CGSize,
+        viewport: CGSize
+    ) -> (zoom: CGFloat, offset: CGSize)? {
+        guard !placements.isEmpty,
+              mapSize.width > 0, mapSize.height > 0,
               viewport.width > 36, viewport.height > 36,
-              mapSize.width.isFinite, mapSize.height.isFinite else { return 1 }
-        return min(1.25, max(0.0001, min(
-            (viewport.width - 36) / mapSize.width,
-            (viewport.height - 36) / mapSize.height
+              mapSize.width.isFinite, mapSize.height.isFinite,
+              viewport.width.isFinite, viewport.height.isFinite,
+              placements.allSatisfy({
+                  $0.center.x.isFinite && $0.center.y.isFinite
+                      && $0.size.width.isFinite && $0.size.width > 0
+                      && $0.size.height.isFinite && $0.size.height > 0
+              }) else { return nil }
+
+        let contentBounds = placements.reduce(CGRect.null) { bounds, placement in
+            bounds.union(CGRect(
+                x: placement.center.x - placement.size.width / 2,
+                y: placement.center.y - placement.size.height / 2,
+                width: placement.size.width,
+                height: placement.size.height
+            ))
+        }
+        guard !contentBounds.isNull,
+              contentBounds.minX.isFinite, contentBounds.maxX.isFinite,
+              contentBounds.minY.isFinite, contentBounds.maxY.isFinite,
+              contentBounds.width > 0, contentBounds.height > 0 else { return nil }
+
+        let zoom = min(1.25, max(0.0001, min(
+            (viewport.width - 36) / contentBounds.width,
+            (viewport.height - 36) / contentBounds.height
         )))
+        let center = CGPoint(x: contentBounds.midX, y: contentBounds.midY)
+        return (
+            zoom,
+            centeredOffset(for: center, mapSize: mapSize, zoom: zoom)
+        )
     }
 
     /// Keep the root and its first-level branches visible on first open.
