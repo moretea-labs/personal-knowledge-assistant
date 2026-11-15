@@ -509,6 +509,42 @@ final class PDFCitationDropTarget {
         }.joined(separator: "\n")
     }
 
+    /// Insert a PDF citation into the selected node's own Markdown body.
+    /// The first following outline node bounds that body, so descendants and
+    /// siblings remain separate and the existing Markdown writer stays canonical.
+    nonisolated static func citationForNodeInsertion(
+        _ citation: String, in markdown: String, nodeID: Int
+    ) -> String? {
+        let parsed = MindMapOutline.nodes(in: markdown)
+        guard let position = parsed.firstIndex(where: { $0.id == nodeID }) else { return nil }
+        let lines = markdown.components(separatedBy: "\n")
+        guard lines.indices.contains(nodeID) else { return nil }
+        let bodyEnd = parsed.dropFirst(position + 1).first?.id ?? lines.count
+        guard bodyEnd > nodeID, bodyEnd <= lines.count else { return nil }
+
+        let insertionLine = (nodeID..<bodyEnd).reversed().first {
+            !lines[$0].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        } ?? nodeID
+        let insertionOffset = lines[..<insertionLine].reduce(into: 0) { offset, line in
+            offset += (line as NSString).length + 1
+        } + (lines[insertionLine] as NSString).length
+
+        let nodeIndent = lines[nodeID].prefix(while: { $0 == " " }).count
+        let continuationIndent = MindMapOutline.isListNode(in: markdown, nodeID: nodeID)
+            ? nodeIndent + 2 : nodeIndent
+        let citationLines = citation.trimmingCharacters(in: .newlines).components(separatedBy: "\n")
+        guard citationLines.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            return nil
+        }
+        let indentation = String(repeating: " ", count: continuationIndent)
+        let block = citationLines.map { $0.isEmpty ? "" : indentation + $0 }.joined(separator: "\n")
+        return MarkdownEditing.insert(
+            "\n\n\(block)\n\n",
+            into: markdown,
+            selection: NSRange(location: insertionOffset, length: 0)
+        ).text
+    }
+
     @discardableResult
     func insert(
         _ citation: String,
@@ -3733,10 +3769,19 @@ struct NotesWindow: View {
     }
 
     private var mindMapCanvas: some View {
-        MindMapCanvas(
+        let sourceNote = model.selected?.standardizedFileURL
+        return MindMapCanvas(
             source: $model.draft,
             selectedID: $mindMapSelectionLine,
             revision: model.draftRevision,
+            validateSource: { expectedRevision, expectedSource in
+                guard let sourceNote else { return false }
+                return model.selected?.standardizedFileURL == sourceNote
+                    && model.draftRevision == expectedRevision
+                    && model.draft == expectedSource
+                    && !model.loadingNote
+                    && model.externalBody == nil
+            },
             hidesNodeDetails: showingMindMapSourcePane,
             activeMarkdownTextView: { markdownTextView(in: NSApp.keyWindow?.contentView) },
             openLink: { target in

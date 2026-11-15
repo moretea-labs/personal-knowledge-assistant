@@ -260,6 +260,53 @@ final class PDFCitationDragTests: XCTestCase {
         XCTAssertTrue(trailingInsertion.contains("\n  > Important fact"))
     }
 
+    func testPDFCitationDropOnMindMapListNodeAttachesToItsOwnMarkdownBody() throws {
+        let citation = "\n\n[Reading (v2).pdf · p. 1](/Reading%20%28v2%29.pdf#page=1&rects=...)\n\n> Important fact\n\n"
+        let markdown = "# Root\n- 😀Concept\n  Existing note\n  - Child\n    Child note\n- Next\n"
+        let target = "/Reading%20%28v2%29.pdf#page=1&rects=..."
+
+        let inserted = try XCTUnwrap(PDFCitationDropTarget.citationForNodeInsertion(
+            citation, in: markdown, nodeID: 1
+        ))
+        let nodes = MindMapOutline.nodes(in: inserted)
+        let concept = try XCTUnwrap(nodes.first(where: { $0.title == "😀Concept" }))
+        let child = try XCTUnwrap(nodes.first(where: { $0.title == "Child" }))
+        let presentations = MindMapOutline.presentations(in: inserted, nodes: nodes)
+
+        XCTAssertEqual(nodes.map(\.title), ["Root", "😀Concept", "Child", "Next"])
+        XCTAssertEqual(presentations[concept.id]?.links.map(\.target), [target])
+        XCTAssertTrue(presentations[concept.id]?.body.contains("> Important fact") == true)
+        XCTAssertEqual(presentations[child.id]?.links, [])
+        XCTAssertTrue(inserted.contains("  Existing note\n\n  [Reading (v2).pdf"))
+        XCTAssertLessThan(
+            try XCTUnwrap(inserted.range(of: "Important fact")).lowerBound,
+            try XCTUnwrap(inserted.range(of: "  - Child")).lowerBound
+        )
+
+        let root = try XCTUnwrap(nodes.first(where: { $0.title == "Root" }))
+        XCTAssertEqual(presentations[root.id]?.links, [])
+    }
+
+    func testPDFCitationDropOnMindMapHeadingAttachesBeforeTheNextHeading() throws {
+        let citation = "\n\n[Reading.pdf · p. 2](/Reading.pdf#page=2&rects=...)\n\n> Selected passage\n\n"
+        let markdown = "# Root\nOverview\n## Child\nChild text\n"
+        let inserted = try XCTUnwrap(PDFCitationDropTarget.citationForNodeInsertion(
+            citation, in: markdown, nodeID: 0
+        ))
+        let nodes = MindMapOutline.nodes(in: inserted)
+        let root = try XCTUnwrap(nodes.first(where: { $0.title == "Root" }))
+        let child = try XCTUnwrap(nodes.first(where: { $0.title == "Child" }))
+        let presentations = MindMapOutline.presentations(in: inserted, nodes: nodes)
+
+        XCTAssertEqual(presentations[root.id]?.links.map(\.target), ["/Reading.pdf#page=2&rects=..."])
+        XCTAssertEqual(presentations[child.id]?.links, [])
+        XCTAssertTrue(presentations[root.id]?.body.contains("> Selected passage") == true)
+        XCTAssertLessThan(
+            try XCTUnwrap(inserted.range(of: "Selected passage")).lowerBound,
+            try XCTUnwrap(inserted.range(of: "## Child")).lowerBound
+        )
+    }
+
     @MainActor
     func testPDFCitationMarkdownPersistsAndReopensWithExactAnchor() async throws {
         let defaults = UserDefaults.standard

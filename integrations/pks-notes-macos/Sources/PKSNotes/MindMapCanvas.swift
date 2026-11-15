@@ -291,6 +291,7 @@ struct MindMapCanvas: View {
     @Binding var source: String
     @Binding var selectedID: Int?
     let revision: UInt64
+    let validateSource: (UInt64, String) -> Bool
     let hidesNodeDetails: Bool
     let activeMarkdownTextView: () -> NSTextView?
     let openLink: (String) -> Void
@@ -1169,6 +1170,56 @@ struct MindMapCanvas: View {
         .frame(width: 410, alignment: .leading)
     }
 
+    @MainActor
+    private func handlePDFCitationDrop(_ providers: [NSItemProvider], onto nodeID: Int) -> Bool {
+        guard projectionIsCurrent, editingNodeID == nil,
+              let provider = providers.first(where: {
+                  $0.hasItemConformingToTypeIdentifier(PDFCitationPasteboard.type.rawValue)
+              }) else { return false }
+
+        let expectedSource = source
+        let expectedRevision = revision
+        let expectedSession = dragSessionID
+        provider.loadItem(forTypeIdentifier: PDFCitationPasteboard.type.rawValue, options: nil) { item, _ in
+            guard let citation = PDFCitationPasteboard.markdown(from: item) else {
+                Task { @MainActor in
+                    guard dragSessionID == expectedSession else { return }
+                    interchangeError = language.text(
+                        "Could not read the PDF citation. Try dragging the selection again."
+                    )
+                    dropTargetID = nil
+                }
+                return
+            }
+
+            Task { @MainActor in
+                guard dragSessionID == expectedSession else { return }
+                guard validateSource(expectedRevision, expectedSource),
+                      projectionIsCurrent, editingNodeID == nil else {
+                    interchangeError = language.text(
+                        "The note or editor changed before the citation was inserted. Drag the PDF selection again."
+                    )
+                    dropTargetID = nil
+                    return
+                }
+                guard let updated = PDFCitationDropTarget.citationForNodeInsertion(
+                    citation, in: source, nodeID: nodeID
+                ) else {
+                    interchangeError = language.text(
+                        "Could not read the PDF citation. Try dragging the selection again."
+                    )
+                    dropTargetID = nil
+                    return
+                }
+                source = updated
+                selectedID = nodeID
+                dropTargetID = nil
+                requestCanvasFocus()
+            }
+        }
+        return true
+    }
+
     private func selectNode(_ nodeID: Int) {
         guard projectionIsCurrent, editingNodeID != nodeID else { return }
         if editingNodeID != nil {
@@ -1656,6 +1707,23 @@ struct MindMapCanvas: View {
                 // A late exit from another card must not erase the current drop cue.
                 dropTargetID = nil
             }
+        }
+        .onDrop(
+            of: [UTType(exportedAs: PDFCitationPasteboard.type.rawValue, conformingTo: .plainText)],
+            isTargeted: Binding(
+                get: { !exporting && dropTargetID == node.id },
+                set: { targeted in
+                    guard !exporting else { return }
+                    if targeted {
+                        dropTargetID = node.id
+                    } else if dropTargetID == node.id {
+                        dropTargetID = nil
+                    }
+                }
+            )
+        ) { providers in
+            guard !exporting else { return false }
+            return handlePDFCitationDrop(providers, onto: node.id)
         }
         .contextMenu {
             let availability = MindMapOutline.actionAvailability(in: source, nodeID: node.id)
