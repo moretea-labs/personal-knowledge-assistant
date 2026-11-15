@@ -927,6 +927,76 @@ extension PDFCitationDragTests {
     }
 
     @MainActor
+    func testNewPDFCaptureNoteUsesWorkspaceRootAndPreservesSourcePreview() async throws {
+        let defaults = UserDefaults.standard
+        let keys = ["PKSNotesWorkspace", "PKSNotesWorkspaceBookmark", "PKSNotesLastOpenedMarkdown"]
+        let originals = keys.map { defaults.object(forKey: $0) }
+        keys.forEach { defaults.removeObject(forKey: $0) }
+        defer {
+            for (key, original) in zip(keys, originals) {
+                if let original { defaults.set(original, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
+        }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-PDF-New-Note-\(UUID().uuidString)", isDirectory: true)
+        let nested = root.appendingPathComponent("Study", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let currentNote = nested.appendingPathComponent("Current.md")
+        let conflictingName = nested.appendingPathComponent("Reading · p.1.md")
+        try "# Current".write(to: currentNote, atomically: true, encoding: .utf8)
+        try "# Existing nested note".write(to: conflictingName, atomically: true, encoding: .utf8)
+
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let source = NSTextView(frame: bounds)
+        source.string = "Key evidence from the reading"
+        let pdf = root.appendingPathComponent("Reading.pdf")
+        let document = try XCTUnwrap(PDFDocument(data: source.dataWithPDF(inside: bounds)))
+        XCTAssertTrue(document.write(to: pdf))
+        let view = PDFView(frame: bounds)
+        let reader = PDFReaderController()
+        reader.attach(view: view, document: document, url: pdf,
+                      requestedPage: nil, requestedAnchor: nil)
+        defer { reader.detach(view: view) }
+        view.currentSelection = try XCTUnwrap(document.findString("Key evidence", withOptions: []).first)
+        let quote = try XCTUnwrap(reader.selectedText())
+        let anchor = try XCTUnwrap(reader.selectedSourceAnchor())
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(currentNote)
+        for _ in 0..<400 where model.selected != currentNote || model.loadingNote {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.selected, currentNote.standardizedFileURL)
+        model.openFile(pdf, pdfPage: 1)
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+
+        let created = try XCTUnwrap(model.createNoteFromPDFCapture(
+            pdf: pdf, page: 1, commentary: "My understanding",
+            selectedText: quote, anchor: anchor
+        ))
+        XCTAssertEqual(created.deletingLastPathComponent().standardizedFileURL, root.standardizedFileURL)
+        XCTAssertEqual(try String(contentsOf: conflictingName, encoding: .utf8), "# Existing nested note")
+        for _ in 0..<400 where model.selected != created || model.loadingNote {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.selected, created.standardizedFileURL)
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        let persisted = try String(contentsOf: created, encoding: .utf8)
+        XCTAssertEqual(model.draft, persisted)
+        XCTAssertTrue(persisted.contains("My understanding"))
+        XCTAssertTrue(persisted.contains("> Key evidence"))
+        let link = try XCTUnwrap(MindMapOutline.linkOccurrences(in: persisted).first?.link.target)
+        XCTAssertEqual(link, "/Reading.pdf#\(anchor.fragment)")
+        XCTAssertTrue(model.openKnowledgeLink(link))
+        XCTAssertEqual(model.previewPDFPage, 1)
+        XCTAssertEqual(model.previewPDFAnchor?.fingerprint, anchor.fingerprint)
+    }
+
+    @MainActor
     func testPDFCaptureToSelectedMindMapNodePersistsItsSourceLinkAfterReopen() async throws {
         let defaults = UserDefaults.standard
         let priorWorkspace = defaults.object(forKey: "PKSNotesWorkspace")

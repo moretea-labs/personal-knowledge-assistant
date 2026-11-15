@@ -1925,29 +1925,21 @@ struct NotesWindow: View {
     private func createNoteFromPDFCapture() {
         guard pdfCaptureTask == nil,
               let capture = pdfCaptureRequest,
-              let root = model.root,
-              let snippet = PDFPageReference.noteSnippet(
-                for: capture.pdf,
-                page: capture.page,
-                root: root,
+              let created = model.createNoteFromPDFCapture(
+                pdf: capture.pdf, page: capture.page,
                 commentary: pdfCaptureCommentary,
-                selectedText: capture.selectedText,
-                anchor: capture.anchor
-              )
-        else { return }
+                selectedText: capture.selectedText, anchor: capture.anchor
+              ) else { return }
 
-        let sourceTitle = capture.pdf.deletingPathExtension().lastPathComponent
-        guard let filename = WorkspaceFiles.nextAvailableNoteName(
-            basedOn: "\(sourceTitle) · p.\(capture.page)",
-            in: root
-        ) else { return }
-
-        guard let created = model.newNote(
-            named: filename,
-            initialContent: "\(snippet)\n",
-            preservePDFPreview: true
-        ) else { return }
         closeQuickPicker()
+        showingMindMap = false
+        showingMindMapSourcePane = false
+        compactStudyShowsStudyPane = true
+        pendingMarkdownReveal = MarkdownEditorRevealRequest(
+            note: created.standardizedFileURL,
+            target: .end,
+            keepsMindMapVisible: false
+        )
         pendingEditorFocus = created
         mode = .edit
     }

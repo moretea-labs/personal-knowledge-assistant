@@ -2399,6 +2399,31 @@ final class NotesModel: ObservableObject {
         }
     }
 
+    /// A PDF capture creates its note at the workspace root, independent of
+    /// whichever nested Markdown note is currently selected. Naming and writing
+    /// use the existing exclusive note writer; the PDF stays visible beside it.
+    @discardableResult
+    func createNoteFromPDFCapture(
+        pdf: URL, page: Int, commentary: String?,
+        selectedText: String?, anchor: PDFSourceAnchor?
+    ) -> URL? {
+        guard let root,
+              WorkspaceFiles.contains(pdf, in: root),
+              let snippet = PDFPageReference.noteSnippet(
+                for: pdf, page: page, root: root, commentary: commentary,
+                selectedText: selectedText, anchor: anchor
+              ),
+              let filename = WorkspaceFiles.nextAvailableNoteName(
+                basedOn: "\(pdf.deletingPathExtension().lastPathComponent) · p.\(page)",
+                in: root
+              ) else {
+            message = AppLanguage.current.text("Could not add PDF page to note.")
+            return nil
+        }
+        return newNote(named: filename, in: root, initialContent: "\(snippet)\n",
+                       preservePDFPreview: true)
+    }
+
     /// A new note is immediately usable; the UI never asks for a filename.
     /// Explicit names and automatic Untitled names share this one safe writer.
     @discardableResult
