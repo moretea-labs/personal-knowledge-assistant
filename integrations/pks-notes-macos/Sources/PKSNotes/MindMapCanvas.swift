@@ -489,13 +489,9 @@ struct MindMapCanvas: View {
                         }
                     }
                     .onChange(of: viewport.size) { _, size in
+                        // Split-view resizing must preserve a manually panned map. An explicit
+                        // selection change already handles centering the selected node.
                         viewportSize = size
-                        if let selectedID,
-                           let position = mapLayout.placements.first(where: { $0.id == selectedID }) {
-                            viewportOffset = MindMapViewportGeometry.centeredOffset(
-                                for: position.center, mapSize: mapLayout.size, zoom: zoom
-                            )
-                        }
                     }
                     .onChange(of: projectionReady) { _, ready in
                         if ready && !didInitializeViewport {
