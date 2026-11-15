@@ -411,6 +411,47 @@ final class MindMapViewportTests: XCTestCase {
         })
     }
 
+    func testCommittedLargeOutlineFixtureShowsFirstLevelNodesOnInitialViewport() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("verification/viewport-qa-20261115/Outline.md")
+        let markdown = try String(contentsOf: fixture, encoding: .utf8)
+        let nodes = MindMapOutline.nodes(in: markdown)
+        XCTAssertEqual(nodes.count, 243)
+
+        let viewport = CGSize(width: 1000, height: 680)
+        let full = MindMapSpatialLayout.layout(nodes)
+        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
+            nodes: nodes, layout: full, viewport: viewport
+        )
+        XCTAssertEqual(collapsed.count, 2)
+
+        var hiddenBelow: Int?
+        let exposed = nodes.filter { node in
+            if let depth = hiddenBelow {
+                if node.depth > depth { return false }
+                hiddenBelow = nil
+            }
+            if collapsed.contains(node.id) { hiddenBelow = node.depth }
+            return true
+        }
+        XCTAssertEqual(exposed.count, 3)
+        let overview = MindMapSpatialLayout.layout(exposed)
+        let root = try XCTUnwrap(overview.placements.first { $0.parentID == nil })
+        let offset = MindMapViewportGeometry.initialRootOffset(
+            root: root.center, mapSize: overview.size, viewport: viewport
+        )
+        let onScreen = MindMapViewportGeometry.visibleNodeIDs(
+            in: overview, viewport: viewport, offset: offset, zoom: 1, overscan: 0
+        )
+        XCTAssertEqual(onScreen, Set(exposed.map(\.id)))
+        XCTAssertTrue(overview.placements.filter { $0.parentID == root.id }.allSatisfy {
+            onScreen.contains($0.id)
+        })
+    }
+
     func testShortMapKeepsBranchesExpandedOnFirstOpen() {
         let nodes = [
             MindMapNode(id: 0, depth: 0, title: "Root"),
