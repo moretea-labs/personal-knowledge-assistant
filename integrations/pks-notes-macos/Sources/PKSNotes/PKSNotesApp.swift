@@ -4109,12 +4109,16 @@ struct NotesWindow: View {
                 Button(language.text("Inline Code")) { applyMarkdownFormatting("code") }
                 Button(language.text("Code Block")) { applyMarkdownFormatting("codeBlock") }
             } label: {
-                toolbarSymbol("textformat")
+                HStack(spacing: 5) {
+                    toolbarSymbol("textformat")
+                    Text(language.text("Format"))
+                        .font(.caption.weight(.medium))
+                }
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .help(language.text("Markdown formatting toolbar"))
-            .accessibilityLabel(language.text("Markdown formatting toolbar"))
+            .help(language.text("Format"))
+            .accessibilityLabel(language.text("Format"))
             .accessibilityIdentifier("pks-markdown-format-compact")
 
             Menu {

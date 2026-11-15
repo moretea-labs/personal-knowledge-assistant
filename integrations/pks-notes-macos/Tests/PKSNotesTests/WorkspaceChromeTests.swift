@@ -2,6 +2,11 @@ import XCTest
 @testable import PKSNotes
 
 final class WorkspaceChromeTests: XCTestCase {
+    func testCompactFormattingMenuHasLocalizedVisibleActionLabel() {
+        XCTAssertEqual(AppLanguage.english.text("Format"), "Format")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Format"), "格式")
+    }
+
     func testCompactWindowKeepsPDFAndNoteWidthInsteadOfForcingInlineInspector() {
         let splitWidth = NotesGeometry.studySplitThreshold(showingMindMap: false)
         XCTAssertEqual(splitWidth, 820)

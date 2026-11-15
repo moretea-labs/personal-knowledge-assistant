@@ -118,6 +118,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Numbered List": "有序列表",
         "Task": "任务",
         "Heading": "标题",
+        "Format": "格式",
         "List": "列表",
         "Quote": "引用",
         "Insert": "插入",
