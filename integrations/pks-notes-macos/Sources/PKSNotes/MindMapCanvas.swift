@@ -2031,10 +2031,13 @@ struct MindMapCanvas: View {
             }
         }
         guard let visibleRoot = mapLayout.placements.first(where: { $0.parentID == nil }) else { return false }
-        zoom = 1
-        viewportOffset = MindMapViewportGeometry.initialRootOffset(
-            root: visibleRoot.center, mapSize: mapLayout.size, viewport: viewport
+        let firstLevel = mapLayout.placements.filter { $0.parentID == visibleRoot.id }
+        let initial = MindMapViewportGeometry.initialRootViewport(
+            root: visibleRoot, firstLevel: firstLevel,
+            mapSize: mapLayout.size, viewport: viewport
         )
+        zoom = initial.zoom
+        viewportOffset = initial.offset
         return true
     }
 

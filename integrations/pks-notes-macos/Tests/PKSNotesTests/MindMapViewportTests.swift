@@ -382,14 +382,59 @@ final class MindMapViewportTests: XCTestCase {
     func testInitialRootViewUsesActualSizeAndLeavesRoomForChildren() {
         let viewport = CGSize(width: 1000, height: 680)
         let map = CGSize(width: 8400, height: 50000)
-        let root = CGPoint(x: 150, y: 25000)
-        let offset = MindMapViewportGeometry.initialRootOffset(
-            root: root, mapSize: map, viewport: viewport
+        let root = MindMapPlacement(
+            node: MindMapNode(id: 0, depth: 0, title: "Root"),
+            parentID: nil,
+            center: CGPoint(x: 150, y: 25000),
+            size: CGSize(width: 230, height: 60)
         )
-        let screenX = viewport.width / 2 + offset.width + root.x - map.width / 2
-        let screenY = viewport.height / 2 + offset.height + root.y - map.height / 2
+        let child = MindMapPlacement(
+            node: MindMapNode(id: 1, depth: 1, title: "Child"),
+            parentID: root.id,
+            center: CGPoint(x: 474, y: 25000),
+            size: CGSize(width: 244, height: 56)
+        )
+        let initial = MindMapViewportGeometry.initialRootViewport(
+            root: root, firstLevel: [child], mapSize: map, viewport: viewport
+        )
+        let screenX = viewport.width / 2 + initial.offset.width
+            + (root.center.x - map.width / 2) * initial.zoom
+        let screenY = viewport.height / 2 + initial.offset.height
+            + (root.center.y - map.height / 2) * initial.zoom
+        XCTAssertEqual(initial.zoom, 1, accuracy: 0.001)
         XCTAssertEqual(screenX, 320, accuracy: 0.001)
         XCTAssertEqual(screenY, 340, accuracy: 0.001)
+    }
+
+    func testCompactViewportsKeepRootAndFirstLevelBranchesVisible() throws {
+        let nodes = [
+            MindMapNode(id: 0, depth: 0, title: "Root"),
+            MindMapNode(id: 1, depth: 1, title: "First branch"),
+            MindMapNode(id: 2, depth: 1, title: "Second branch"),
+            MindMapNode(id: 3, depth: 1, title: "Third branch")
+        ]
+
+        for density in [MindMapLayoutDensity.standard, .compact] {
+            let layout = MindMapSpatialLayout.layout(nodes, density: density)
+            let root = try XCTUnwrap(layout.placements.first { $0.parentID == nil })
+            let firstLevel = layout.placements.filter { $0.parentID == root.id }
+
+            for width: CGFloat in [450, 500, 600] {
+                let viewport = CGSize(width: width, height: 680)
+                let initial = MindMapViewportGeometry.initialRootViewport(
+                    root: root, firstLevel: firstLevel,
+                    mapSize: layout.size, viewport: viewport
+                )
+                let visible = MindMapViewportGeometry.visibleNodeIDs(
+                    in: layout, viewport: viewport, offset: initial.offset,
+                    zoom: initial.zoom, overscan: 0
+                )
+                XCTAssertEqual(visible, Set(nodes.map(\.id)),
+                               "density=\(density), width=\(width)")
+                XCTAssertLessThanOrEqual(initial.zoom, 1)
+                XCTAssertGreaterThanOrEqual(initial.zoom, 0.68)
+            }
+        }
     }
 
     func testTallSubtreesStartWithVisibleTopLevelBranches() {
@@ -432,12 +477,15 @@ final class MindMapViewportTests: XCTestCase {
         XCTAssertEqual(collapsed, Set([1]))
         let overview = MindMapSpatialLayout.layout(nodes.filter { [0, 1, 82].contains($0.id) })
         let overviewRoot = try XCTUnwrap(overview.placements.first { $0.id == 0 })
-        let offset = MindMapViewportGeometry.initialRootOffset(
-            root: overviewRoot.center, mapSize: overview.size, viewport: viewport
+        let initial = MindMapViewportGeometry.initialRootViewport(
+            root: overviewRoot,
+            firstLevel: overview.placements.filter { $0.parentID == overviewRoot.id },
+            mapSize: overview.size, viewport: viewport
         )
         XCTAssertEqual(
             MindMapViewportGeometry.visibleNodeIDs(
-                in: overview, viewport: viewport, offset: offset, zoom: 1, overscan: 0
+                in: overview, viewport: viewport,
+                offset: initial.offset, zoom: initial.zoom, overscan: 0
             ),
             Set([0, 1, 82])
         )
@@ -473,12 +521,15 @@ final class MindMapViewportTests: XCTestCase {
         XCTAssertEqual(exposed.map(\.id), [0, 1])
         let overview = MindMapSpatialLayout.layout(exposed)
         let overviewRoot = try XCTUnwrap(overview.placements.first { $0.parentID == nil })
-        let offset = MindMapViewportGeometry.initialRootOffset(
-            root: overviewRoot.center, mapSize: overview.size, viewport: viewport
+        let initial = MindMapViewportGeometry.initialRootViewport(
+            root: overviewRoot,
+            firstLevel: overview.placements.filter { $0.parentID == overviewRoot.id },
+            mapSize: overview.size, viewport: viewport
         )
         XCTAssertEqual(
             MindMapViewportGeometry.visibleNodeIDs(
-                in: overview, viewport: viewport, offset: offset, zoom: 1, overscan: 0
+                in: overview, viewport: viewport,
+                offset: initial.offset, zoom: initial.zoom, overscan: 0
             ),
             Set([0, 1])
         )
@@ -513,11 +564,14 @@ final class MindMapViewportTests: XCTestCase {
         XCTAssertEqual(exposed.count, 3)
         let overview = MindMapSpatialLayout.layout(exposed)
         let root = try XCTUnwrap(overview.placements.first { $0.parentID == nil })
-        let offset = MindMapViewportGeometry.initialRootOffset(
-            root: root.center, mapSize: overview.size, viewport: viewport
+        let initial = MindMapViewportGeometry.initialRootViewport(
+            root: root,
+            firstLevel: overview.placements.filter { $0.parentID == root.id },
+            mapSize: overview.size, viewport: viewport
         )
         let onScreen = MindMapViewportGeometry.visibleNodeIDs(
-            in: overview, viewport: viewport, offset: offset, zoom: 1, overscan: 0
+            in: overview, viewport: viewport,
+            offset: initial.offset, zoom: initial.zoom, overscan: 0
         )
         XCTAssertEqual(onScreen, Set(exposed.map(\.id)))
         XCTAssertTrue(overview.placements.filter { $0.parentID == root.id }.allSatisfy {

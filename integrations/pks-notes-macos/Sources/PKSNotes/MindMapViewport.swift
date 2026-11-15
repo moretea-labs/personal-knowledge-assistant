@@ -89,14 +89,51 @@ enum MindMapViewportGeometry {
         )))
     }
 
-    /// At 100%, place the root left of center so nearby child columns are
-    /// visible immediately, without shrinking the entire mind map.
-    static func initialRootOffset(root: CGPoint, mapSize: CGSize, viewport: CGSize) -> CGSize {
-        let centered = centeredOffset(for: root, mapSize: mapSize, zoom: 1)
-        return CGSize(
-            width: centered.width - viewport.width * 0.18,
-            height: centered.height
+    /// Keep the root and its first-level branches visible on first open.
+    /// Wide canvases preserve the familiar root position; compact split views
+    /// shift left and scale only as much as needed to avoid clipping the branch column.
+    static func initialRootViewport(
+        root: MindMapPlacement,
+        firstLevel: [MindMapPlacement],
+        mapSize: CGSize,
+        viewport: CGSize
+    ) -> (zoom: CGFloat, offset: CGSize) {
+        guard mapSize.width > 0, mapSize.height > 0,
+              viewport.width > 0, viewport.height > 0,
+              mapSize.width.isFinite, mapSize.height.isFinite,
+              viewport.width.isFinite, viewport.height.isFinite,
+              root.center.x.isFinite, root.center.y.isFinite,
+              root.size.width.isFinite, root.size.width > 0,
+              firstLevel.allSatisfy({
+                  $0.center.x.isFinite && $0.size.width.isFinite && $0.size.width > 0
+              }) else {
+            return (1, .zero)
+        }
+
+        let rootLeft = root.center.x - root.size.width / 2
+        let rightmostEdge = firstLevel.map {
+            $0.center.x + $0.size.width / 2
+        }.max() ?? root.center.x + root.size.width / 2
+        guard rootLeft.isFinite, rightmostEdge.isFinite else { return (1, .zero) }
+
+        let contentWidth = max(1, rightmostEdge - rootLeft)
+        let inset = min(24, max(12, viewport.width * 0.04))
+        let availableWidth = max(1, viewport.width - inset * 2)
+        let fitZoom = min(1, max(0.68, availableWidth / contentWidth))
+        let minimumRootX = inset + root.size.width * fitZoom / 2
+        let childReach = max(0, rightmostEdge - root.center.x)
+        let maximumRootX = viewport.width - inset - childReach * fitZoom
+        let preferredRootX = viewport.width * 0.32
+        let rootScreenX = min(
+            max(preferredRootX, minimumRootX),
+            max(minimumRootX, maximumRootX)
         )
+        let offset = CGSize(
+            width: rootScreenX - viewport.width / 2
+                - (root.center.x - mapSize.width / 2) * fitZoom,
+            height: (mapSize.height / 2 - root.center.y) * fitZoom
+        )
+        return (fitZoom, offset)
     }
 
     static func centeredOffset(for node: CGPoint, mapSize: CGSize, zoom: CGFloat) -> CGSize {
