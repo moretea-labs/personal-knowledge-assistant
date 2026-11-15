@@ -320,6 +320,7 @@ struct MindMapCanvas: View {
     @State private var dropTargetID: Int?
     @State private var gestureBaseZoom: CGFloat?
     @State private var nodes: [MindMapNode] = []
+    @State private var lineStartOffsets: [Int] = [0]
     @State private var nodePresentations: [Int: MindMapNodePresentation] = [:]
     @State private var visible: [MindMapNode] = []
     @State private var mapLayout = MindMapSpatialLayout.layout([])
@@ -590,6 +591,11 @@ struct MindMapCanvas: View {
         .focusable()
         .focusEffectDisabled()
         .focused($canvasFocused)
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSTextView.didChangeSelectionNotification
+        )) { notification in
+            syncSelectedNodeFromMarkdownEditor(notification.object as? NSTextView)
+        }
         .task(id: revision) {
             let input = source
             let sourceRevision = revision
@@ -598,9 +604,12 @@ struct MindMapCanvas: View {
             if nodes.isEmpty { projectionReady = false }
 
             let parser = Task.detached(priority: .userInitiated) {
-                () -> (nodes: [MindMapNode], presentations: [Int: MindMapNodePresentation],
+                () -> (nodes: [MindMapNode], lineStartOffsets: [Int],
+                       presentations: [Int: MindMapNodePresentation],
                        lineIndexMap: [Int: Int], createdNodeLineIndexMap: [Int: Int])? in
                 let nodes = MindMapOutline.nodes(in: input)
+                guard !Task.isCancelled else { return nil }
+                let lineStartOffsets = MindMapOutline.lineStartOffsets(in: input)
                 guard !Task.isCancelled else { return nil }
                 let presentations = MindMapOutline.presentations(in: input, nodes: nodes)
                 guard !Task.isCancelled else { return nil }
@@ -610,7 +619,13 @@ struct MindMapCanvas: View {
                     MindMapOutline.lineIndexMap(from: MindMapOutline.nodes(in: $0), to: nodes)
                 } ?? [:]
                 guard !Task.isCancelled else { return nil }
-                return (nodes: nodes, presentations: presentations, lineIndexMap: lineIndexMap, createdNodeLineIndexMap: createdNodeLineIndexMap)
+                return (
+                    nodes: nodes,
+                    lineStartOffsets: lineStartOffsets,
+                    presentations: presentations,
+                    lineIndexMap: lineIndexMap,
+                    createdNodeLineIndexMap: createdNodeLineIndexMap
+                )
             }
             let projection = await withTaskCancellationHandler {
                 await parser.value
@@ -638,6 +653,7 @@ struct MindMapCanvas: View {
             let rebasedDropTargetID = rebaseNodeID(dropTargetID)
 
             nodes = projection.nodes
+            lineStartOffsets = projection.lineStartOffsets
             nodePresentations = projection.presentations
             projectedRevision = sourceRevision
             projectionReady = true
@@ -657,6 +673,9 @@ struct MindMapCanvas: View {
             } else {
                 rebuildVisibleLayout()
             }
+            syncSelectedNodeFromMarkdownEditor(
+                NSApp.keyWindow?.firstResponder as? NSTextView
+            )
         }
         .onChange(of: collapsed) { _, _ in
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
@@ -2066,6 +2085,24 @@ struct MindMapCanvas: View {
         createdNodeDraftSnapshot = created ? source : nil
         canvasFocused = false
         titleEditorFocused = false
+    }
+
+    private func syncSelectedNodeFromMarkdownEditor(_ textView: NSTextView?) {
+        guard hidesNodeDetails, projectionIsCurrent,
+              let textView, textView.isEditable, !textView.isFieldEditor,
+              let window = textView.window,
+              window === NSApp.keyWindow,
+              window.firstResponder === textView,
+              textView.string == source else { return }
+        let selection = textView.selectedRange()
+        guard selection.location != NSNotFound,
+              let nodeID = MindMapOutline.nodeID(
+                atUTF16Offset: selection.location,
+                lineStartOffsets: lineStartOffsets,
+                nodes: nodes
+              ),
+              selectedID != nodeID else { return }
+        selectedID = nodeID
     }
 
     private func finishRename(save: Bool) {

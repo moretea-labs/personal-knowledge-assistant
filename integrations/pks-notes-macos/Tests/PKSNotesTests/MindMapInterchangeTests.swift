@@ -30,6 +30,45 @@ final class MindMapInterchangeTests: XCTestCase {
         XCTAssertEqual((source as NSString).substring(with: editorRange), "- First")
     }
 
+    func testEditorSelectionMapsToNearestOutlineNodeWithCachedUTF16LineStarts() throws {
+        let source = "# Study\n\n- 第一\n  supporting 😀 text\n- 第二\n"
+        let nodes = MindMapOutline.nodes(in: source)
+        let lineStarts = MindMapOutline.lineStartOffsets(in: source)
+        let first = try XCTUnwrap(nodes.first(where: { $0.title == "第一" }))
+        let second = try XCTUnwrap(nodes.first(where: { $0.title == "第二" }))
+        let text = source as NSString
+
+        let firstOffset = text.range(of: "第一").location
+        let detailOffset = text.range(of: "😀").location
+        let secondOffset = text.range(of: "第二").location
+
+        XCTAssertEqual(
+            MindMapOutline.nodeID(
+                atUTF16Offset: firstOffset,
+                lineStartOffsets: lineStarts,
+                nodes: nodes
+            ),
+            first.id
+        )
+        XCTAssertEqual(
+            MindMapOutline.nodeID(
+                atUTF16Offset: detailOffset,
+                lineStartOffsets: lineStarts,
+                nodes: nodes
+            ),
+            first.id
+        )
+        XCTAssertEqual(
+            MindMapOutline.nodeID(
+                atUTF16Offset: secondOffset,
+                lineStartOffsets: lineStarts,
+                nodes: nodes
+            ),
+            second.id
+        )
+        XCTAssertEqual(lineStarts.count, source.components(separatedBy: "\n").count)
+    }
+
     func testEmptyMapCanStartWithOneCanonicalMarkdownHeading() {
         XCTAssertEqual(MindMapOutline.createMap(), "# New Mind Map\n")
         XCTAssertEqual(MindMapOutline.nodes(in: MindMapOutline.createMap()).map(\.title), ["New Mind Map"])

@@ -491,16 +491,57 @@ enum MindMapOutline {
         return MarkdownOutline.lineRange(in: markdown, lineIndex: nodeID)
     }
 
+    /// UTF-16 offsets for each Markdown line start, shared by caret-to-node mapping.
+    /// Build once with the background outline projection; selection changes then use binary search.
+    static func lineStartOffsets(in markdown: String) -> [Int] {
+        var offsets = [0]
+        for (index, unit) in markdown.utf16.enumerated() where unit == 10 {
+            offsets.append(index + 1)
+        }
+        return offsets
+    }
+
     /// Resolve an editor caret/selection position to the nearest preceding outline node.
     /// Prose below a heading/list item therefore stays associated with its structural parent.
-    static func nodeID(atUTF16Offset offset: Int, in markdown: String) -> Int? {
-        let length = (markdown as NSString).length
-        let clamped = min(max(0, offset), length)
-        let prefix = (markdown as NSString).substring(to: clamped)
-        let lineIndex = prefix.reduce(into: 0) { count, character in
-            if character == "\n" { count += 1 }
+    static func nodeID(
+        atUTF16Offset offset: Int,
+        lineStartOffsets: [Int],
+        nodes: [MindMapNode]
+    ) -> Int? {
+        guard !lineStartOffsets.isEmpty, !nodes.isEmpty else { return nil }
+        let safeOffset = max(0, offset)
+
+        var lineLower = 0
+        var lineUpper = lineStartOffsets.count
+        while lineLower < lineUpper {
+            let middle = lineLower + (lineUpper - lineLower) / 2
+            if lineStartOffsets[middle] <= safeOffset {
+                lineLower = middle + 1
+            } else {
+                lineUpper = middle
+            }
         }
-        return nodes(in: markdown).last(where: { $0.id <= lineIndex })?.id
+        let lineIndex = max(0, lineLower - 1)
+
+        var nodeLower = 0
+        var nodeUpper = nodes.count
+        while nodeLower < nodeUpper {
+            let middle = nodeLower + (nodeUpper - nodeLower) / 2
+            if nodes[middle].id <= lineIndex {
+                nodeLower = middle + 1
+            } else {
+                nodeUpper = middle
+            }
+        }
+        return nodeLower > 0 ? nodes[nodeLower - 1].id : nil
+    }
+
+    static func nodeID(atUTF16Offset offset: Int, in markdown: String) -> Int? {
+        nodeID(
+            atUTF16Offset: offset,
+            lineStartOffsets: lineStartOffsets(in: markdown),
+            nodes: nodes(in: markdown)
+        )
     }
 
     /// PDF citations must remain active Markdown links, never code literals.
