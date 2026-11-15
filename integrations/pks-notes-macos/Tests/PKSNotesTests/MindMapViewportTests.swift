@@ -437,6 +437,42 @@ final class MindMapViewportTests: XCTestCase {
         }
     }
 
+    func testInitialRootViewportFitsManyFirstLevelBranchesVertically() {
+        let root = MindMapPlacement(
+            node: MindMapNode(id: 0, depth: 0, title: "Root"),
+            parentID: nil,
+            center: CGPoint(x: 150, y: 1100),
+            size: CGSize(width: 230, height: 60)
+        )
+        let children = (1...7).map { id in
+            MindMapPlacement(
+                node: MindMapNode(id: id, depth: 1, title: "Branch \(id)"),
+                parentID: root.id,
+                center: CGPoint(x: 474, y: CGFloat(800 + (id - 1) * 100)),
+                size: CGSize(width: 244, height: 56)
+            )
+        }
+        let layout = MindMapLayoutSnapshot(
+            placements: [root] + children,
+            size: CGSize(width: 800, height: 2400)
+        )
+        let viewport = CGSize(width: 450, height: 500)
+        let initial = MindMapViewportGeometry.initialRootViewport(
+            root: root, firstLevel: children,
+            mapSize: layout.size, viewport: viewport
+        )
+
+        XCTAssertLessThan(initial.zoom, 0.738)
+        XCTAssertGreaterThanOrEqual(initial.zoom, 0.68)
+        XCTAssertEqual(
+            MindMapViewportGeometry.visibleNodeIDs(
+                in: layout, viewport: viewport,
+                offset: initial.offset, zoom: initial.zoom, overscan: 0
+            ),
+            Set(0...7)
+        )
+    }
+
     func testTallSubtreesStartWithVisibleTopLevelBranches() {
         let nodes = [MindMapNode(id: 0, depth: 0, title: "Root")]
             + [MindMapNode(id: 1, depth: 1, title: "First")]

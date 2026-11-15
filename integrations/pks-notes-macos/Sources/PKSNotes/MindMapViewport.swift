@@ -91,7 +91,7 @@ enum MindMapViewportGeometry {
 
     /// Keep the root and its first-level branches visible on first open.
     /// Wide canvases preserve the familiar root position; compact split views
-    /// shift left and scale only as much as needed to avoid clipping the branch column.
+    /// fit both axes only when the actual branch bounds require it.
     static func initialRootViewport(
         root: MindMapPlacement,
         firstLevel: [MindMapPlacement],
@@ -104,34 +104,71 @@ enum MindMapViewportGeometry {
               viewport.width.isFinite, viewport.height.isFinite,
               root.center.x.isFinite, root.center.y.isFinite,
               root.size.width.isFinite, root.size.width > 0,
+              root.size.height.isFinite, root.size.height > 0,
               firstLevel.allSatisfy({
-                  $0.center.x.isFinite && $0.size.width.isFinite && $0.size.width > 0
+                  $0.center.x.isFinite && $0.center.y.isFinite
+                      && $0.size.width.isFinite && $0.size.width > 0
+                      && $0.size.height.isFinite && $0.size.height > 0
               }) else {
             return (1, .zero)
         }
 
-        let rootLeft = root.center.x - root.size.width / 2
-        let rightmostEdge = firstLevel.map {
-            $0.center.x + $0.size.width / 2
-        }.max() ?? root.center.x + root.size.width / 2
-        guard rootLeft.isFinite, rightmostEdge.isFinite else { return (1, .zero) }
+        let rootBounds = CGRect(
+            x: root.center.x - root.size.width / 2,
+            y: root.center.y - root.size.height / 2,
+            width: root.size.width,
+            height: root.size.height
+        )
+        let contentBounds = firstLevel.reduce(rootBounds) { bounds, placement in
+            bounds.union(CGRect(
+                x: placement.center.x - placement.size.width / 2,
+                y: placement.center.y - placement.size.height / 2,
+                width: placement.size.width,
+                height: placement.size.height
+            ))
+        }
+        guard contentBounds.minX.isFinite, contentBounds.maxX.isFinite,
+              contentBounds.minY.isFinite, contentBounds.maxY.isFinite else {
+            return (1, .zero)
+        }
 
-        let contentWidth = max(1, rightmostEdge - rootLeft)
-        let inset = min(24, max(12, viewport.width * 0.04))
-        let availableWidth = max(1, viewport.width - inset * 2)
-        let fitZoom = min(1, max(0.68, availableWidth / contentWidth))
-        let minimumRootX = inset + root.size.width * fitZoom / 2
-        let childReach = max(0, rightmostEdge - root.center.x)
-        let maximumRootX = viewport.width - inset - childReach * fitZoom
+        let contentWidth = max(1, contentBounds.width)
+        let contentHeight = max(1, contentBounds.height)
+        let horizontalInset = min(24, max(12, viewport.width * 0.04))
+        let verticalInset = min(24, max(12, viewport.height * 0.04))
+        let availableWidth = max(1, viewport.width - horizontalInset * 2)
+        let availableHeight = max(1, viewport.height - verticalInset * 2)
+        let fitZoom = min(
+            1,
+            max(0.68, min(
+                availableWidth / contentWidth,
+                availableHeight / contentHeight
+            ))
+        )
+
+        let minimumRootX = horizontalInset + (root.center.x - contentBounds.minX) * fitZoom
+        let maximumRootX = viewport.width - horizontalInset
+            - (contentBounds.maxX - root.center.x) * fitZoom
         let preferredRootX = viewport.width * 0.32
         let rootScreenX = min(
             max(preferredRootX, minimumRootX),
             max(minimumRootX, maximumRootX)
         )
+
+        let minimumRootY = verticalInset + (root.center.y - contentBounds.minY) * fitZoom
+        let maximumRootY = viewport.height - verticalInset
+            - (contentBounds.maxY - root.center.y) * fitZoom
+        let preferredRootY = viewport.height / 2
+        let rootScreenY = min(
+            max(preferredRootY, minimumRootY),
+            max(minimumRootY, maximumRootY)
+        )
+
         let offset = CGSize(
             width: rootScreenX - viewport.width / 2
                 - (root.center.x - mapSize.width / 2) * fitZoom,
-            height: (mapSize.height / 2 - root.center.y) * fitZoom
+            height: rootScreenY - viewport.height / 2
+                - (root.center.y - mapSize.height / 2) * fitZoom
         )
         return (fitZoom, offset)
     }
