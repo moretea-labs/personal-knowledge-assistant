@@ -355,10 +355,13 @@ enum MindMapSpatialLayout {
         guard viewport.height > 0,
               let root = layout.placements.first(where: { $0.parentID == nil }) else { return [] }
         let branches = layout.placements.filter { $0.parentID == root.id }
-        guard !branches.isEmpty,
-              branches.allSatisfy({ abs($0.center.y - root.center.y) > viewport.height * 0.42 })
-        else { return [] }
-        return Set(branches.map(\.id))
+        guard !branches.isEmpty else { return [] }
+        let top = branches.map { $0.center.y - $0.size.height / 2 }.min() ?? 0
+        let bottom = branches.map { $0.center.y + $0.size.height / 2 }.max() ?? 0
+        guard bottom - top > viewport.height * 0.80 else { return [] }
+        // A single nearby branch previously prevented *all* initial collapsing,
+        // leaving the other branches far outside the visible canvas.
+        return Set(branches.filter { layout.parentIDs.contains($0.id) }.map(\.id))
     }
 
     static func layout(
@@ -369,7 +372,7 @@ enum MindMapSpatialLayout {
         // Keep node dimensions and connector spacing from a single layout
         // scale so compact maps never overlap and exports match the canvas.
         let margin: CGFloat = 42 * density.scale
-        let columnStride: CGFloat = 270 * density.scale
+        let columnStride: CGFloat = 310 * density.scale
         let siblingGap: CGFloat = 24 * density.scale
         let rootGap: CGFloat = 40 * density.scale
         guard !nodes.isEmpty else {
@@ -403,8 +406,8 @@ enum MindMapSpatialLayout {
         nodeSizes.reserveCapacity(nodes.count)
         for node in nodes {
             let isRoot = node.depth == 0
-            let width: CGFloat = (isRoot ? 230 : 210) * density.scale
-            let baseHeight: CGFloat = (isRoot ? 58 : 50) * density.scale
+            let width: CGFloat = (isRoot ? 230 : 244) * density.scale
+            let baseHeight: CGFloat = (isRoot ? 60 : 56) * density.scale
             var height = baseHeight
             if node.title.count > 8 {
                 let label = MindMapOutline.presentation(for: node.title).title
@@ -420,7 +423,7 @@ enum MindMapSpatialLayout {
                     options: [.usesLineFragmentOrigin, .usesFontLeading],
                     attributes: [.font: font]
                 )
-                height = max(baseHeight, ceil(bounds.height + 20))
+                height = max(baseHeight, ceil(bounds.height + 28))
             }
             nodeSizes[node.id] = CGSize(width: width, height: height)
         }

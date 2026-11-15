@@ -411,6 +411,38 @@ final class MindMapViewportTests: XCTestCase {
         })
     }
 
+    func testMixedTallAndShortBranchesOpenAsReadableOverview() throws {
+        let nodes = [
+            MindMapNode(id: 0, depth: 0, title: "Root"),
+            MindMapNode(id: 1, depth: 1, title: "Long branch")
+        ] + (2..<82).map {
+            MindMapNode(id: $0, depth: 2, title: "Detail \($0)")
+        } + [
+            MindMapNode(id: 82, depth: 1, title: "Short branch")
+        ]
+        let viewport = CGSize(width: 1000, height: 680)
+        let expanded = MindMapSpatialLayout.layout(nodes)
+        let root = try XCTUnwrap(expanded.placements.first { $0.id == 0 })
+        let nearby = try XCTUnwrap(expanded.placements.first { $0.id == 1 })
+        XCTAssertLessThan(abs(nearby.center.y - root.center.y), viewport.height * 0.42)
+
+        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
+            nodes: nodes, layout: expanded, viewport: viewport
+        )
+        XCTAssertEqual(collapsed, Set([1]))
+        let overview = MindMapSpatialLayout.layout(nodes.filter { [0, 1, 82].contains($0.id) })
+        let overviewRoot = try XCTUnwrap(overview.placements.first { $0.id == 0 })
+        let offset = MindMapViewportGeometry.initialRootOffset(
+            root: overviewRoot.center, mapSize: overview.size, viewport: viewport
+        )
+        XCTAssertEqual(
+            MindMapViewportGeometry.visibleNodeIDs(
+                in: overview, viewport: viewport, offset: offset, zoom: 1, overscan: 0
+            ),
+            Set([0, 1, 82])
+        )
+    }
+
     func testCommittedLargeOutlineFixtureShowsFirstLevelNodesOnInitialViewport() throws {
         let fixture = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

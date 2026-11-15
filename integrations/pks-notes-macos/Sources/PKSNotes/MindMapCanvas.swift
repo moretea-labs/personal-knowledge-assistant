@@ -297,7 +297,7 @@ struct MindMapCanvas: View {
     @State private var viewportSize: CGSize = .zero
     @State private var gestureBaseOffset: CGSize?
     @GestureState private var canvasDrag: CGSize = .zero
-    @State private var showingNodeDetails = true
+    @State private var showingNodeDetails = false
     @State private var didInitializeViewport = false
     @State private var mapContentVersion = 0
     @State private var dragSessionID = UUID()
@@ -1512,7 +1512,8 @@ struct MindMapCanvas: View {
                 .accessibilityIdentifier("pks-mind-map-node-link-\(node.id)")
             }
         }
-        .padding(.horizontal, 13)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
         .background(
             highlighted ? accent.opacity(scheme == .dark ? 0.30 : 0.19)
                         : mapStyle.fill(depth: node.depth, branch: branch, scheme: scheme),
