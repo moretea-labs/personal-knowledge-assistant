@@ -563,6 +563,51 @@ final class MindMapViewportTests: XCTestCase {
         )
     }
 
+    func testSeveralModerateBranchesCollapseEnoughToFitOpeningViewport() throws {
+        var nodes = [MindMapNode(id: 0, depth: 0, title: "Root")]
+        var nextID = 1
+        for branch in 1...3 {
+            nodes.append(MindMapNode(id: nextID, depth: 1, title: "Branch \(branch)"))
+            nextID += 1
+            for detail in 1...5 {
+                nodes.append(MindMapNode(id: nextID, depth: 2, title: "Detail \(detail)"))
+                nextID += 1
+            }
+        }
+
+        let viewport = CGSize(width: 600, height: 645)
+        let expanded = MindMapSpatialLayout.layout(nodes)
+        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
+            nodes: nodes, layout: expanded, viewport: viewport
+        )
+        XCTAssertEqual(collapsed.count, 1)
+
+        var hiddenBelow: Int?
+        let exposed = nodes.filter { node in
+            if let depth = hiddenBelow {
+                if node.depth > depth { return false }
+                hiddenBelow = nil
+            }
+            if collapsed.contains(node.id) { hiddenBelow = node.depth }
+            return true
+        }
+        let overview = MindMapSpatialLayout.layout(exposed)
+        let root = try XCTUnwrap(overview.placements.first { $0.parentID == nil })
+        let initial = MindMapViewportGeometry.initialRootViewport(
+            root: root,
+            visiblePlacements: overview.placements.filter { $0.parentID == root.id },
+            mapSize: overview.size,
+            viewport: viewport
+        )
+
+        let visible = MindMapViewportGeometry.visibleNodeIDs(
+            in: overview, viewport: viewport,
+            offset: initial.offset, zoom: initial.zoom, overscan: 0
+        )
+        let openingOverview = Set([0] + nodes.filter { $0.depth == 1 }.map(\.id))
+        XCTAssertEqual(visible.intersection(openingOverview), openingOverview)
+    }
+
     func testSingleTallRootBranchCollapsesItsSubtreeWithoutSiblingSpread() throws {
         let nodes = [
             MindMapNode(id: 0, depth: 0, title: "Root"),

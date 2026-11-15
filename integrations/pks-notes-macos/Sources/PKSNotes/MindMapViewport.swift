@@ -3,6 +3,12 @@ import SwiftUI
 
 /// Geometry only: the Markdown layout is never rewritten for viewport moves.
 enum MindMapViewportGeometry {
+    static let minimumInitialZoom: CGFloat = 0.68
+
+    static func initialInset(for dimension: CGFloat) -> CGFloat {
+        min(24, max(12, dimension * 0.04))
+    }
+
     /// Return only node cards that intersect the viewport plus a screen-space
     /// prefetch margin. Connectors remain in the single Canvas, so the full
     /// Markdown layout and infinite navigation geometry stay unchanged.
@@ -166,13 +172,13 @@ enum MindMapViewportGeometry {
 
         let contentWidth = max(1, contentBounds.width)
         let contentHeight = max(1, contentBounds.height)
-        let horizontalInset = min(24, max(12, viewport.width * 0.04))
-        let verticalInset = min(24, max(12, viewport.height * 0.04))
+        let horizontalInset = Self.initialInset(for: viewport.width)
+        let verticalInset = Self.initialInset(for: viewport.height)
         let availableWidth = max(1, viewport.width - horizontalInset * 2)
         let availableHeight = max(1, viewport.height - verticalInset * 2)
         let fitZoom = min(
             1,
-            max(0.68, min(
+            max(Self.minimumInitialZoom, min(
                 availableWidth / contentWidth,
                 availableHeight / contentHeight
             ))

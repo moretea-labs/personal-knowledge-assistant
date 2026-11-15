@@ -364,11 +364,13 @@ enum MindMapSpatialLayout {
         let placementsByID = Dictionary(uniqueKeysWithValues: layout.placements.map { ($0.id, $0) })
         var currentBranchID: Int?
         var subtreeBounds: [Int: ClosedRange<CGFloat>] = [:]
+        var rootPlacements = [root]
         for node in nodes.dropFirst(rootIndex + 1) {
             if node.depth == 0 { break }
             if node.depth == 1 { currentBranchID = node.id }
             guard let branchID = currentBranchID,
                   let placement = placementsByID[node.id] else { continue }
+            rootPlacements.append(placement)
             let nodeTop = placement.center.y - placement.size.height / 2
             let nodeBottom = placement.center.y + placement.size.height / 2
             if let bounds = subtreeBounds[branchID] {
@@ -377,11 +379,66 @@ enum MindMapSpatialLayout {
                 subtreeBounds[branchID] = nodeTop...nodeBottom
             }
         }
-        return Set(expandableBranches.compactMap { branch in
+
+        var collapsed = Set(expandableBranches.compactMap { branch -> Int? in
             guard let bounds = subtreeBounds[branch.id],
                   bounds.upperBound - bounds.lowerBound > threshold else { return nil }
             return branch.id
         })
+
+        // Several individually moderate branches can still overflow together.
+        // Estimate the post-collapse height by subtracting each collapsed
+        // subtree's removed descendants; the next layout pass reflows siblings.
+        let contentBounds = rootPlacements.reduce(CGRect.null) { bounds, placement in
+            bounds.union(CGRect(
+                x: placement.center.x - placement.size.width / 2,
+                y: placement.center.y - placement.size.height / 2,
+                width: placement.size.width,
+                height: placement.size.height
+            ))
+        }
+        guard !contentBounds.isNull, contentBounds.height > 0 else { return collapsed }
+
+        let verticalInset = MindMapViewportGeometry.initialInset(for: viewport.height)
+        let maximumContentHeight = max(
+            1,
+            (viewport.height - verticalInset * 2) / MindMapViewportGeometry.minimumInitialZoom
+        )
+        var estimatedContentHeight = contentBounds.height
+        for branch in expandableBranches where collapsed.contains(branch.id) {
+            guard let bounds = subtreeBounds[branch.id] else { continue }
+            estimatedContentHeight -= max(
+                0,
+                bounds.upperBound - bounds.lowerBound - branch.size.height
+            )
+        }
+
+        let additionalCandidates = expandableBranches.enumerated().compactMap {
+            index, branch -> (id: Int, reduction: CGFloat, distance: CGFloat, order: Int)? in
+            guard !collapsed.contains(branch.id),
+                  let bounds = subtreeBounds[branch.id] else { return nil }
+            let reduction = max(
+                0,
+                bounds.upperBound - bounds.lowerBound - branch.size.height
+            )
+            guard reduction > 0 else { return nil }
+            return (
+                id: branch.id,
+                reduction: reduction,
+                distance: abs(branch.center.y - root.center.y),
+                order: index
+            )
+        }.sorted {
+            if $0.reduction != $1.reduction { return $0.reduction > $1.reduction }
+            if $0.distance != $1.distance { return $0.distance > $1.distance }
+            return $0.order > $1.order
+        }
+
+        for candidate in additionalCandidates where estimatedContentHeight > maximumContentHeight {
+            collapsed.insert(candidate.id)
+            estimatedContentHeight -= candidate.reduction
+        }
+        return collapsed
     }
 
     static func layout(
