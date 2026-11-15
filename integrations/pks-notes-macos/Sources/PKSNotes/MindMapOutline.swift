@@ -275,7 +275,7 @@ enum MindMapOutline {
         in lines: [String],
         baseIndent: Int = 0
     ) -> Bool {
-        let indent = line.prefix(while: { $0 == " " }).count
+        let indent = leadingIndentColumns(in: line)
         return indent >= indentedCodeThreshold(
             after: previousNode, in: lines, baseIndent: baseIndent
         )
@@ -289,7 +289,7 @@ enum MindMapOutline {
         guard start >= 0, start <= end, end <= lines.count else { return false }
         for line in lines[start..<end] {
             if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
-            let indent = line.prefix(while: { $0 == " " }).count
+            let indent = leadingIndentColumns(in: line)
             guard indent >= baseIndent + 2 else { return false }
         }
         return true
@@ -308,7 +308,7 @@ enum MindMapOutline {
         let endLine = shiftSubtreeEndLine(context)
 
         if isListLine(context.lines[nodeID]) {
-            let indent = context.lines[nodeID].prefix(while: { $0 == " " }).count
+            let indent = leadingIndentColumns(in: context.lines[nodeID])
             guard hasSafelyIndentedListContent(
                 context.lines, from: nodeID + 1, to: endLine, baseIndent: indent
             ) else { return false }
@@ -459,7 +459,7 @@ enum MindMapOutline {
                 if !title.isEmpty { result.append(.init(id: index, depth: hashes - 1, title: title)) }
                 continue
             }
-            let indent = line.prefix(while: { $0 == " " }).count
+            let indent = leadingIndentColumns(in: line)
             if let marker = listMarker(in: trimmed) {
                 let title = String(trimmed.dropFirst(marker.markdownPrefix.count))
                     .trimmingCharacters(in: .whitespaces)
@@ -618,16 +618,32 @@ extension MindMapOutline {
             .first(where: { $0.depth > node.depth })?.id ?? fallback
     }
 
-    /// Markdown list continuation starts after the full marker and its
-    /// original padding (e.g. `10.    `), not at a fixed two-space indent.
+    /// Convert leading Markdown whitespace to visual columns. Tabs advance to
+    /// the next four-column stop, matching CommonMark's indentation model.
+    private static func indentationColumns(in whitespace: String, startingAt initial: Int = 0) -> Int {
+        var column = initial
+        for character in whitespace {
+            column += character == "\t" ? 4 - column % 4 : 1
+        }
+        return column
+    }
+
+    private static func leadingIndentColumns(in line: String) -> Int {
+        indentationColumns(in: String(line.prefix(while: { $0 == " " || $0 == "\t" })))
+    }
+
+    /// Markdown list continuation starts after the full marker and its original
+    /// padding, including tabs (e.g. `10.\titem`).
     private static func listContinuationIndent(in line: String) -> Int? {
-        let baseIndent = line.prefix(while: { $0 == " " }).count
+        let leading = line.prefix(while: { $0 == " " || $0 == "\t" })
+        let baseIndent = indentationColumns(in: String(leading))
         guard listMarker(in: line) != nil else { return nil }
-        let content = line.dropFirst(baseIndent)
+        let content = line.dropFirst(leading.count)
         // Preserve the original marker width: 001. and 1. are different.
         let markerWidth = content.prefix(while: { !$0.isWhitespace }).count
-        let paddingWidth = content.dropFirst(markerWidth).prefix(while: { $0 == " " }).count
-        return baseIndent + markerWidth + max(1, paddingWidth)
+        let markerEnd = baseIndent + markerWidth
+        let padding = content.dropFirst(markerWidth).prefix(while: { $0 == " " || $0 == "\t" })
+        return max(markerEnd + 1, indentationColumns(in: String(padding), startingAt: markerEnd))
     }
 
     static func listContinuationIndent(in source: String, nodeID: Int) -> Int? {
