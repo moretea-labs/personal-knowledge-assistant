@@ -205,6 +205,29 @@ enum MindMapViewportGeometry {
         return (fitZoom, offset)
     }
 
+    /// Detect whether the viewport still shows the untouched opening overview.
+    /// Window resizing may recompute that overview, but must not override user navigation.
+    static func isAtInitialRootViewport(
+        root: MindMapPlacement,
+        firstLevel: [MindMapPlacement],
+        mapSize: CGSize,
+        viewport: CGSize,
+        zoom: CGFloat,
+        offset: CGSize
+    ) -> Bool {
+        guard viewport.width > 0, viewport.height > 0,
+              viewport.width.isFinite, viewport.height.isFinite,
+              zoom > 0, zoom.isFinite,
+              offset.width.isFinite, offset.height.isFinite else { return false }
+
+        let initial = initialRootViewport(
+            root: root, firstLevel: firstLevel, mapSize: mapSize, viewport: viewport
+        )
+        return abs(zoom - initial.zoom) < 0.001
+            && abs(offset.width - initial.offset.width) < 0.5
+            && abs(offset.height - initial.offset.height) < 0.5
+    }
+
     static func centeredOffset(for node: CGPoint, mapSize: CGSize, zoom: CGFloat) -> CGSize {
         CGSize(
             width: (mapSize.width / 2 - node.x) * zoom,

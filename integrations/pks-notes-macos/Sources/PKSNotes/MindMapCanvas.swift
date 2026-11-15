@@ -505,10 +505,27 @@ struct MindMapCanvas: View {
                             didInitializeViewport = focusOnRoot(viewport: viewport.size)
                         }
                     }
-                    .onChange(of: viewport.size) { _, size in
-                        // Split-view resizing must preserve a manually panned map. An explicit
-                        // selection change already handles centering the selected node.
+                    .onChange(of: viewport.size) { oldSize, size in
+                        // Refit only while the map is still at its untouched opening overview.
+                        // A manual pan, zoom or selection keeps its current content position.
+                        let shouldRefocus: Bool
+                        if let root = mapLayout.placements.first(where: { $0.parentID == nil }) {
+                            let firstLevel = mapLayout.placements.filter { $0.parentID == root.id }
+                            shouldRefocus = MindMapViewportGeometry.isAtInitialRootViewport(
+                                root: root,
+                                firstLevel: firstLevel,
+                                mapSize: mapLayout.size,
+                                viewport: oldSize,
+                                zoom: zoom,
+                                offset: viewportOffset
+                            )
+                        } else {
+                            shouldRefocus = false
+                        }
                         viewportSize = size
+                        if shouldRefocus, projectionIsCurrent {
+                            _ = focusOnRoot(viewport: size)
+                        }
                     }
                     .onChange(of: projectionReady) { _, ready in
                         if ready && !didInitializeViewport {

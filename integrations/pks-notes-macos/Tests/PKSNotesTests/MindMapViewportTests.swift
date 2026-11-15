@@ -406,6 +406,41 @@ final class MindMapViewportTests: XCTestCase {
         XCTAssertEqual(screenY, 340, accuracy: 0.001)
     }
 
+    func testInitialViewportResizeDetectionPreservesOnlyUntouchedOverview() throws {
+        let nodes = [
+            MindMapNode(id: 0, depth: 0, title: "Root"),
+            MindMapNode(id: 1, depth: 1, title: "First branch"),
+            MindMapNode(id: 2, depth: 1, title: "Second branch"),
+            MindMapNode(id: 3, depth: 1, title: "Third branch")
+        ]
+        let layout = MindMapSpatialLayout.layout(nodes)
+        let root = try XCTUnwrap(layout.placements.first { $0.parentID == nil })
+        let firstLevel = layout.placements.filter { $0.parentID == root.id }
+        let viewport = CGSize(width: 1000, height: 680)
+        let initial = MindMapViewportGeometry.initialRootViewport(
+            root: root, firstLevel: firstLevel,
+            mapSize: layout.size, viewport: viewport
+        )
+
+        XCTAssertTrue(MindMapViewportGeometry.isAtInitialRootViewport(
+            root: root, firstLevel: firstLevel,
+            mapSize: layout.size, viewport: viewport,
+            zoom: initial.zoom, offset: initial.offset
+        ))
+        XCTAssertFalse(MindMapViewportGeometry.isAtInitialRootViewport(
+            root: root, firstLevel: firstLevel,
+            mapSize: layout.size, viewport: viewport,
+            zoom: initial.zoom, offset: CGSize(
+                width: initial.offset.width + 24, height: initial.offset.height
+            )
+        ))
+        XCTAssertFalse(MindMapViewportGeometry.isAtInitialRootViewport(
+            root: root, firstLevel: firstLevel,
+            mapSize: layout.size, viewport: viewport,
+            zoom: initial.zoom * 0.9, offset: initial.offset
+        ))
+    }
+
     func testCompactViewportsKeepRootAndFirstLevelBranchesVisible() throws {
         let nodes = [
             MindMapNode(id: 0, depth: 0, title: "Root"),
