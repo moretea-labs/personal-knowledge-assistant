@@ -392,6 +392,37 @@ final class MindMapViewportTests: XCTestCase {
         XCTAssertEqual(screenY, 340, accuracy: 0.001)
     }
 
+    func testTallSubtreesStartWithVisibleTopLevelBranches() {
+        let nodes = [MindMapNode(id: 0, depth: 0, title: "Root")]
+            + [MindMapNode(id: 1, depth: 1, title: "First")]
+            + (2..<102).map { MindMapNode(id: $0, depth: 2, title: "Detail \($0)") }
+            + [MindMapNode(id: 102, depth: 1, title: "Second")]
+            + (103..<203).map { MindMapNode(id: $0, depth: 2, title: "Detail \($0)") }
+        let viewport = CGSize(width: 1000, height: 680)
+        let full = MindMapSpatialLayout.layout(nodes)
+        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
+            nodes: nodes, layout: full, viewport: viewport
+        )
+        XCTAssertEqual(collapsed, Set([1, 102]))
+        let overview = MindMapSpatialLayout.layout(nodes.filter { $0.depth <= 1 })
+        let root = overview.placements.first { $0.id == 0 }!
+        XCTAssertTrue(overview.placements.contains {
+            $0.parentID == root.id && abs($0.center.y - root.center.y) < viewport.height * 0.42
+        })
+    }
+
+    func testShortMapKeepsBranchesExpandedOnFirstOpen() {
+        let nodes = [
+            MindMapNode(id: 0, depth: 0, title: "Root"),
+            MindMapNode(id: 1, depth: 1, title: "First"),
+            MindMapNode(id: 2, depth: 2, title: "Detail")
+        ]
+        XCTAssertTrue(MindMapSpatialLayout.initialCollapsedBranches(
+            nodes: nodes, layout: MindMapSpatialLayout.layout(nodes),
+            viewport: CGSize(width: 1000, height: 680)
+        ).isEmpty)
+    }
+
     func testPinchKeepsContentPointUnderAnchor() {
         let screen = CGSize(width: 900, height: 640)
         let anchor = CGPoint(x: 710, y: 130)

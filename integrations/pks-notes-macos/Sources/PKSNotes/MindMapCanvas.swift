@@ -2006,11 +2006,21 @@ struct MindMapCanvas: View {
     /// Opening a large map should show the topic and the first nearby
     /// branches, not a tiny overview. Fit-to-window remains an explicit action.
     private func focusOnRoot(viewport: CGSize) -> Bool {
-        guard let root = mapLayout.placements.first(where: { $0.parentID == nil }),
+        guard mapLayout.placements.contains(where: { $0.parentID == nil }),
               viewport.width > 0, viewport.height > 0 else { return false }
+        if collapsed.isEmpty {
+            let initial = MindMapSpatialLayout.initialCollapsedBranches(
+                nodes: nodes, layout: mapLayout, viewport: viewport
+            )
+            if !initial.isEmpty {
+                collapsed = initial
+                rebuildVisibleLayout()
+            }
+        }
+        guard let visibleRoot = mapLayout.placements.first(where: { $0.parentID == nil }) else { return false }
         zoom = 1
         viewportOffset = MindMapViewportGeometry.initialRootOffset(
-            root: root.center, mapSize: mapLayout.size, viewport: viewport
+            root: visibleRoot.center, mapSize: mapLayout.size, viewport: viewport
         )
         return true
     }

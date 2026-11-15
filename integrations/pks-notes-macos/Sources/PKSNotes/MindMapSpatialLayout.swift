@@ -347,6 +347,20 @@ struct MindMapLayoutSnapshot: Equatable {
 }
 
 enum MindMapSpatialLayout {
+    /// On very tall outlines, full subtree heights can place every branch
+    /// outside the initial viewport. Use existing transient disclosure state.
+    static func initialCollapsedBranches(
+        nodes: [MindMapNode], layout: MindMapLayoutSnapshot, viewport: CGSize
+    ) -> Set<Int> {
+        guard viewport.height > 0,
+              let root = layout.placements.first(where: { $0.parentID == nil }) else { return [] }
+        let branches = layout.placements.filter { $0.parentID == root.id }
+        guard !branches.isEmpty,
+              branches.allSatisfy({ abs($0.center.y - root.center.y) > viewport.height * 0.42 })
+        else { return [] }
+        return Set(nodes.filter { $0.depth == 1 }.map(\.id))
+    }
+
     static func layout(
         _ nodes: [MindMapNode],
         density: MindMapLayoutDensity = .standard,
