@@ -14,6 +14,15 @@ final class MindMapOutlineTests: XCTestCase {
         XCTAssertEqual(nodes.map(\.title), ["Root", "Real"])
     }
 
+    func testTabIndentedCodeBlocksDoNotCreateNodesOrKnowledgeLinks() {
+        let markdown = "# Root\n\t- Fake root node\n\t[Fake root link](/root.pdf)\n- Parent\n\t\t- Fake nested node\n\t\t[Fake nested link](/nested.pdf)\n- Child\n\t[Real child link](/child.pdf)\n- Next\n"
+        let nodes = MindMapOutline.nodes(in: markdown)
+
+        XCTAssertEqual(nodes.map(\.title), ["Root", "Parent", "Child", "Next"])
+        XCTAssertEqual(MindMapOutline.knowledgeLinks(in: markdown).map(\.target), ["/child.pdf"])
+        XCTAssertEqual(MindMapOutline.linkOccurrences(in: markdown).map { $0.link.target }, ["/child.pdf"])
+    }
+
     func testIndentedCodeBlocksDoNotCreateNodesOrKnowledgeLinks() {
         let markdown = """
         # Root
