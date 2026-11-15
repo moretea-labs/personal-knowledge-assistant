@@ -2271,7 +2271,8 @@ final class NotesModel: ObservableObject {
         commentary: String? = nil,
         selectedText: String? = nil,
         anchor: PDFSourceAnchor? = nil,
-        to note: URL
+        to note: URL,
+        mindMapNodeID: Int? = nil
     ) async -> Bool {
         guard !Task.isCancelled else { return false }
         guard let root,
@@ -2304,13 +2305,30 @@ final class NotesModel: ObservableObject {
                 return false
             }
 
-            draft += "\n\n\(snippet)\n"
+            if let mindMapNodeID {
+                guard let updated = MindMapOutline.appendBlockToNodeBody(
+                    snippet, in: draft, nodeID: mindMapNodeID
+                ) else {
+                    message = AppLanguage.current.text("Link target not available in this workspace.")
+                    return false
+                }
+                draft = updated
+            } else {
+                draft += "\n\n\(snippet)\n"
+            }
             save()
             guard !isDirty else { return false }
             // Content changed, but the filesystem tree did not. Avoid a full recursive
             // workspace rescan on the study-capture hot path.
             message = "\(AppLanguage.current.text("Added PDF page to note")): \(note.deletingPathExtension().lastPathComponent)"
             return true
+        }
+
+        // A structural node only belongs to the active Markdown editor.
+        // Background captures into other notes remain simple additive appends.
+        guard mindMapNodeID == nil else {
+            message = AppLanguage.current.text("Link target not available in this workspace.")
+            return false
         }
 
         do {

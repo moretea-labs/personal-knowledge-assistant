@@ -895,6 +895,74 @@ extension PDFCitationDragTests {
     }
 
     @MainActor
+    func testPDFCaptureToSelectedMindMapNodePersistsItsSourceLinkAfterReopen() async throws {
+        let defaults = UserDefaults.standard
+        let priorWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
+        let priorBookmark = defaults.object(forKey: "PKSNotesWorkspaceBookmark")
+        let priorNote = defaults.object(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let priorWorkspace { defaults.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let priorBookmark { defaults.set(priorBookmark, forKey: "PKSNotesWorkspaceBookmark") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+            if let priorNote { defaults.set(priorNote, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+        defaults.removeObject(forKey: "PKSNotesWorkspace")
+        defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark")
+        defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown")
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(
+            "Leafspan-PDF-MindMap-Quote-\(UUID().uuidString)", isDirectory: true
+        )
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let note = root.appendingPathComponent("Study.md")
+        let pdf = root.appendingPathComponent("Reading.pdf")
+        try "# Root\n- Concept\n- Next\n".write(to: note, atomically: true, encoding: .utf8)
+        try Data("%PDF-1.4\n%%EOF".utf8).write(to: pdf)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(note)
+        for _ in 0..<400 where model.loadingNote {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let initialNodes = MindMapOutline.nodes(in: model.draft)
+        let concept = try XCTUnwrap(initialNodes.first(where: { $0.title == "Concept" }))
+        let added = await model.appendPDFReference(
+            pdf: pdf, page: 2, selectedText: "Source evidence",
+            to: note, mindMapNodeID: concept.id
+        )
+        XCTAssertTrue(added, model.message ?? "Mind Map capture was not saved")
+        XCTAssertFalse(model.isDirty)
+        let saved = try String(contentsOf: note, encoding: .utf8)
+        XCTAssertEqual(model.draft, saved)
+
+        let ignored = await model.appendPDFReference(
+            pdf: pdf, page: 2, to: note, mindMapNodeID: 999
+        )
+        XCTAssertFalse(ignored)
+        XCTAssertEqual(model.draft, saved, "A stale node selection cannot move the quote elsewhere")
+
+        let reopened = NotesModel()
+        XCTAssertTrue(reopened.openWorkspace(root))
+        reopened.openNote(note)
+        for _ in 0..<400 where reopened.loadingNote {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(reopened.draft, saved)
+        let nodes = MindMapOutline.nodes(in: reopened.draft)
+        let selected = try XCTUnwrap(nodes.first(where: { $0.title == "Concept" }))
+        let sibling = try XCTUnwrap(nodes.first(where: { $0.title == "Next" }))
+        let presentations = MindMapOutline.presentations(in: reopened.draft, nodes: nodes)
+        XCTAssertEqual(presentations[selected.id]?.links.map(\.target), ["/Reading.pdf#page=2"])
+        XCTAssertEqual(presentations[sibling.id]?.links, [])
+        XCTAssertTrue(presentations[selected.id]?.body.contains("Source evidence") == true)
+    }
+
+    @MainActor
     func testAppendPDFReferencePersistsToActiveAndOtherNotesWithoutChangingActiveDraft() async throws {
         let defaults = UserDefaults.standard
         let previousWorkspace = defaults.object(forKey: "PKSNotesWorkspace")

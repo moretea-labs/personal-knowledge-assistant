@@ -3853,12 +3853,20 @@ struct NotesWindow: View {
                     guard PDFStudyNoteTarget.resolve(
                         note: model.selected, pdf: url, root: model.root, externalBody: model.externalBody
                     )?.standardizedFileURL == note.standardizedFileURL else { return }
+                    let targetNode = showingMindMap ? mindMapSelectionLine : nil
                     Task { @MainActor in
                         let saved = await model.appendPDFReference(
                             pdf: url, page: page, selectedText: selectedText,
-                            anchor: anchor, to: note
+                            anchor: anchor, to: note, mindMapNodeID: targetNode
                         )
                         guard saved, model.selected?.standardizedFileURL == note.standardizedFileURL else { return }
+                        compactStudyShowsStudyPane = true
+                        if targetNode != nil {
+                            // The citation is already visible on the selected map
+                            // node. Keep the study/map surface rather than switching
+                            // to the Markdown editor and losing spatial context.
+                            return
+                        }
                         pendingMarkdownReveal = MarkdownEditorRevealRequest(
                             note: note.standardizedFileURL,
                             target: .end,
