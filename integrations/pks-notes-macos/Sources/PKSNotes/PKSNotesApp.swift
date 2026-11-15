@@ -420,10 +420,15 @@ final class PDFCitationDropTarget {
         let contentPoint = contentView.convert(windowPoint, from: nil)
         var candidate = contentView.hitTest(contentPoint)
         while let view = candidate {
-            if let textView = view as? NSTextView,
+            let textView = (view as? NSTextView)
+                ?? (view as? NSScrollView)?.documentView as? NSTextView
+            if let textView,
                textView.isEditable, !textView.isFieldEditor,
                !textView.isHiddenOrHasHiddenAncestor,
                textView.window === window {
+                // In a short Markdown note the native NSTextView can be
+                // shorter than its enclosing scroll viewport. Accept drops
+                // in that blank editor space without accepting other panes.
                 return textView
             }
             candidate = view.superview

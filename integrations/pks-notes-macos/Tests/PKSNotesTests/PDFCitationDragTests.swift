@@ -750,6 +750,45 @@ final class PDFCitationDragTests: XCTestCase {
     }
 
     @MainActor
+    func testPDFCitationDropOnEmptyEditorScrollAreaAppendsAtEnd() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 260),
+            styleMask: [],
+            backing: .buffered,
+            defer: true
+        )
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 260))
+        scroll.hasVerticalScroller = true
+        let editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 380, height: 34))
+        editor.isVerticallyResizable = false
+        editor.isEditable = true
+        editor.string = "# Reading note"
+        scroll.documentView = editor
+        window.contentView = scroll
+
+        // The drop is in the editor's scrollable blank area, below its
+        // short document view. AppKit hit testing returns a clip view.
+        let blankPoint = NSPoint(x: 140, y: 170)
+        let clipPoint = scroll.convert(blankPoint, to: scroll.contentView)
+        XCTAssertFalse(scroll.contentView.hitTest(clipPoint) is NSTextView)
+        let screenPoint = window.convertPoint(toScreen: scroll.convert(blankPoint, to: nil))
+        XCTAssertTrue(
+            PDFCitationDropTarget.editableTextView(at: screenPoint, in: window) === editor,
+            "Dropping on blank editor space must still target its native NSTextView"
+        )
+        let note = URL(fileURLWithPath: "/tmp/Study.md")
+        let target = try XCTUnwrap(PDFCitationDropTarget(
+            screenPoint: screenPoint, note: note, draftRevision: 1, textView: editor
+        ))
+        XCTAssertEqual(target.insertionIndex, (editor.string as NSString).length)
+        XCTAssertTrue(target.insert(
+            "\n\n[Reading.pdf · p. 1](/Reading.pdf#page=1)\n\n",
+            currentNote: note, currentDraftRevision: 1, canEdit: true
+        ))
+        XCTAssertTrue(editor.string.hasSuffix("[Reading.pdf · p. 1](/Reading.pdf#page=1)\n\n"))
+    }
+
+    @MainActor
     func testPDFCitationDropTargetKeepsTheOriginalNoteRevisionAndCaret() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 240),
