@@ -256,7 +256,12 @@ enum NotesGeometry {
     static let toolbarTarget: CGFloat = 28
     static let railSymbolSize: CGFloat = 16
     static let documentInset: CGFloat = 32
+    static let markdownFormattingToolbarHeight: CGFloat = documentInset
     static let selectionCorner: CGFloat = 9
+
+    static func editorContentTopInset(showingFormattingToolbar: Bool) -> CGFloat {
+        showingFormattingToolbar ? 0 : documentInset
+    }
     static let workspacePanelRadius: CGFloat = 14
     static let workspacePanelInset: CGFloat = 9
     static let workspacePanelGap: CGFloat = 9
@@ -3941,7 +3946,10 @@ struct NotesWindow: View {
                 .scrollContentBackground(.hidden)
                 .frame(maxWidth: theme.typography.pageWidth + widthAdjustment)
                 .padding(.horizontal, NotesGeometry.documentInset)
-                .padding(.vertical, NotesGeometry.documentInset)
+                .padding(.top, NotesGeometry.editorContentTopInset(
+                    showingFormattingToolbar: showMarkdownToolbar
+                ))
+                .padding(.bottom, NotesGeometry.documentInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(theme.canvas)
                 // Only the blank 20pt page gutter toggles back to Preview.
@@ -4080,7 +4088,7 @@ struct NotesWindow: View {
         .buttonStyle(.plain)
         .controlSize(.small)
         .padding(.horizontal, NotesGeometry.documentInset)
-        .frame(height: 36)
+        .frame(height: NotesGeometry.markdownFormattingToolbarHeight)
         .background(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
         .accessibilityIdentifier("pks-markdown-formatting-toolbar")
     }
