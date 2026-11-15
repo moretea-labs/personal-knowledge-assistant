@@ -2980,8 +2980,9 @@ extension PKSNotesTests {
 
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(root))
-        model.openFile(pdf)
+        model.openFile(pdf, pdfPage: 4)
         XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+        XCTAssertEqual(model.previewPDFPage, 4)
 
         model.openStudyNote(note)
         await waitForNote(model, note)
@@ -2992,6 +2993,7 @@ extension PKSNotesTests {
             pdf.standardizedFileURL,
             "Opening a note linked from the PDF must keep the source visible in the study split."
         )
+        XCTAssertEqual(model.previewPDFPage, 4, "Opening a linked note must retain the reader's current page.")
         XCTAssertEqual(model.draft, "# Study\n\nEvidence")
     }
 
