@@ -2957,6 +2957,45 @@ extension PKSNotesTests {
     }
 
     @MainActor
+    func testOpeningPDFLinkedNoteKeepsThePDFStudyPaneVisible() async throws {
+        let defaults = UserDefaults.standard
+        let previousRoot = defaults.string(forKey: "PKSNotesWorkspace")
+        let previousNote = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            if let previousRoot { defaults.set(previousRoot, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousNote { defaults.set(previousNote, forKey: "PKSNotesLastOpenedMarkdown") }
+            else { defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown") }
+        }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let note = root.appendingPathComponent("Study.md")
+        let pdf = root.appendingPathComponent("Source.pdf")
+        try "# Study\n\nEvidence".write(to: note, atomically: true, encoding: .utf8)
+        try Data("%PDF-1.4\n%%EOF".utf8).write(to: pdf)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openFile(pdf)
+        XCTAssertEqual(model.previewPDF, pdf.standardizedFileURL)
+
+        model.openStudyNote(note)
+        await waitForNote(model, note)
+
+        XCTAssertEqual(model.selected, note.standardizedFileURL)
+        XCTAssertEqual(
+            model.previewPDF,
+            pdf.standardizedFileURL,
+            "Opening a note linked from the PDF must keep the source visible in the study split."
+        )
+        XCTAssertEqual(model.draft, "# Study\n\nEvidence")
+    }
+
+    @MainActor
     func testInternalPDFLinkOpensRequestedPageThroughSingleFileAuthority() async throws {
         let defaults = UserDefaults.standard
         let prior = defaults.string(forKey: "PKSNotesWorkspace")

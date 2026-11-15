@@ -1676,7 +1676,11 @@ struct NotesWindow: View {
         pendingBacklinkNote = source
         pendingBacklinkLine = location.lineIndex
         pendingBacklinkStamp = backlink.sourceStamp
-        model.openFile(source)
+        if model.previewPDF != nil {
+            model.openStudyNote(source)
+        } else {
+            model.openFile(source)
+        }
 
         if model.selected?.standardizedFileURL != source, !model.loadingNote {
             pendingBacklinkNote = nil
