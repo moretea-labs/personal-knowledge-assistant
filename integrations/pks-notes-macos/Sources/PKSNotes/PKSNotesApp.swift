@@ -862,6 +862,7 @@ struct NotesWindow: View {
                             .buttonStyle(.plain)
                             .keyboardShortcut(choice.shortcut, modifiers: .command)
                             .help("\(language.text(choice.rawValue)) Markdown")
+                            .accessibilityAddTraits(mode == choice ? .isSelected : [])
                             .accessibilityIdentifier("pks-mode-\(choice.rawValue.lowercased())")
                         }
                     }
@@ -905,6 +906,8 @@ struct NotesWindow: View {
                     .disabled(outlineHeadings.isEmpty)
                     .help(language.text("Document Outline"))
                     .accessibilityLabel(language.text("Document Outline"))
+                    .accessibilityValue(language.text(showingOutline ? "On" : "Off"))
+                    .accessibilityAddTraits(showingOutline ? .isSelected : [])
                     .accessibilityIdentifier("pks-outline-menu")
 
                     Button {
@@ -950,6 +953,8 @@ struct NotesWindow: View {
                     .accessibilityLabel(language.text(model.previewPDF == nil
                                                       ? "Links and related notes"
                                                       : "Linked notes for this PDF"))
+                    .accessibilityValue(language.text(showingBacklinks ? "On" : "Off"))
+                    .accessibilityAddTraits(showingBacklinks ? .isSelected : [])
                     .accessibilityIdentifier("pks-relationships-menu")
 
                 }
