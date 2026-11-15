@@ -1195,9 +1195,9 @@ final class NotesModel: ObservableObject {
         externalNoteTask?.cancel()
         pendingExternalPaths.removeAll()
         root = resolved
-        workspaceMonitor = WorkspaceChangeMonitor(root: resolved) { [weak self] paths in
+        workspaceMonitor = WorkspaceChangeMonitor(root: resolved) { [weak self] paths, requiresFullRescan in
             Task { @MainActor [weak self] in
-                self?.noteExternalPaths(paths, in: resolved)
+                self?.noteExternalPaths(paths, in: resolved, requiresFullRescan: requiresFullRescan)
             }
         }
         query = ""
@@ -1309,10 +1309,23 @@ final class NotesModel: ObservableObject {
     /// FSEvents is an invalidation hint, never an alternate file inventory.
     /// Coalesce bursts and refresh only materialized directories. A changed open
     /// note is reloaded only if the user has no unsaved edits.
-    func noteExternalPaths(_ paths: [String], in observedRoot: URL) {
+    func noteExternalPaths(
+        _ paths: [String], in observedRoot: URL, requiresFullRescan: Bool = false
+    ) {
         guard let root, root == observedRoot else { return }
         let base = root.standardizedFileURL.resolvingSymlinksInPath().path
-        pendingExternalPaths.formUnion(paths.map {
+        var pathsToRefresh = paths
+        if requiresFullRescan {
+            // FSEvents explicitly reports when its event history is incomplete.
+            // Re-read the root and every directory already materialized in the UI;
+            // collapsed descendants remain lazy and will be scanned when expanded.
+            pathsToRefresh.append(base)
+            pathsToRefresh.append(contentsOf: loadedFolderPaths)
+            if let previewPDF {
+                pathsToRefresh.append(previewPDF.path)
+            }
+        }
+        pendingExternalPaths.formUnion(pathsToRefresh.map {
             URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path
         }.filter {
             $0 == base || $0.hasPrefix(base + "/")

@@ -1,3 +1,4 @@
+import CoreServices
 import Foundation
 import XCTest
 @testable import PKSNotes
@@ -16,6 +17,22 @@ final class WorkspaceExternalRefreshTests: XCTestCase {
         XCTAssertTrue(condition(), "The workspace did not reflect the filesystem within the observation window.")
     }
 
+    func testFSEventLossFlagsRequireFullRescan() {
+        let lostHistoryFlags: [FSEventStreamEventFlags] = [
+            FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs),
+            FSEventStreamEventFlags(kFSEventStreamEventFlagUserDropped),
+            FSEventStreamEventFlags(kFSEventStreamEventFlagKernelDropped),
+            FSEventStreamEventFlags(kFSEventStreamEventFlagEventIdsWrapped),
+            FSEventStreamEventFlags(kFSEventStreamEventFlagRootChanged)
+        ]
+        for flag in lostHistoryFlags {
+            XCTAssertTrue(WorkspaceChangeMonitor.requiresFullRescan(for: flag))
+        }
+        XCTAssertFalse(WorkspaceChangeMonitor.requiresFullRescan(
+            for: FSEventStreamEventFlags(kFSEventStreamEventFlagItemModified)
+        ))
+    }
+
     func testRealFSEventNotificationForExternalFile() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("LeafspanMonitor-\(UUID().uuidString)", isDirectory: true)
@@ -24,7 +41,7 @@ final class WorkspaceExternalRefreshTests: XCTestCase {
         let expected = root.resolvingSymlinksInPath().appendingPathComponent("External.md").path
         let observed = expectation(description: "FSEvents detected the external file")
         observed.assertForOverFulfill = false
-        guard let monitor = WorkspaceChangeMonitor(root: root, onChanges: { paths in
+        guard let monitor = WorkspaceChangeMonitor(root: root, onChanges: { paths, _ in
             if paths.contains(where: { $0.hasSuffix("/External.md") }) {
                 observed.fulfill()
             }
@@ -70,10 +87,38 @@ final class WorkspaceExternalRefreshTests: XCTestCase {
         let added = root.appendingPathComponent("Added.md")
         try "# Added\n".write(to: added, atomically: true, encoding: .utf8)
 
-        model.noteExternalPaths([added.path], in: root)
-        try await awaitCondition { model.files.contains(where: { $0.url == added }) }
+        // Exercise the real FSEvents → NotesModel → visible-tree path.
+        try await awaitCondition(timeout: .seconds(5)) {
+            model.files.contains(where: { $0.url == added })
+        }
         XCTAssertTrue(model.globalQuickOpenEntries.isEmpty,
                       "The full-vault index must remain lazy after an event.")
+    }
+
+    @MainActor
+    func testFullRescanRefreshesEveryMaterializedDirectory() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LeafspanRescan-\(UUID().uuidString)", isDirectory: true)
+        let nested = root.appendingPathComponent("Nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let existing = nested.appendingPathComponent("Existing.md")
+        try "# Existing".write(to: existing, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        try await awaitCondition { !model.loadingFiles }
+        model.loadExpandedFolders([nested.path])
+        try await awaitCondition {
+            model.files.first(where: { $0.url == nested })?.children?.contains(where: { $0.url == existing }) == true
+        }
+
+        let added = nested.appendingPathComponent("Added.md")
+        try "# Added".write(to: added, atomically: true, encoding: .utf8)
+        model.noteExternalPaths([], in: root, requiresFullRescan: true)
+        try await awaitCondition {
+            model.files.first(where: { $0.url == nested })?.children?.contains(where: { $0.url == added }) == true
+        }
     }
 
     @MainActor

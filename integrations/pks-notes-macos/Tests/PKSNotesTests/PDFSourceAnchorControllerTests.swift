@@ -877,7 +877,7 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         let event = expectation(description: "FSEvents reports the changed file path")
         let canonicalFile = file.standardizedFileURL.resolvingSymlinksInPath()
         var observedPaths: [String] = []
-        let monitor = try XCTUnwrap(WorkspaceChangeMonitor(root: root) { paths in
+        let monitor = try XCTUnwrap(WorkspaceChangeMonitor(root: root) { paths, _ in
             observedPaths.append(contentsOf: paths)
             if paths.contains(where: { URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath() == canonicalFile }) { event.fulfill() }
         })
