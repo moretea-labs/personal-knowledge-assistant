@@ -359,16 +359,8 @@ enum MindMapSpatialLayout {
         guard !branches.isEmpty else { return [] }
         let expandableBranches = branches.filter { layout.parentIDs.contains($0.id) }
         let threshold = viewport.height * 0.80
-        let top = branches.map { $0.center.y - $0.size.height / 2 }.min() ?? 0
-        let bottom = branches.map { $0.center.y + $0.size.height / 2 }.max() ?? 0
-        // When sibling branches are spread across a tall canvas, keep the
-        // existing compact overview behavior and collapse each expandable branch.
-        if bottom - top > threshold {
-            return Set(expandableBranches.map(\.id))
-        }
-
-        // A single deep branch can also create an enormous canvas while its
-        // first-level card stays beside the root. Measure each subtree separately.
+        // Collapse only branches whose own subtree would dominate the opening
+        // viewport. Keep short siblings expanded beside a tall collapsed branch.
         let placementsByID = Dictionary(uniqueKeysWithValues: layout.placements.map { ($0.id, $0) })
         var currentBranchID: Int?
         var subtreeBounds: [Int: ClosedRange<CGFloat>] = [:]

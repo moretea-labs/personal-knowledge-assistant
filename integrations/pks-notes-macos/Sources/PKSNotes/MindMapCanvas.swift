@@ -510,10 +510,9 @@ struct MindMapCanvas: View {
                         // A manual pan, zoom or selection keeps its current content position.
                         let shouldRefocus: Bool
                         if let root = mapLayout.placements.first(where: { $0.parentID == nil }) {
-                            let firstLevel = mapLayout.placements.filter { $0.parentID == root.id }
                             shouldRefocus = MindMapViewportGeometry.isAtInitialRootViewport(
                                 root: root,
-                                firstLevel: firstLevel,
+                                visiblePlacements: mapLayout.placements,
                                 mapSize: mapLayout.size,
                                 viewport: oldSize,
                                 zoom: zoom,
@@ -2067,9 +2066,8 @@ struct MindMapCanvas: View {
             }
         }
         guard let visibleRoot = mapLayout.placements.first(where: { $0.parentID == nil }) else { return false }
-        let firstLevel = mapLayout.placements.filter { $0.parentID == visibleRoot.id }
         let initial = MindMapViewportGeometry.initialRootViewport(
-            root: visibleRoot, firstLevel: firstLevel,
+            root: visibleRoot, visiblePlacements: mapLayout.placements,
             mapSize: mapLayout.size, viewport: viewport
         )
         zoom = initial.zoom

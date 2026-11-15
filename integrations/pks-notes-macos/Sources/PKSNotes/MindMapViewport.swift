@@ -121,12 +121,12 @@ enum MindMapViewportGeometry {
         )
     }
 
-    /// Keep the root and its first-level branches visible on first open.
-    /// Wide canvases preserve the familiar root position; compact split views
-    /// fit both axes only when the actual branch bounds require it.
+    /// Fit the root and every currently visible node on first open.
+    /// Tall subtrees are collapsed before this calculation, so short branches
+    /// and their visible children stay inside the opening viewport.
     static func initialRootViewport(
         root: MindMapPlacement,
-        firstLevel: [MindMapPlacement],
+        visiblePlacements: [MindMapPlacement],
         mapSize: CGSize,
         viewport: CGSize
     ) -> (zoom: CGFloat, offset: CGSize) {
@@ -137,7 +137,7 @@ enum MindMapViewportGeometry {
               root.center.x.isFinite, root.center.y.isFinite,
               root.size.width.isFinite, root.size.width > 0,
               root.size.height.isFinite, root.size.height > 0,
-              firstLevel.allSatisfy({
+              visiblePlacements.allSatisfy({
                   $0.center.x.isFinite && $0.center.y.isFinite
                       && $0.size.width.isFinite && $0.size.width > 0
                       && $0.size.height.isFinite && $0.size.height > 0
@@ -151,7 +151,7 @@ enum MindMapViewportGeometry {
             width: root.size.width,
             height: root.size.height
         )
-        let contentBounds = firstLevel.reduce(rootBounds) { bounds, placement in
+        let contentBounds = visiblePlacements.reduce(rootBounds) { bounds, placement in
             bounds.union(CGRect(
                 x: placement.center.x - placement.size.width / 2,
                 y: placement.center.y - placement.size.height / 2,
@@ -209,7 +209,7 @@ enum MindMapViewportGeometry {
     /// Window resizing may recompute that overview, but must not override user navigation.
     static func isAtInitialRootViewport(
         root: MindMapPlacement,
-        firstLevel: [MindMapPlacement],
+        visiblePlacements: [MindMapPlacement],
         mapSize: CGSize,
         viewport: CGSize,
         zoom: CGFloat,
@@ -221,7 +221,7 @@ enum MindMapViewportGeometry {
               offset.width.isFinite, offset.height.isFinite else { return false }
 
         let initial = initialRootViewport(
-            root: root, firstLevel: firstLevel, mapSize: mapSize, viewport: viewport
+            root: root, visiblePlacements: visiblePlacements, mapSize: mapSize, viewport: viewport
         )
         return abs(zoom - initial.zoom) < 0.001
             && abs(offset.width - initial.offset.width) < 0.5
