@@ -141,6 +141,12 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Find in Notes": "在笔记中查找",
         "Refresh Files": "刷新文件",
         "Reload PDF": "重新加载 PDF",
+        "The PDF file could not be found. It may have been moved or deleted.": "找不到此 PDF 文件。它可能已被移动或删除。",
+        "Leafspan cannot read this PDF. Check the file's permissions or choose the workspace folder again.": "Leafspan 无法读取此 PDF。请检查文件权限，或重新选择工作区文件夹。",
+        "This PDF is not available from its cloud provider yet. Check your connection and cloud-drive status, then reload.": "此 PDF 尚未从云端下载完成。请检查网络和云盘状态，然后重新加载。",
+        "This file could not be opened as a PDF. It may be damaged or use an unsupported format.": "无法将此文件作为 PDF 打开。文件可能已损坏或使用了不受支持的格式。",
+        "This PDF is password-protected. Open it in Preview and save an unlocked copy to read it here.": "此 PDF 受密码保护。请在“预览”中打开并另存为未加密副本，再在此处阅读。",
+        "Leafspan could not read this PDF. Check that the file is available, then reload.": "Leafspan 无法读取此 PDF。请确认文件可用，然后重新加载。",
         "Choose Folder…": "选择文件夹…",
         "Choose Folder": "选择文件夹",
 

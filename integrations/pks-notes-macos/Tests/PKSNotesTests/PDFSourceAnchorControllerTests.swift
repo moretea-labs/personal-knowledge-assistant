@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import PDFKit
 import XCTest
 @testable import PKSNotes
@@ -670,15 +671,64 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
 
         XCTAssertTrue(try makeDocument("Original PDF source").write(to: url))
         let originalResult = await PDFDocumentLoading.load(url)
-        let original = try XCTUnwrap(originalResult)
+        let original = try originalResult.get()
         XCTAssertNotNil(original.findString("Original PDF source", withOptions: []).first)
 
         XCTAssertTrue(try makeDocument("Updated PDF source").write(to: url))
         let refreshedResult = await PDFDocumentLoading.load(url)
-        let refreshed = try XCTUnwrap(refreshedResult)
+        let refreshed = try refreshedResult.get()
         XCTAssertFalse(original === refreshed)
         XCTAssertNotNil(refreshed.findString("Updated PDF source", withOptions: []).first)
         XCTAssertNil(refreshed.findString("Original PDF source", withOptions: []).first)
+    }
+
+    func testPDFDocumentLoadingReportsMissingAndInvalidFiles() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Load-Failures-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let missing = root.appendingPathComponent("Missing.pdf")
+        guard case .failure(let missingFailure) = await PDFDocumentLoading.load(missing) else {
+            XCTFail("A missing PDF must produce a visible load failure.")
+            return
+        }
+        XCTAssertEqual(missingFailure, .missing)
+
+        let invalid = root.appendingPathComponent("Invalid.pdf")
+        try Data("not a PDF".utf8).write(to: invalid)
+        guard case .failure(let invalidFailure) = await PDFDocumentLoading.load(invalid) else {
+            XCTFail("An unreadable PDF payload must not be accepted as a document.")
+            return
+        }
+        XCTAssertEqual(invalidFailure, .invalidPDF)
+    }
+
+    func testPDFDocumentLoadingClassifiesFilePermissionErrors() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Permission-\(UUID().uuidString).pdf")
+
+        XCTAssertEqual(
+            PDFDocumentLoading.failure(for: CocoaError(.fileReadNoPermission), url: url),
+            .permissionDenied
+        )
+        XCTAssertEqual(
+            PDFDocumentLoading.failure(
+                for: NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES)),
+                url: url
+            ),
+            .permissionDenied
+        )
+        XCTAssertEqual(
+            PDFDocumentLoading.failure(for: CocoaError(.fileReadNoSuchFile), url: url),
+            .missing
+        )
+        let wrappedMissing = NSError(
+            domain: NSCocoaErrorDomain,
+            code: CocoaError(.fileNoSuchFile).code.rawValue,
+            userInfo: [NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT))]
+        )
+        XCTAssertEqual(PDFDocumentLoading.failure(for: wrappedMissing, url: url), .missing)
     }
 
     @MainActor
@@ -741,7 +791,7 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         XCTAssertEqual(model.previewPDFAnchor, anchor, "Reload keeps the original citation so the reader can validate it against the new PDF.")
 
         let refreshedResult = await PDFDocumentLoading.load(pdf)
-        let refreshed = try XCTUnwrap(refreshedResult)
+        let refreshed = try refreshedResult.get()
         XCTAssertFalse(originalDocument === refreshed)
         XCTAssertNotNil(refreshed.findString("Updated PDF source", withOptions: []).first)
         XCTAssertNil(refreshed.findString("Original PDF source", withOptions: []).first)

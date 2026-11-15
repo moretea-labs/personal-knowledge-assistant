@@ -334,9 +334,8 @@ final class PKSNotesTests: XCTestCase {
             try? view.dataWithPDF(inside: view.bounds).write(to: url)
         }
 
-        let document = await PDFDocumentLoading.load(url)
-        XCTAssertNotNil(document)
-        XCTAssertEqual(document?.pageCount, 1)
+        let document = try await PDFDocumentLoading.load(url).get()
+        XCTAssertEqual(document.pageCount, 1)
     }
 
     @MainActor

@@ -659,6 +659,7 @@ struct NotesWindow: View {
     @State private var pdfCaptureCommentary = ""
     @State private var pdfCaptureTask: Task<Void, Never>?
     @State private var loadedPDFDocument: PDFDocument?
+    @State private var loadedPDFLoadFailure: PDFDocumentLoadFailure?
     @State private var loadedPDFURL: URL?
     @State private var compactStudyShowsStudyPane = false
     @StateObject private var pdfReaderController = PDFReaderController()
@@ -1015,17 +1016,24 @@ struct NotesWindow: View {
         .task(id: "\(model.previewPDF?.standardizedFileURL.path ?? "")#\(model.previewPDFReloadSequence)") {
             guard let requestedURL = model.previewPDF?.standardizedFileURL else {
                 loadedPDFDocument = nil
+                loadedPDFLoadFailure = nil
                 loadedPDFURL = nil
                 return
             }
             let generation = model.previewPDFReloadSequence
             loadedPDFDocument = nil
+            loadedPDFLoadFailure = nil
             loadedPDFURL = nil
-            let loaded = await PDFDocumentLoading.load(requestedURL)
+            let result = await PDFDocumentLoading.load(requestedURL)
             guard !Task.isCancelled,
                   model.previewPDF?.standardizedFileURL == requestedURL,
                   model.previewPDFReloadSequence == generation else { return }
-            loadedPDFDocument = loaded
+            switch result {
+            case .success(let document):
+                loadedPDFDocument = document
+            case .failure(let failure):
+                loadedPDFLoadFailure = failure
+            }
             loadedPDFURL = requestedURL
         }
         .task(id: OutlineWarmupKey(
@@ -3725,6 +3733,8 @@ struct NotesWindow: View {
             document: loadedPDFURL?.standardizedFileURL == url.standardizedFileURL
                 ? loadedPDFDocument : nil,
             attemptedURL: loadedPDFURL,
+            loadFailure: loadedPDFURL?.standardizedFileURL == url.standardizedFileURL
+                ? loadedPDFLoadFailure : nil,
             controller: pdfReaderController,
             requestedPage: model.previewPDFPage,
             requestedAnchor: model.previewPDFAnchor,

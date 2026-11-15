@@ -1,16 +1,58 @@
 import AppKit
+import Darwin
 import PDFKit
 import SwiftUI
 
+enum PDFDocumentLoadFailure: Error, Equatable {
+    case missing
+    case permissionDenied
+    case cloudUnavailable
+    case invalidPDF
+    case passwordProtected
+    case unreadable
+    case cancelled
+
+    var message: String {
+        switch self {
+        case .missing:
+            "The PDF file could not be found. It may have been moved or deleted."
+        case .permissionDenied:
+            "Leafspan cannot read this PDF. Check the file's permissions or choose the workspace folder again."
+        case .cloudUnavailable:
+            "This PDF is not available from its cloud provider yet. Check your connection and cloud-drive status, then reload."
+        case .invalidPDF:
+            "This file could not be opened as a PDF. It may be damaged or use an unsupported format."
+        case .passwordProtected:
+            "This PDF is password-protected. Open it in Preview and save an unlocked copy to read it here."
+        case .unreadable:
+            "Leafspan could not read this PDF. Check that the file is available, then reload."
+        case .cancelled:
+            "Opening this PDF was cancelled."
+        }
+    }
+}
+
 enum PDFDocumentLoading {
-    static func load(_ url: URL) async -> PDFDocument? {
+    static func load(_ url: URL) async -> Result<PDFDocument, PDFDocumentLoadFailure> {
         let loader = Task.detached(priority: .userInitiated) {
+            () -> Result<PDFDocument, PDFDocumentLoadFailure> in
             do {
                 try await WorkspaceFiles.hydrateUbiquitousItemIfNeeded(url)
                 try Task.checkCancellation()
-                return PDFDocument(url: url)
+                let handle = try FileHandle(forReadingFrom: url)
+                try handle.close()
+                guard let document = PDFDocument(url: url) else {
+                    return .failure(.invalidPDF)
+                }
+                guard !document.isLocked else {
+                    return .failure(.passwordProtected)
+                }
+                guard document.pageCount > 0 else {
+                    return .failure(.invalidPDF)
+                }
+                return .success(document)
             } catch {
-                return nil
+                return .failure(failure(for: error, url: url))
             }
         }
         // Detached workers do not inherit cancellation. When SwiftUI replaces
@@ -21,7 +63,40 @@ enum PDFDocumentLoading {
         } onCancel: {
             loader.cancel()
         }
-        return Task.isCancelled ? nil : loaded
+        return Task.isCancelled ? .failure(.cancelled) : loaded
+    }
+
+    static func failure(for error: Error, url: URL) -> PDFDocumentLoadFailure {
+        if error is CancellationError { return .cancelled }
+        var value = error as NSError
+        // FileHandle wraps common POSIX failures in NSCocoaErrorDomain while
+        // retaining the actionable errno as NSUnderlyingError.
+        for _ in 0..<4 {
+            if value.domain == NSCocoaErrorDomain {
+                if value.code == CocoaError(.fileNoSuchFile).code.rawValue
+                    || value.code == CocoaError(.fileReadNoSuchFile).code.rawValue {
+                    return .missing
+                }
+                if value.code == CocoaError(.fileReadNoPermission).code.rawValue {
+                    return .permissionDenied
+                }
+            }
+            if value.domain == NSPOSIXErrorDomain {
+                switch value.code {
+                case Int(ENOENT):
+                    return .missing
+                case Int(EACCES), Int(EPERM):
+                    return .permissionDenied
+                default:
+                    break
+                }
+            }
+            guard let underlying = value.userInfo[NSUnderlyingErrorKey] as? NSError,
+                  underlying !== value else { break }
+            value = underlying
+        }
+        if WorkspaceFiles.isDataless(url) { return .cloudUnavailable }
+        return .unreadable
     }
 }
 
@@ -868,6 +943,7 @@ struct NativePDFPreview: View {
     let root: URL?
     let document: PDFDocument?
     let attemptedURL: URL?
+    let loadFailure: PDFDocumentLoadFailure?
     @ObservedObject var controller: PDFReaderController
     let requestedPage: Int?
     let requestedAnchor: PDFSourceAnchor?
@@ -1304,7 +1380,8 @@ struct NativePDFPreview: View {
                 .foregroundStyle(.tertiary)
             Text(language.text("Cannot preview this PDF"))
                 .font(.title3.weight(.medium))
-            Text(language.text("The original file may be unavailable or damaged."))
+            Text(language.text(loadFailure?.message ?? "The original file may be unavailable or damaged."))
+                .accessibilityIdentifier("pks-pdf-load-failure")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Button(language.text("Reload PDF"), action: onReload)
