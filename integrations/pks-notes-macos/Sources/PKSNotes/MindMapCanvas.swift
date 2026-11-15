@@ -128,6 +128,15 @@ enum MindMapVisualStyle: String, CaseIterable, Identifiable {
     var angularConnectors: Bool { self == .minimal }
     var connectorWidth: CGFloat { self == .colorful ? 2.2 : (self == .minimal ? 1.2 : 1.5) }
     var cardRadius: CGFloat { self == .minimal ? 6 : (self == .colorful ? 15 : 11) }
+    var nodeShadowRadius: CGFloat { self == .minimal ? 0 : 4 }
+    var nodeShadowYOffset: CGFloat { self == .minimal ? 0 : 1 }
+
+    func nodeShadowOpacity(depth: Int) -> Double {
+        guard self != .minimal else { return 0 }
+        return depth == 0 ? 0.035 : 0.015
+    }
+
+    var unselectedOutlineWidth: CGFloat { self == .minimal ? 0.8 : 0.85 }
 
     // Reuse the palette across nodes and connectors; large maps must not
     // allocate six SwiftUI Color values on every node render.
@@ -160,11 +169,18 @@ enum MindMapVisualStyle: String, CaseIterable, Identifiable {
         }
     }
 
+    func outlineOpacity(depth: Int) -> Double {
+        switch self {
+        case .classic: 0.06
+        case .colorful: depth == 0 ? 0.68 : 0.44
+        case .minimal: depth == 0 ? 0.14 : 0.09
+        }
+    }
+
     func outline(depth: Int, branch: Int) -> Color {
         switch self {
-        case .classic: Color.primary.opacity(0.09)
-        case .colorful: branchColor(branch).opacity(depth == 0 ? 0.68 : 0.44)
-        case .minimal: Color.primary.opacity(depth == 0 ? 0.25 : 0.16)
+        case .classic, .minimal: Color.primary.opacity(outlineOpacity(depth: depth))
+        case .colorful: branchColor(branch).opacity(outlineOpacity(depth: depth))
         }
     }
 
@@ -1528,14 +1544,14 @@ struct MindMapCanvas: View {
                                        : mapStyle.outline(depth: node.depth, branch: branch)),
                     style: StrokeStyle(
                         lineWidth: !exporting && dropTargetID == node.id ? 2.2
-                                   : (highlighted ? 1.8 : (mapStyle == .minimal ? 1.0 : 1.1)),
+                                   : (highlighted ? 1.8 : mapStyle.unselectedOutlineWidth),
                         dash: !exporting && dropTargetID == node.id ? [5, 3] : []
                     )
                 )
                 .allowsHitTesting(false)
         }
-        .shadow(color: .black.opacity(mapStyle == .minimal ? 0 : (node.depth == 0 ? 0.08 : 0.045)),
-                radius: mapStyle == .minimal ? 0 : 8, y: mapStyle == .minimal ? 0 : 3)
+        .shadow(color: .black.opacity(mapStyle.nodeShadowOpacity(depth: node.depth)),
+                radius: mapStyle.nodeShadowRadius, y: mapStyle.nodeShadowYOffset)
         .contentShape(RoundedRectangle(cornerRadius: cardRadius))
         .draggable(MindMapNodeDragPayload(
             canvasSessionID: dragSessionID,

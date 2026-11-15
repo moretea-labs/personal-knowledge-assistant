@@ -16,6 +16,16 @@ final class MindMapVisualStyleTests: XCTestCase {
         XCTAssertFalse(MindMapVisualStyle.classic.angularConnectors)
         XCTAssertGreaterThan(MindMapVisualStyle.colorful.connectorWidth,
                              MindMapVisualStyle.minimal.connectorWidth)
+        XCTAssertEqual(MindMapVisualStyle.classic.nodeShadowOpacity(depth: 0), 0.035)
+        XCTAssertEqual(MindMapVisualStyle.classic.nodeShadowOpacity(depth: 1), 0.015)
+        XCTAssertEqual(MindMapVisualStyle.classic.nodeShadowRadius, 4)
+        XCTAssertEqual(MindMapVisualStyle.classic.nodeShadowYOffset, 1)
+        XCTAssertEqual(MindMapVisualStyle.classic.unselectedOutlineWidth, 0.85)
+        XCTAssertEqual(MindMapVisualStyle.minimal.nodeShadowOpacity(depth: 0), 0)
+        XCTAssertEqual(MindMapVisualStyle.minimal.unselectedOutlineWidth, 0.8)
+        XCTAssertEqual(MindMapVisualStyle.classic.outlineOpacity(depth: 1), 0.06)
+        XCTAssertEqual(MindMapVisualStyle.minimal.outlineOpacity(depth: 0), 0.14)
+        XCTAssertEqual(MindMapVisualStyle.minimal.outlineOpacity(depth: 1), 0.09)
     }
 
     func testBranchColorsFollowMarkdownAncestryWithoutExtraStorage() throws {
