@@ -2137,6 +2137,10 @@ final class NotesModel: ObservableObject {
                 candidateIndex = nil
             } else {
                 guard await self.ensureGlobalFileIndex() else {
+                    // A workspace switch can invalidate the index while this
+                    // task is awaiting it. Do not clear loading owned by a newer
+                    // relationship request after this task has been cancelled.
+                    guard !Task.isCancelled, self.root == root else { return }
                     self.loadingBacklinks = false
                     return
                 }
