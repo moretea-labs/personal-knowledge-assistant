@@ -1487,13 +1487,18 @@ extension MindMapOutline {
         let insertionLine = (nodeID..<bodyEnd).reversed().first {
             !lines[$0].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         } ?? nodeID
+        let lineEnding = source.contains("\r\n") ? "\r\n" : "\n"
         let insertionOffset = lines[..<insertionLine].reduce(into: 0) { offset, line in
             offset += (line as NSString).length + 1
         } + (lines[insertionLine] as NSString).length
+            - (lineEnding == "\r\n" && insertionLine < lines.count - 1
+               && lines[insertionLine].hasSuffix("\r") ? 1 : 0)
 
         let nodeIndent = leadingIndentColumns(in: lines[nodeID])
         let continuationIndent = listContinuationIndent(in: source, nodeID: nodeID) ?? nodeIndent
-        let blockLines = block.trimmingCharacters(in: .newlines).components(separatedBy: "\n")
+        let blockLines = block.replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .newlines)
+            .components(separatedBy: "\n")
         guard blockLines.contains(where: {
             !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }) else { return nil }
@@ -1501,9 +1506,9 @@ extension MindMapOutline {
         let indentation = String(repeating: " ", count: continuationIndent)
         let indentedBlock = blockLines.map {
             $0.isEmpty ? $0 : indentation + $0
-        }.joined(separator: "\n")
+        }.joined(separator: lineEnding)
         return MarkdownEditing.insert(
-            "\n\n\(indentedBlock)\n\n",
+            "\(lineEnding)\(lineEnding)\(indentedBlock)\(lineEnding)\(lineEnding)",
             into: source,
             selection: NSRange(location: insertionOffset, length: 0)
         ).text

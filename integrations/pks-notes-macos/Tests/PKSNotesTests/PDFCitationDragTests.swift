@@ -437,6 +437,38 @@ final class PDFCitationDragTests: XCTestCase {
         )
     }
 
+    func testMindMapNodeCitationAndWorkspaceLinkPreserveCRLFMarkdown() throws {
+        let markdown = "# Root\r\n- Concept\r\n- Next\r\n"
+        let citation = "\n\n[Reading.pdf · p. 2](/Reading.pdf#page=2&rects=...)\n\n> Evidence\r\nLine two\n\n"
+        let inserted = try XCTUnwrap(PDFCitationDropTarget.citationForNodeInsertion(
+            citation, in: markdown, nodeID: 1
+        ))
+        XCTAssertTrue(inserted.contains("- Concept\r\n\r\n  [Reading.pdf · p. 2]"))
+        XCTAssertFalse(
+            inserted.replacingOccurrences(of: "\r\n", with: "").contains("\n"),
+            "A PDF quote must not add bare LF to an imported CRLF note."
+        )
+        let nodes = MindMapOutline.nodes(in: inserted)
+        let concept = try XCTUnwrap(nodes.first(where: { $0.title == "Concept" }))
+        let next = try XCTUnwrap(nodes.first(where: { $0.title == "Next" }))
+        let presentations = MindMapOutline.presentations(in: inserted, nodes: nodes)
+        XCTAssertEqual(presentations[concept.id]?.links.map(\.target),
+                       ["/Reading.pdf#page=2&rects=..."])
+        XCTAssertEqual(presentations[next.id]?.links, [])
+
+        let linked = try XCTUnwrap(MindMapOutline.appendMarkdownLinkToNodeBody(
+            "[Outline](/Outline.md)", in: markdown, nodeID: 1
+        ))
+        XCTAssertFalse(
+            linked.replacingOccurrences(of: "\r\n", with: "").contains("\n"),
+            "A workspace-file link drop must keep the same line-ending convention."
+        )
+        let linkedNodes = MindMapOutline.nodes(in: linked)
+        let linkedConcept = try XCTUnwrap(linkedNodes.first(where: { $0.title == "Concept" }))
+        let linkedPresentations = MindMapOutline.presentations(in: linked, nodes: linkedNodes)
+        XCTAssertEqual(linkedPresentations[linkedConcept.id]?.links.map(\.target), ["/Outline.md"])
+    }
+
     @MainActor
     func testPDFCitationMarkdownPersistsAndReopensWithExactAnchor() async throws {
         let defaults = UserDefaults.standard
