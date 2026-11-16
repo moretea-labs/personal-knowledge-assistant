@@ -1338,6 +1338,7 @@ final class NotesModel: ObservableObject {
             let changed = self.pendingExternalPaths
             self.pendingExternalPaths.removeAll()
             self.externalRefreshTask = nil
+            self.followExternallyRenamedCleanNote()
             self.discardMissingLoadedSubtrees()
             if let previewPDF = self.previewPDF?.standardizedFileURL.resolvingSymlinksInPath(),
                changed.contains(where: {
@@ -1355,6 +1356,29 @@ final class NotesModel: ObservableObject {
             self.scheduleFilesystemMutationRefresh(parentFolders: Array(parents))
             self.refreshExternallyChangedNote()
         }
+    }
+
+    private func followExternallyRenamedCleanNote() {
+        guard let root, let oldNote = selected, !loadingNote, !isDirty,
+              ["md", "markdown"].contains(oldNote.pathExtension.lowercased()),
+              let savedStamp = savedFileStamp, WorkspaceFiles.fileStamp(oldNote) == nil
+        else { return }
+        let matches = (try? FileManager.default.contentsOfDirectory(
+            at: oldNote.deletingLastPathComponent(), includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ))?.filter { url in
+            guard ["md", "markdown"].contains(url.pathExtension.lowercased()),
+                  let stamp = WorkspaceFiles.fileStamp(url) else { return false }
+            return stamp.device == savedStamp.device && stamp.inode == savedStamp.inode
+        } ?? []
+        guard matches.count == 1, let newNote = matches.first else { return }
+        NoteNavigationStore.replacePath(oldNote, with: newNote, in: root)
+        reloadNavigationPreferences()
+        noteCache.removeValue(forKey: oldNote.path)
+        noteCacheOrder.removeAll { $0 == oldNote.path }
+        autoSaveTask?.cancel()
+        autoSavePending = false
+        loadNote(newNote, preservePDFPreview: true)
     }
 
     private func refreshExternallyChangedNote() {

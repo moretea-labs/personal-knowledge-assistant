@@ -191,6 +191,63 @@ final class WorkspaceExternalRefreshTests: XCTestCase {
     }
 
     @MainActor
+    func testExternalRenameFollowsCleanOpenNoteAndRebasesNavigation() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LeafspanExternalRename-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let oldNote = root.appendingPathComponent("Before.md")
+        let newNote = root.appendingPathComponent("After.md")
+        let content = "# Stable note\n"
+        try content.write(to: oldNote, atomically: true, encoding: .utf8)
+
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.string(forKey: "PKSNotesWorkspace")
+        let previousLastOpened = defaults.string(forKey: "PKSNotesLastOpenedMarkdown")
+        defer {
+            NoteNavigationStore.removePath(oldNote, in: root)
+            NoteNavigationStore.removePath(newNote, in: root)
+            if let previousWorkspace {
+                defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace")
+            } else {
+                defaults.removeObject(forKey: "PKSNotesWorkspace")
+            }
+            if let previousLastOpened {
+                defaults.set(previousLastOpened, forKey: "PKSNotesLastOpenedMarkdown")
+            } else {
+                defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown")
+            }
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(oldNote)
+        try await awaitCondition {
+            model.selected == oldNote && !model.loadingNote && model.draft == content
+        }
+        model.toggleFavorite()
+        XCTAssertTrue(model.selectedIsFavorite)
+
+        // Let the real workspace FSEvents stream settle before the external rename.
+        try await Task.sleep(for: .milliseconds(350))
+        try FileManager.default.moveItem(at: oldNote, to: newNote)
+
+        try await awaitCondition(
+            timeout: .seconds(5),
+            message: "The open note and navigation metadata did not follow the external rename."
+        ) {
+            model.selected?.resolvingSymlinksInPath() == newNote.resolvingSymlinksInPath()
+                && !model.loadingNote
+                && model.draft == content
+        }
+        XCTAssertTrue(model.recentNotes.contains(newNote))
+        XCTAssertTrue(model.favoriteNotes.contains(newNote))
+        XCTAssertFalse(model.favoriteNotes.contains(oldNote))
+        XCTAssertFalse(model.isDirty)
+        XCTAssertNil(model.message)
+    }
+
+    @MainActor
     func testExternalModificationNeverOverwritesDirtyDraft() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("LeafspanExternal-\(UUID().uuidString)", isDirectory: true)
