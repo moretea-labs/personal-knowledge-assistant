@@ -530,6 +530,9 @@ enum MindMapSpatialLayout {
             pending.append((id: root.id, top: top))
             top += (subtreeHeights[root.id] ?? nodeSize(root).height) + rootGap
         }
+        // The traversal is a LIFO stack. Reverse the seed frames in place so roots
+        // are visited in Markdown order without changing their original top positions.
+        pending.reverse()
 
         // Every subtree is vertically centered inside its reserved height, so
         // each node center is exactly top + subtreeHeight / 2. Carry child tops
@@ -561,9 +564,6 @@ enum MindMapSpatialLayout {
                 size: ownSize
             ))
         }
-
-        let order = Dictionary(uniqueKeysWithValues: nodes.enumerated().map { ($0.element.id, $0.offset) })
-        placements.sort { (order[$0.id] ?? 0) < (order[$1.id] ?? 0) }
 
         let maxX = placements.map { $0.center.x + $0.size.width / 2 }.max() ?? 480
         let maxY = placements.map { $0.center.y + $0.size.height / 2 }.max() ?? 280

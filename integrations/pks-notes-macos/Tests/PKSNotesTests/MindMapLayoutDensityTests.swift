@@ -108,6 +108,27 @@ final class MindMapLayoutDensityTests: XCTestCase {
         XCTAssertFalse(MindMapExportBudget.allowsPNG(size: .zero))
     }
 
+    func testMultipleRootLayoutPreservesMarkdownPreorderAndVerticalOrder() {
+        let nodes = [
+            MindMapNode(id: 10, depth: 0, title: "First root"),
+            MindMapNode(id: 11, depth: 1, title: "First child"),
+            MindMapNode(id: 12, depth: 2, title: "First grandchild"),
+            MindMapNode(id: 13, depth: 1, title: "Second child"),
+            MindMapNode(id: 20, depth: 0, title: "Second root"),
+            MindMapNode(id: 21, depth: 1, title: "Second root child"),
+            MindMapNode(id: 30, depth: 0, title: "Third root")
+        ]
+
+        let layout = MindMapSpatialLayout.layout(nodes)
+
+        XCTAssertEqual(layout.placements.map(\.node), nodes)
+        XCTAssertEqual(layout.placements.map(\.parentID), [nil, 10, 11, 10, nil, 20, nil])
+        let rootY = layout.placements.filter { $0.parentID == nil }.map(\.center.y)
+        XCTAssertEqual(rootY.count, 3)
+        XCTAssertLessThan(rootY[0], rootY[1])
+        XCTAssertLessThan(rootY[1], rootY[2])
+    }
+
     func testSpacingChangesGeometryWithoutOverlappingOrChangingMarkdownNodes() {
         let branches = (0..<32).map { index in
             "- Branch \(index) — \(String(repeating: "跨文档关联与研究资料", count: 2))\n  - Topic \(index)\n    - Detail \(index)\n    - Reference \(index)"
