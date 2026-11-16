@@ -257,7 +257,14 @@ enum NotesGeometry {
     static let railSymbolSize: CGFloat = 16
     static let documentInset: CGFloat = 32
     static let markdownFormattingToolbarHeight: CGFloat = documentInset
+    static let markdownSectionVerticalInset: CGFloat = 4
+    static let markdownLineFragmentPadding: CGFloat = 0
     static let selectionCorner: CGFloat = 9
+
+    static func configureMarkdownEditorTextView(_ textView: NSTextView) {
+        textView.textContainerInset = NSSize(width: 0, height: markdownSectionVerticalInset)
+        textView.textContainer?.lineFragmentPadding = markdownLineFragmentPadding
+    }
 
     static func editorContentTopInset(showingFormattingToolbar: Bool) -> CGFloat {
         showingFormattingToolbar ? 0 : documentInset
@@ -3189,7 +3196,9 @@ struct NotesWindow: View {
         Task { @MainActor in
             await Task.yield()
             try? await Task.sleep(for: .milliseconds(60))
-            markdownTextView(in: NSApp.keyWindow?.contentView)?.undoManager?.removeAllActions()
+            guard let textView = markdownTextView(in: NSApp.keyWindow?.contentView) else { return }
+            NotesGeometry.configureMarkdownEditorTextView(textView)
+            textView.undoManager?.removeAllActions()
         }
     }
 

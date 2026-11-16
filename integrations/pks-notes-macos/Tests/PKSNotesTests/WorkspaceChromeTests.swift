@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import PKSNotes
 
@@ -36,6 +37,36 @@ final class WorkspaceChromeTests: XCTestCase {
             NotesGeometry.markdownFormattingToolbarHeight
                 + NotesGeometry.editorContentTopInset(showingFormattingToolbar: true),
             NotesGeometry.documentInset
+        )
+    }
+
+    @MainActor
+    func testMarkdownEditorNativeTextMetricsAlignWithReadModeContentOrigin() {
+        let textView = NSTextView()
+        let initialLineFragmentPadding = textView.textContainer?.lineFragmentPadding
+        XCTAssertEqual(initialLineFragmentPadding, 5)
+
+        NotesGeometry.configureMarkdownEditorTextView(textView)
+
+        let configuredTextContainerInset = textView.textContainerInset
+        let configuredLineFragmentPadding = textView.textContainer?.lineFragmentPadding
+        XCTAssertEqual(configuredTextContainerInset,
+                       NSSize(width: 0, height: NotesGeometry.markdownSectionVerticalInset))
+        XCTAssertEqual(configuredLineFragmentPadding,
+                       NotesGeometry.markdownLineFragmentPadding)
+
+        let previewContentTop = NotesGeometry.documentInset
+            + NotesGeometry.markdownSectionVerticalInset
+        XCTAssertEqual(
+            NotesGeometry.editorContentTopInset(showingFormattingToolbar: false)
+                + textView.textContainerInset.height,
+            previewContentTop
+        )
+        XCTAssertEqual(
+            NotesGeometry.markdownFormattingToolbarHeight
+                + NotesGeometry.editorContentTopInset(showingFormattingToolbar: true)
+                + textView.textContainerInset.height,
+            previewContentTop
         )
     }
 
