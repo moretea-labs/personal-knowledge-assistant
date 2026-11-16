@@ -1061,7 +1061,7 @@ struct NativePDFPreview: View {
                 pdfReloadControl
                 Divider().frame(height: 18)
                 pdfNavigationControls
-                pdfCaptureControls
+                pdfCaptureControls(compact: false)
                 Spacer(minLength: 12)
                 pdfSearchControls
                 Divider().frame(height: 18)
@@ -1108,7 +1108,7 @@ struct NativePDFPreview: View {
             pdfReloadControl
             pdfNavigationControls
             Spacer(minLength: 0)
-            pdfCaptureControls
+            pdfCaptureControls(compact: true)
         }
         .frame(height: 36)
     }
@@ -1192,7 +1192,7 @@ struct NativePDFPreview: View {
         }
     }
 
-    private var pdfCaptureControls: some View {
+    private func pdfCaptureControls(compact: Bool) -> some View {
         HStack(spacing: 8) {
             Button {
                 let selectedText = controller.selectedText()
@@ -1203,12 +1203,17 @@ struct NativePDFPreview: View {
                     anchor
                 )
             } label: {
-                Label(language.text("Add to Note"), systemImage: "note.text.badge.plus")
-                    .font(.caption.weight(.medium))
+                if compact {
+                    Image(systemName: "note.text.badge.plus")
+                } else {
+                    Label(language.text("Add to Note"), systemImage: "note.text.badge.plus")
+                        .font(.caption.weight(.medium))
+                }
             }
             .buttonStyle(.plain)
             .disabled(root == nil || controller.pageCount == 0)
             .help(language.text("Add selected PDF text or current page to note"))
+            .accessibilityLabel(language.text("Add to Note"))
             .accessibilityIdentifier("pks-pdf-add-page-to-note")
 
             Button {
