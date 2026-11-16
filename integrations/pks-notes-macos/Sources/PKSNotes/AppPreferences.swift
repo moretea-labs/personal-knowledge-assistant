@@ -367,6 +367,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Your note…": "写下你的理解…",
         "Study Note": "学习笔记",
         "Add to Study Note": "添加到学习笔记",
+        "Copy Quote with Source": "复制带来源的引用",
         "Insert PDF Citation at Cursor": "在光标处插入 PDF 引用",
         "Open the study note in Edit mode first.": "请先切换到学习笔记的编辑模式。",
         "Select PDF text and place the note cursor without selecting text.": "请先选中 PDF 文本，并在笔记中将光标放在插入位置，不要选中文本。",

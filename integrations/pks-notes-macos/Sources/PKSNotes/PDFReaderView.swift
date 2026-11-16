@@ -1018,11 +1018,21 @@ struct NativePDFPreview: View {
                         navigationSequence: navigationSequence,
                         controller: controller,
                         quoteTitle: language.text("Add to Study Note"),
+                        copyCitationTitle: language.text("Copy Quote with Source"),
                         onQuoteToCurrentNote: onQuoteToCurrentNote.map { quote in
                             {
                                 let anchor = controller.selectedSourceAnchor()
                                 quote(anchor?.page ?? controller.referencePageForCurrentSelection(),
                                       controller.selectedText(), anchor)
+                            }
+                        },
+                        onCopySelectedCitation: root.map { root in
+                            {
+                                guard let citation = controller.selectedCitationForDrag(
+                                    pdf: url, root: root
+                                ) else { return }
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(citation, forType: .string)
                             }
                         }
                     )
@@ -1428,26 +1438,40 @@ struct NativePDFPreview: View {
 /// active Markdown note only when the current PDF contains a text selection.
 final class StudyPDFView: PDFView {
     var quoteTitle = "Add to Study Note"
+    var copyCitationTitle = "Copy Quote with Source"
     var onQuoteToCurrentNote: (() -> Void)?
+    var onCopySelectedCitation: (() -> Void)?
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let standard = super.menu(for: event)
-        guard onQuoteToCurrentNote != nil,
+        guard onQuoteToCurrentNote != nil || onCopySelectedCitation != nil,
               let selectedText = currentSelection?.string,
               !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return standard
         }
         let menu = (standard?.copy() as? NSMenu) ?? NSMenu()
         if !menu.items.isEmpty { menu.addItem(.separator()) }
-        let item = NSMenuItem(title: quoteTitle,
-                              action: #selector(quoteSelection(_:)), keyEquivalent: "")
-        item.target = self
-        menu.addItem(item)
+        if onQuoteToCurrentNote != nil {
+            let item = NSMenuItem(title: quoteTitle,
+                                  action: #selector(quoteSelection(_:)), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        if onCopySelectedCitation != nil {
+            let item = NSMenuItem(title: copyCitationTitle,
+                                  action: #selector(copySelectedCitation(_:)), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
         return menu
     }
 
     @objc private func quoteSelection(_ sender: NSMenuItem) {
         onQuoteToCurrentNote?()
+    }
+
+    @objc private func copySelectedCitation(_ sender: NSMenuItem) {
+        onCopySelectedCitation?()
     }
 }
 
@@ -1477,7 +1501,9 @@ private struct PDFCanvas: NSViewRepresentable {
     let navigationSequence: UInt64
     let controller: PDFReaderController
     let quoteTitle: String
+    let copyCitationTitle: String
     let onQuoteToCurrentNote: (() -> Void)?
+    let onCopySelectedCitation: (() -> Void)?
 
     @MainActor
     final class Coordinator: NSObject, NSGestureRecognizerDelegate, NSDraggingSource {
@@ -1545,7 +1571,9 @@ private struct PDFCanvas: NSViewRepresentable {
     func makeNSView(context: Context) -> PDFView {
         let view = StudyPDFView()
         view.quoteTitle = quoteTitle
+        view.copyCitationTitle = copyCitationTitle
         view.onQuoteToCurrentNote = onQuoteToCurrentNote
+        view.onCopySelectedCitation = onCopySelectedCitation
         context.coordinator.view = view
         context.coordinator.pdf = url
         context.coordinator.root = root
@@ -1567,7 +1595,9 @@ private struct PDFCanvas: NSViewRepresentable {
     func updateNSView(_ view: PDFView, context: Context) {
         if let view = view as? StudyPDFView {
             view.quoteTitle = quoteTitle
+            view.copyCitationTitle = copyCitationTitle
             view.onQuoteToCurrentNote = onQuoteToCurrentNote
+            view.onCopySelectedCitation = onCopySelectedCitation
         }
         context.coordinator.pdf = url
         context.coordinator.root = root

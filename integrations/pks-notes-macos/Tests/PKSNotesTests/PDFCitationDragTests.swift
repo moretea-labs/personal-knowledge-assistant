@@ -150,7 +150,9 @@ final class PDFCitationDragTests: XCTestCase {
         reader.document = document
         reader.quoteTitle = "Add to Study Note"
         var quoteCount = 0
+        var copyCount = 0
         reader.onQuoteToCurrentNote = { quoteCount += 1 }
+        reader.onCopySelectedCitation = { copyCount += 1 }
         let event = try XCTUnwrap(NSEvent.mouseEvent(
             with: .rightMouseDown, location: .zero, modifierFlags: [],
             timestamp: 0, windowNumber: 0, context: nil,
@@ -159,6 +161,9 @@ final class PDFCitationDragTests: XCTestCase {
 
         XCTAssertNil(reader.menu(for: event)?.items.first {
             $0.title == "Add to Study Note"
+        })
+        XCTAssertNil(reader.menu(for: event)?.items.first {
+            $0.title == "Copy Quote with Source"
         })
         reader.currentSelection = try XCTUnwrap(
             document.findString("Selected study evidence", withOptions: []).first
@@ -170,9 +175,23 @@ final class PDFCitationDragTests: XCTestCase {
             try XCTUnwrap(quote.action), to: quote.target, from: quote
         ))
         XCTAssertEqual(quoteCount, 1)
+        let copy = try XCTUnwrap(reader.menu(for: event)?.items.first {
+            $0.title == "Copy Quote with Source"
+        })
+        XCTAssertTrue(NSApplication.shared.sendAction(
+            try XCTUnwrap(copy.action), to: copy.target, from: copy
+        ))
+        XCTAssertEqual(copyCount, 1)
         reader.onQuoteToCurrentNote = nil
         XCTAssertNil(reader.menu(for: event)?.items.first {
             $0.title == "Add to Study Note"
+        })
+        XCTAssertNotNil(reader.menu(for: event)?.items.first {
+            $0.title == "Copy Quote with Source"
+        })
+        reader.onCopySelectedCitation = nil
+        XCTAssertNil(reader.menu(for: event)?.items.first {
+            $0.title == "Copy Quote with Source"
         })
     }
 
