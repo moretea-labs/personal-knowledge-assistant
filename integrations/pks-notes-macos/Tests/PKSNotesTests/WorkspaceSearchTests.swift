@@ -179,6 +179,25 @@ final class WorkspaceSearchTests: XCTestCase {
         XCTAssertTrue(short.hits.isEmpty)
     }
 
+    func testMultiTermFuzzySearchMatchesSeparatePathTokens() throws {
+        let root = try fixture()
+        let folder = root.appendingPathComponent("night", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("piano.md")
+        try "# Practice".write(to: file, atomically: true, encoding: .utf8)
+
+        let matched = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "nigjt piana", searchBodies: false
+        )
+        XCTAssertEqual(matched.hits.map(\.uri), [file.path])
+        XCTAssertEqual(matched.coverage.readFiles, 0)
+
+        let missingTerm = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "nigjt piana cello", searchBodies: false
+        )
+        XCTAssertTrue(missingTerm.hits.isEmpty)
+    }
+
     func testFilenameMatchesDoNotReadMarkdownBodies() throws {
         let root = try fixture()
         let file = root.appendingPathComponent("Research.md")

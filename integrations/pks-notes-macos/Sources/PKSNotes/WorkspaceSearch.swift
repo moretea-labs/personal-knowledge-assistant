@@ -46,6 +46,7 @@ enum WorkspaceSearch {
     ) -> Result {
         let terms = query.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !terms.isEmpty, limits.results > 0 else { return Result() }
+        let fuzzyQueryTerms = terms.map(fuzzyQueryCharacters)
         // Normalize the query once. NaturalLanguage tokenization and pinyin
         // transforms are substantially more expensive than literal path checks.
         let queryTransliteration = transliterationKey(query)
@@ -65,8 +66,14 @@ enum WorkspaceSearch {
                   WorkspaceFiles.fileStamp(item.url) != nil else { continue }
             let path = String(item.url.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1))
             let rawPathTerms = terms.allSatisfy { contains(path, $0) }
-            let fuzzyPathTerms = terms.allSatisfy {
-                contains(path, $0) || fuzzyContains(path, $0)
+            var pathFuzzyTokens: [[Character]]?
+            let fuzzyPathTerms = terms.indices.allSatisfy { index in
+                guard !contains(path, terms[index]) else { return true }
+                guard let query = fuzzyQueryTerms[index] else { return false }
+                if pathFuzzyTokens == nil {
+                    pathFuzzyTokens = fuzzyTokens(in: path)
+                }
+                return fuzzyContains(pathFuzzyTokens ?? [], query: query)
             }
             let pathPinyinMatch = canMatchPinyin && !rawPathTerms
                 && matchesTransliteration(
@@ -108,8 +115,14 @@ enum WorkspaceSearch {
             guard nameMatch || contentMatch else { continue }
             let exactNameMatch = contains(item.name, query)
             let rawNameTerms = terms.allSatisfy { contains(item.name, $0) }
-            let fuzzyNameTerms = terms.allSatisfy {
-                contains(item.name, $0) || fuzzyContains(item.name, $0)
+            var nameFuzzyTokens: [[Character]]?
+            let fuzzyNameTerms = terms.indices.allSatisfy { index in
+                guard !contains(item.name, terms[index]) else { return true }
+                guard let query = fuzzyQueryTerms[index] else { return false }
+                if nameFuzzyTokens == nil {
+                    nameFuzzyTokens = fuzzyTokens(in: item.name)
+                }
+                return fuzzyContains(nameFuzzyTokens ?? [], query: query)
             }
             let namePinyinMatch = canMatchPinyin
                 && !exactNameMatch && !rawNameTerms && !rawPathTerms
@@ -218,41 +231,62 @@ enum WorkspaceSearch {
     /// Conservative filename typo tolerance: one edit in a token of at least
     /// five characters. Exact substring matching remains the path for short terms.
     static func fuzzyContains(_ text: String, _ query: String) -> Bool {
-        let needle = Array(query.folding(
-            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
-            locale: .current
-        ))
-        guard needle.count >= 5 else { return false }
+        guard let needle = fuzzyQueryCharacters(query) else { return false }
         let tokens = text.split { !$0.isLetter && !$0.isNumber }
         return tokens.contains { token in
             let candidate = Array(String(token).folding(
                 options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
                 locale: .current
             ))
-            guard abs(candidate.count - needle.count) <= 1 else { return false }
-            var left = 0
-            var right = 0
-            var edits = 0
-            while left < candidate.count, right < needle.count {
-                if candidate[left] == needle[right] {
+            return fuzzyContains(candidate, query: needle)
+        }
+    }
+
+    private static func fuzzyQueryCharacters(_ query: String) -> [Character]? {
+        let characters = Array(query.folding(
+            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+            locale: .current
+        ))
+        return characters.count >= 5 ? characters : nil
+    }
+
+    private static func fuzzyTokens(in text: String) -> [[Character]] {
+        text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map { token in
+            Array(String(token).folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                locale: .current
+            ))
+        }
+    }
+
+    private static func fuzzyContains(_ tokens: [[Character]], query: [Character]) -> Bool {
+        tokens.contains { fuzzyContains($0, query: query) }
+    }
+
+    private static func fuzzyContains(_ candidate: [Character], query: [Character]) -> Bool {
+        guard abs(candidate.count - query.count) <= 1 else { return false }
+        var left = 0
+        var right = 0
+        var edits = 0
+        while left < candidate.count, right < query.count {
+            if candidate[left] == query[right] {
+                left += 1
+                right += 1
+            } else {
+                edits += 1
+                if edits > 1 { return false }
+                if candidate.count > query.count {
                     left += 1
+                } else if candidate.count < query.count {
                     right += 1
                 } else {
-                    edits += 1
-                    if edits > 1 { return false }
-                    if candidate.count > needle.count {
-                        left += 1
-                    } else if candidate.count < needle.count {
-                        right += 1
-                    } else {
-                        left += 1
-                        right += 1
-                    }
+                    left += 1
+                    right += 1
                 }
             }
-            if left < candidate.count || right < needle.count { edits += 1 }
-            return edits <= 1
         }
+        if left < candidate.count || right < query.count { edits += 1 }
+        return edits <= 1
     }
 
     private static func transliterationKey(_ value: String) -> NoteTreePresentation.TransliterationKey {
