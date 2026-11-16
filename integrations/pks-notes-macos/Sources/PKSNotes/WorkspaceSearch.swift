@@ -9,11 +9,15 @@ enum WorkspaceSearch {
         let url: URL
         let name: String
         let isMarkdown: Bool
+        let pathTransliterationKey: NoteTreePresentation.TransliterationKey
+        let nameTransliterationKey: NoteTreePresentation.TransliterationKey
 
         init(_ entry: NoteTreePresentation.QuickOpenEntry) {
             url = entry.item.url
             name = entry.item.name
             isMarkdown = entry.item.isMarkdown
+            pathTransliterationKey = entry.pathTransliterationKey
+            nameTransliterationKey = entry.nameTransliterationKey
         }
     }
 
@@ -46,6 +50,9 @@ enum WorkspaceSearch {
         // transforms are substantially more expensive than literal path checks.
         let queryTransliteration = transliterationKey(query)
         let canMatchPinyin = queryTransliteration.value.count >= 4
+        let rootTransliterationLength = canMatchPinyin
+            ? transliterationKey(root.standardizedFileURL.path).value.count
+            : 0
         var result = Result()
         var ranked: [(hit: SearchHit, rank: Int, order: Int)] = []
         var remainingBytes = max(0, limits.totalBytes)
@@ -62,7 +69,11 @@ enum WorkspaceSearch {
                 contains(path, $0) || fuzzyContains(path, $0)
             }
             let pathPinyinMatch = canMatchPinyin && !rawPathTerms
-                && matchesTransliteration(transliterationKey(path), query: queryTransliteration)
+                && matchesTransliteration(
+                    item.pathTransliterationKey,
+                    query: queryTransliteration,
+                    minimumTokenStart: rootTransliterationLength
+                )
             let nameMatch = fuzzyPathTerms || pathPinyinMatch
             var content: String?
             if searchBodies, !nameMatch, item.isMarkdown {
@@ -102,7 +113,7 @@ enum WorkspaceSearch {
             }
             let namePinyinMatch = canMatchPinyin
                 && !exactNameMatch && !rawNameTerms && !rawPathTerms
-                && matchesTransliteration(transliterationKey(item.name), query: queryTransliteration)
+                && matchesTransliteration(item.nameTransliterationKey, query: queryTransliteration)
             let rank: Int
             if exactNameMatch { rank = 0 }
             else if rawNameTerms { rank = 1 }
@@ -143,27 +154,14 @@ enum WorkspaceSearch {
             }
     }
 
-    private struct TransliterationKey {
-        let value: String
-        let tokenStarts: Set<Int>
-    }
-
     private static func transliterationToken(_ token: String) -> String? {
-        let latin = token.applyingTransform(.toLatin, reverse: false) ?? token
-        let folded = latin.folding(
-            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
-            locale: .current
-        )
-        let normalized = String(folded.unicodeScalars.filter {
-            CharacterSet.alphanumerics.contains($0)
-        })
-        return normalized.isEmpty ? nil : normalized
+        NoteTreePresentation.transliterationToken(token)
     }
 
     /// Returns the source range for a word-start pinyin match in the original text.
     private static func transliteratedMatchRange(
         in text: String,
-        query: TransliterationKey
+        query: NoteTreePresentation.TransliterationKey
     ) -> Range<String.Index>? {
         let needle = query.value
         guard needle.count >= 4 else { return nil }
@@ -205,11 +203,13 @@ enum WorkspaceSearch {
     }
 
     private static func matchesTransliteration(
-        _ candidate: TransliterationKey,
-        query: TransliterationKey
+        _ candidate: NoteTreePresentation.TransliterationKey,
+        query: NoteTreePresentation.TransliterationKey,
+        minimumTokenStart: Int = 0
     ) -> Bool {
         guard query.value.count >= 4 else { return false }
         return candidate.tokenStarts.contains { offset in
+            guard offset >= minimumTokenStart else { return false }
             let start = candidate.value.index(candidate.value.startIndex, offsetBy: offset)
             return candidate.value[start...].hasPrefix(query.value)
         }
@@ -255,18 +255,8 @@ enum WorkspaceSearch {
         }
     }
 
-    private static func transliterationKey(_ value: String) -> TransliterationKey {
-        let tokenizer = NLTokenizer(unit: .word)
-        tokenizer.string = value
-        var key = ""
-        var tokenStarts = Set<Int>()
-        for range in tokenizer.tokens(for: value.startIndex..<value.endIndex) {
-            let token = String(value[range])
-            guard let normalized = transliterationToken(token) else { continue }
-            tokenStarts.insert(key.count)
-            key.append(normalized)
-        }
-        return TransliterationKey(value: key, tokenStarts: tokenStarts)
+    private static func transliterationKey(_ value: String) -> NoteTreePresentation.TransliterationKey {
+        NoteTreePresentation.transliterationKey(value)
     }
 
     private static func contains(_ text: String, _ query: String) -> Bool {

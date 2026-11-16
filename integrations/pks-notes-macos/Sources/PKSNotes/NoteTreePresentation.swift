@@ -1,7 +1,13 @@
 import Foundation
+import NaturalLanguage
 
 /// Window-local disclosure state for the visible tree, not a second file index.
 enum NoteTreePresentation {
+    struct TransliterationKey: Sendable {
+        let value: String
+        let tokenStarts: Set<Int>
+    }
+
     struct Row: Identifiable {
         let item: NoteItem
         let depth: Int
@@ -33,10 +39,13 @@ enum NoteTreePresentation {
         return result
     }
 
+    /// Search keys are built with the Quick Open projection and reused across queries.
     struct QuickOpenEntry: Identifiable {
         let item: NoteItem
         let foldedName: String
         let foldedFolder: String
+        let pathTransliterationKey: TransliterationKey
+        let nameTransliterationKey: TransliterationKey
         let insertionOrder: Int
         var id: String { item.id }
 
@@ -44,6 +53,10 @@ enum NoteTreePresentation {
             self.item = item
             self.foldedName = NoteTreePresentation.fold(item.name)
             self.foldedFolder = NoteTreePresentation.fold(item.url.deletingLastPathComponent().path)
+            self.pathTransliterationKey = NoteTreePresentation.transliterationKey(
+                item.url.standardizedFileURL.path
+            )
+            self.nameTransliterationKey = NoteTreePresentation.transliterationKey(item.name)
             self.insertionOrder = insertionOrder
         }
     }
@@ -154,6 +167,32 @@ enum NoteTreePresentation {
 
     private static func fold(_ value: String) -> String {
         value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+
+    static func transliterationToken(_ token: String) -> String? {
+        let latin = token.applyingTransform(.toLatin, reverse: false) ?? token
+        let folded = latin.folding(
+            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+            locale: .current
+        )
+        let normalized = String(folded.unicodeScalars.filter {
+            CharacterSet.alphanumerics.contains($0)
+        })
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    static func transliterationKey(_ value: String) -> TransliterationKey {
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = value
+        var key = ""
+        var tokenStarts = Set<Int>()
+        for range in tokenizer.tokens(for: value.startIndex..<value.endIndex) {
+            let token = String(value[range])
+            guard let normalized = transliterationToken(token) else { continue }
+            tokenStarts.insert(key.count)
+            key.append(normalized)
+        }
+        return TransliterationKey(value: key, tokenStarts: tokenStarts)
     }
 
     enum Direction {
