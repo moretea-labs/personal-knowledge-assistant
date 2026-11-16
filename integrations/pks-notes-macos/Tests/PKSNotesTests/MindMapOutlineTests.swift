@@ -147,6 +147,23 @@ final class MindMapOutlineTests: XCTestCase {
         XCTAssertEqual(renameMap[2], 2)
     }
 
+    func testLargeOutlineReorderKeepsEveryNodeMapped() {
+        let originalTitles = Array(0..<1_000)
+        let reorderedTitles = Array(originalTitles.dropFirst(500)) + Array(originalTitles.prefix(500))
+        let original = "# Root\n" + originalTitles.map { "- Node \($0)" }.joined(separator: "\n")
+        let reordered = "# Root\n" + reorderedTitles.map { "- Node \($0)" }.joined(separator: "\n")
+
+        let oldNodes = MindMapOutline.nodes(in: original)
+        let newNodes = MindMapOutline.nodes(in: reordered)
+        let mapping = MindMapOutline.lineIndexMap(from: oldNodes, to: newNodes)
+        let newIDsByTitle = Dictionary(uniqueKeysWithValues: newNodes.map { ($0.title, $0.id) })
+
+        XCTAssertEqual(mapping.count, oldNodes.count)
+        for node in oldNodes {
+            XCTAssertEqual(mapping[node.id], newIDsByTitle[node.title], node.title)
+        }
+    }
+
     func testCreatedNodeSnapshotMapSurvivesAnOldLineIndexCollision() throws {
         let original = MindMapOutline.nodes(in: "# Plan\n- A\n  - A1\n- B")
         XCTAssertEqual(try XCTUnwrap(original.first(where: { $0.title == "A1" })).id, 2)

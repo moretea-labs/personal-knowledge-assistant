@@ -762,10 +762,24 @@ extension MindMapOutline {
 
         let removed = removedOffsets.sorted()
         let inserted = insertedOffsets.sorted()
+        var removedCursor = 0
+        var insertedCursor = 0
         var result: [Int: Int] = [:]
         result.reserveCapacity(oldNodes.count)
 
         for (oldPosition, node) in oldNodes.enumerated() {
+            // The sorted cursors only advance. Compute the same remove-before /
+            // insert-at-or-before shift in one pass instead of rescanning every
+            // change for every node when a large subtree is reordered.
+            while removedCursor < removed.count, removed[removedCursor] < oldPosition {
+                removedCursor += 1
+            }
+            let afterRemovals = oldPosition - removedCursor
+            while insertedCursor < inserted.count, inserted[insertedCursor] <= afterRemovals {
+                insertedCursor += 1
+            }
+            let shiftedPosition = afterRemovals + insertedCursor
+
             let newPosition: Int
             if let moved = movedOffsets[oldPosition] {
                 newPosition = moved
@@ -774,10 +788,7 @@ extension MindMapOutline {
                 guard insertedOffsets.contains(oldPosition) else { continue }
                 newPosition = oldPosition
             } else {
-                var shifted = oldPosition
-                for offset in removed where offset < oldPosition { shifted -= 1 }
-                for offset in inserted where offset <= shifted { shifted += 1 }
-                newPosition = shifted
+                newPosition = shiftedPosition
             }
 
             guard newNodes.indices.contains(newPosition) else { continue }
