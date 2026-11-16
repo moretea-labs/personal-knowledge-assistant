@@ -1408,8 +1408,9 @@ final class NotesModel: ObservableObject {
         externalNoteTask = Task.detached(priority: .utility) { [weak self] in
             guard let loaded = try? await WorkspaceFiles.readUTF8ForOpening(selected),
                   !Task.isCancelled else { return }
+            let editorContent = WorkspaceFiles.editorText(loaded.content)
             await self?.applyExternalNote(
-                loaded.content, stamp: loaded.stamp,
+                editorContent, stamp: loaded.stamp,
                 note: selected, root: root, expectedRevision: expectedRevision
             )
         }
@@ -1422,11 +1423,10 @@ final class NotesModel: ObservableObject {
         guard root == expectedRoot, selected == note, !loadingNote,
               !isDirty, draftRevision == expectedRevision,
               WorkspaceFiles.fileStamp(note) == stamp else { return }
-        let refreshed = WorkspaceFiles.editorText(text)
-        baseline = refreshed
-        draft = refreshed
+        baseline = text
+        draft = text
         savedFileStamp = stamp
-        cacheNote(note, content: refreshed, stamp: stamp)
+        cacheNote(note, content: text, stamp: stamp)
         activeMatch = nil
         externalNoteTask = nil
     }
@@ -1986,10 +1986,14 @@ final class NotesModel: ObservableObject {
                     resolvedStamp = loaded.stamp
                 }
                 guard !Task.isCancelled else { return }
+                // NSTextView canonicalizes line endings. Normalize on this detached
+                // worker so opening a large note never scans the whole document on
+                // the main actor after the file read has already completed.
+                let editorContent = WorkspaceFiles.editorText(content)
                 await self?.finishOpeningNote(
                     url,
                     identity: identity,
-                    content: content,
+                    content: editorContent,
                     stamp: resolvedStamp,
                     preservePDFPreview: preservePDFPreview
                 )
@@ -2010,11 +2014,10 @@ final class NotesModel: ObservableObject {
             previewPDF = nil
             previewPDFPage = nil
         }
-        let editorContent = WorkspaceFiles.editorText(content)
-        baseline = editorContent
-        draft = editorContent
+        baseline = content
+        draft = content
         savedFileStamp = stamp
-        cacheNote(url, content: editorContent, stamp: stamp)
+        cacheNote(url, content: content, stamp: stamp)
         externalBody = nil
         externalTitle = nil
         previewSource = nil

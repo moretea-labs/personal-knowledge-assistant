@@ -56,6 +56,37 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
+    func testOpeningLargeCRLFMarkdownNormalizesEditorTextWithoutRewritingSource() async throws {
+        let defaults = UserDefaults.standard
+        let previousWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
+        let previousBookmark = defaults.object(forKey: "PKSNotesWorkspaceBookmark")
+        defaults.removeObject(forKey: "PKSNotesWorkspace")
+        defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark")
+        defer {
+            if let previousWorkspace { defaults.set(previousWorkspace, forKey: "PKSNotesWorkspace") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspace") }
+            if let previousBookmark { defaults.set(previousBookmark, forKey: "PKSNotesWorkspaceBookmark") }
+            else { defaults.removeObject(forKey: "PKSNotesWorkspaceBookmark") }
+        }
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = root.appendingPathComponent("Large study.md")
+        let source = String(repeating: "第一行研究记录\r\n第二行研究记录\r\n", count: 50_000)
+        try source.write(to: note, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(note)
+        await waitForNote(model, note)
+
+        XCTAssertEqual(model.draft, source.replacingOccurrences(of: "\r\n", with: "\n"))
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), source,
+                       "Opening a note must not rewrite its canonical source line endings.")
+    }
+
+    @MainActor
     func testSymlinkReplacementStopsAutosaveAndPreservesDraftWithVisibleError() async throws {
         let defaults = UserDefaults.standard
         let previous = defaults.object(forKey: "PKSNotesWorkspace")

@@ -182,12 +182,15 @@ final class WorkspaceExternalRefreshTests: XCTestCase {
         model.openNote(note)
         try await awaitCondition { model.selected == note && !model.loadingNote }
         XCTAssertEqual(model.draft, "# First\n")
-        try "# External revision\n".write(to: note, atomically: true, encoding: .utf8)
+        let externalSource = "# External revision\r\n"
+        try externalSource.write(to: note, atomically: true, encoding: .utf8)
 
         model.noteExternalPaths([note.path], in: root)
         try await awaitCondition { model.draft == "# External revision\n" }
         XCTAssertEqual(model.baseline, model.draft)
         XCTAssertFalse(model.isDirty)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), externalSource,
+                       "External reload must normalize only the editor projection, not the source file.")
     }
 
     @MainActor
