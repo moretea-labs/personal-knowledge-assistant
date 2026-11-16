@@ -79,6 +79,25 @@ final class WorkspaceChromeTests: XCTestCase {
         )
     }
 
+    func testStudyPaneChromeSurfaceAdaptsToSystemAppearance() throws {
+        let color = NotesGeometry.toolbarSurfaceColor
+        let light = try XCTUnwrap(NSAppearance(named: .aqua))
+        let dark = try XCTUnwrap(NSAppearance(named: .darkAqua))
+
+        var lightColor: NSColor?
+        light.performAsCurrentDrawingAppearance {
+            lightColor = color.usingColorSpace(.deviceRGB)
+        }
+        var darkColor: NSColor?
+        dark.performAsCurrentDrawingAppearance {
+            darkColor = color.usingColorSpace(.deviceRGB)
+        }
+
+        XCTAssertFalse(
+            try XCTUnwrap(lightColor).isEqual(try XCTUnwrap(darkColor))
+        )
+    }
+
     func testDocumentAndActionIconDimensionsShareOneAuthority() {
         XCTAssertEqual(NotesGeometry.documentInset, 32)
         XCTAssertEqual(NotesGeometry.symbolSize, 14)

@@ -274,6 +274,9 @@ enum NotesGeometry {
     static let workspacePanelGap: CGFloat = 9
     static let auxiliaryPanelWidth: CGFloat = 312
     static let standardMainMinimumWidth: CGFloat = 700
+    // Share the native window surface with the PDF reader's toolbar. Keep
+    // document canvases theme-driven; only the study controls use app chrome.
+    static let toolbarSurfaceColor = NSColor.windowBackgroundColor
     static let workbenchColor = Color(nsColor: .windowBackgroundColor)
 
     static func studySplitThreshold(showingMindMap: Bool) -> CGFloat {
@@ -3970,7 +3973,7 @@ struct NotesWindow: View {
             }
             .padding(.horizontal, 12)
             .frame(height: 38)
-            .background(Color.primary.opacity(colorScheme == .dark ? 0.055 : 0.03))
+            .background(Color(nsColor: NotesGeometry.toolbarSurfaceColor))
             // The note and map are two views of the same canonical Markdown draft.
             // Preserve the normal read/edit mode whenever the map is not visible.
             if showingMindMap {
@@ -4143,7 +4146,7 @@ struct NotesWindow: View {
         .controlSize(.small)
         .padding(.horizontal, NotesGeometry.documentInset)
         .frame(height: NotesGeometry.markdownFormattingToolbarHeight)
-        .background(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
+        .background(Color(nsColor: NotesGeometry.toolbarSurfaceColor))
         .accessibilityIdentifier("pks-markdown-formatting-toolbar")
     }
 
