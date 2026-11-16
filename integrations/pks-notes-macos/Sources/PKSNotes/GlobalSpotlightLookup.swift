@@ -6,6 +6,7 @@ import Foundation
 final class GlobalSpotlightLookup {
     private var query: NSMetadataQuery?
     private var observer: NSObjectProtocol?
+    private var processingTask: Task<Void, Never>?
     private var searchToken = UUID()
 
     func start(_ text: String, completion: @escaping ([GlobalSearchItem]) -> Void) {
@@ -30,9 +31,9 @@ final class GlobalSpotlightLookup {
                 guard let self, self.searchToken == token,
                       let metadata = self.query else { return }
                 metadata.disableUpdates()
-                // A broad content query can return many matches. Inspect a
-                // bounded projection, then prefer filename hits over body hits.
-                // The old 250-row prefix truncated useful matches prematurely.
+                // Snapshot only the bounded metadata projection on the main actor.
+                // Ranking and excerpt matching can invoke NaturalLanguage and scan
+                // long indexed bodies, so neither belongs on the UI executor.
                 var metadataByPath: [String: NSMetadataItem] = [:]
                 let hits: [GlobalSearchItem] = metadata.results.prefix(5000).compactMap { value in
                     guard let result = value as? NSMetadataItem,
@@ -52,15 +53,48 @@ final class GlobalSpotlightLookup {
                                                       isFolder: type == "public.folder",
                                                       relevance: relevance)
                 }
-                let ranked = GlobalSpotlightLookup.rank(hits, for: term)
-                let enriched = ranked.map { item in
-                    guard let result = metadataByPath[item.url.path],
-                          let content = result.value(forAttribute: "kMDItemTextContent") as? String,
-                          let snippet = Self.contentSnippet(content, matching: term) else { return item }
-                    return item.withSnippet(snippet)
+
+                let rankingTask = Task.detached(priority: .userInitiated) {
+                    Self.rank(hits, for: term)
                 }
-                self.cancel()
-                completion(enriched)
+                self.processingTask = Task { @MainActor [weak self] in
+                    let ranked = await withTaskCancellationHandler {
+                        await rankingTask.value
+                    } onCancel: {
+                        rankingTask.cancel()
+                    }
+                    guard let self, !Task.isCancelled,
+                          self.searchToken == token, self.query === metadata else { return }
+
+                    // Read indexed text only for top-N candidates on the main actor,
+                    // then perform excerpt matching on a worker using value snapshots.
+                    let snippetInputs = ranked.map { item in
+                        (
+                            item: item,
+                            content: metadataByPath[item.url.path]?
+                                .value(forAttribute: "kMDItemTextContent") as? String
+                        )
+                    }
+                    let snippetTask = Task.detached(priority: .userInitiated) {
+                        snippetInputs.map { candidate in
+                            guard !Task.isCancelled,
+                                  let content = candidate.content,
+                                  let snippet = Self.contentSnippet(content, matching: term)
+                            else { return candidate.item }
+                            return candidate.item.withSnippet(snippet)
+                        }
+                    }
+                    let enriched = await withTaskCancellationHandler {
+                        await snippetTask.value
+                    } onCancel: {
+                        snippetTask.cancel()
+                    }
+                    guard !Task.isCancelled,
+                          self.searchToken == token, self.query === metadata else { return }
+                    self.processingTask = nil
+                    self.cancel()
+                    completion(enriched)
+                }
             }
         }
         if !metadata.start() { cancel() }
@@ -122,6 +156,8 @@ final class GlobalSpotlightLookup {
 
     func cancel() {
         searchToken = UUID()
+        processingTask?.cancel()
+        processingTask = nil
         if let observer {
             NotificationCenter.default.removeObserver(observer)
             self.observer = nil
@@ -134,10 +170,12 @@ final class GlobalSpotlightLookup {
     nonisolated static func rank(_ entries: [GlobalSearchItem], for term: String, limit: Int = 35) -> [GlobalSearchItem] {
         // Derive all query-specific matching once. The same cached result
         // drives Spotlight top-N, the content-match badge and unified merge.
-        let ranked = entries.map { item in
+        let ranked = entries.compactMap { item -> (item: GlobalSearchItem, ranking: GlobalSearchRanking)? in
+            guard !Task.isCancelled else { return nil }
             let ranking = GlobalSearchRanker.ranking(for: item, query: term)
             return (item: item.withRanking(ranking), ranking: ranking)
         }
+        guard !Task.isCancelled else { return [] }
         return ranked.sorted { left, right in
             let leftName = left.ranking.spotlightNameRank
             let rightName = right.ranking.spotlightNameRank
