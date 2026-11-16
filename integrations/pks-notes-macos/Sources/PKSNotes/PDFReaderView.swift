@@ -1243,6 +1243,7 @@ struct NativePDFPreview: View {
                     .textFieldStyle(.plain)
                     .frame(minWidth: 120, idealWidth: 180, maxWidth: 220)
                     .onSubmit { controller.search(searchText) }
+                    .onExitCommand { searchText = "" }
                     .onChange(of: searchText) { _, value in
                         controller.invalidateSearchIfQueryChanged(value)
                     }
