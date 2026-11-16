@@ -804,6 +804,16 @@ final class PDFCitationDragTests: XCTestCase {
         let point = NSPoint(x: 140, y: 170)
         let screenPoint = window.convertPoint(toScreen: scroll.convert(point, to: nil))
         XCTAssertTrue(PDFCitationDropTarget.editableTextView(at: screenPoint, in: window) === editor)
+        let note = URL(fileURLWithPath: "/tmp/Study.md")
+        let target = try XCTUnwrap(PDFCitationDropTarget(
+            screenPoint: screenPoint, note: note, draftRevision: 1, textView: editor
+        ))
+        XCTAssertEqual(target.insertionIndex, (editor.string as NSString).length)
+        let citation = "\n\n[Reading.pdf · p. 1](/Reading.pdf#page=1)\n\n"
+        XCTAssertTrue(target.insert(
+            citation, currentNote: note, currentDraftRevision: 1, canEdit: true
+        ))
+        XCTAssertTrue(editor.string.hasSuffix("[Reading.pdf · p. 1](/Reading.pdf#page=1)\n\n"))
     }
 
     @MainActor
