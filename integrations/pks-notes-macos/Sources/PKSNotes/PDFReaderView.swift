@@ -952,6 +952,7 @@ final class PDFReaderController: ObservableObject {
             for index in 0..<parent.numberOfChildren {
                 guard let child = parent.child(at: index) else { continue }
                 let childPath = path + ".\(index)"
+                var descendantDepth = depth
                 if let destination = child.destination,
                    let page = destination.page {
                     let pageIndex = document.index(for: page)
@@ -965,9 +966,12 @@ final class PDFReaderController: ObservableObject {
                             depth: depth,
                             pageIndex: pageIndex
                         ))
+                        // Skipped grouping/stale bookmarks must not leave visible
+                        // descendants at an indentation with no visible parent.
+                        descendantDepth += 1
                     }
                 }
-                visit(child, depth: depth + 1, path: childPath)
+                visit(child, depth: descendantDepth, path: childPath)
             }
         }
 

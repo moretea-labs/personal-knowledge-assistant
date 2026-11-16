@@ -1116,6 +1116,49 @@ extension PDFSourceAnchorControllerTests {
         XCTAssertEqual(controller.outline.first?.pageIndex, 1)
     }
 
+    @MainActor
+    func testOutlinePromotesNavigableChildOfHeadingWithoutDestination() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let firstText = NSTextView(frame: bounds)
+        firstText.string = "First page"
+        let secondText = NSTextView(frame: bounds)
+        secondText.string = "Second chapter"
+        let first = try XCTUnwrap(PDFDocument(data: firstText.dataWithPDF(inside: bounds)))
+        let second = try XCTUnwrap(PDFDocument(data: secondText.dataWithPDF(inside: bounds)))
+        let document = PDFDocument()
+        document.insert(try XCTUnwrap(first.page(at: 0)), at: 0)
+        document.insert(try XCTUnwrap(second.page(at: 0)), at: 1)
+        let page = try XCTUnwrap(document.page(at: 1))
+
+        let root = PDFOutline()
+        let group = PDFOutline()
+        group.label = "Part One"
+        let chapter = PDFOutline()
+        chapter.label = "Second chapter"
+        chapter.destination = PDFDestination(page: page, at: .zero)
+        group.insertChild(chapter, at: 0)
+        root.insertChild(group, at: 0)
+        document.outlineRoot = root
+
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        defer { controller.detach(view: view) }
+        controller.attach(
+            view: view, document: document,
+            url: FileManager.default.temporaryDirectory
+                .appendingPathComponent("Leafspan-Grouped-Outline-\(UUID().uuidString).pdf"),
+            requestedPage: nil, requestedAnchor: nil
+        )
+
+        XCTAssertEqual(controller.outline.map(\.title), ["Second chapter"])
+        XCTAssertEqual(controller.outline.map(\.depth), [0],
+                       "A hidden non-navigable parent must not leave its child visually indented.")
+        XCTAssertEqual(controller.outline.map(\.pageIndex), [1])
+        XCTAssertEqual(controller.currentPageIndex, 0)
+        controller.goToOutline(try XCTUnwrap(controller.outline.first))
+        XCTAssertEqual(controller.currentPageIndex, 1)
+    }
+
     func testSourceAnchorParserRejectsMalformedAndUnboundedFragments() throws {
         let fingerprint = "0123456789abcdef"
         let rect = "0.10000,0.20000,0.30000,0.04000"
