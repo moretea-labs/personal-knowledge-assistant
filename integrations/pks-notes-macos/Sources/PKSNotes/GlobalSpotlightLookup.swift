@@ -155,29 +155,34 @@ final class GlobalSpotlightLookup {
             if WorkspaceSearch.fuzzyContains(item.title, q) { return 4 }
             return 5
         }
-        return entries.sorted {
-            let leftName = nameRank($0)
-            let rightName = nameRank($1)
+        // Spotlight can return thousands of candidates. Compute the
+        // transliteration/fuzzy/name/path ranks once per item, not once for
+        // every pair compared by the sort implementation.
+        let ranked = entries.map { item in
+            let itemNameRank = nameRank(item)
+            let rawPathRank = GlobalSearchRanker.pathMatchRank(url: item.url, for: q)
+            let folder = item.url.deletingLastPathComponent().path
+            let itemPathRank = rawPathRank < 3 ? rawPathRank
+                : WorkspaceSearch.transliteratedContains(folder, q) ? 3
+                : WorkspaceSearch.fuzzyContains(folder, q) ? 4 : 5
+            return (item: item, nameRank: itemNameRank, pathRank: itemPathRank)
+        }
+        return ranked.sorted { left, right in
+            let leftName = left.nameRank
+            let rightName = right.nameRank
             if leftName != rightName { return leftName < rightName }
-
-            let leftRawPath = GlobalSearchRanker.pathMatchRank(url: $0.url, for: q)
-            let rightRawPath = GlobalSearchRanker.pathMatchRank(url: $1.url, for: q)
-            let leftFolder = $0.url.deletingLastPathComponent().path
-            let rightFolder = $1.url.deletingLastPathComponent().path
-            let leftPath = leftRawPath < 3 ? leftRawPath
-                : WorkspaceSearch.transliteratedContains(leftFolder, q) ? 3
-                : WorkspaceSearch.fuzzyContains(leftFolder, q) ? 4 : 5
-            let rightPath = rightRawPath < 3 ? rightRawPath
-                : WorkspaceSearch.transliteratedContains(rightFolder, q) ? 3
-                : WorkspaceSearch.fuzzyContains(rightFolder, q) ? 4 : 5
+            let leftPath = left.pathRank
+            let rightPath = right.pathRank
             if leftPath != rightPath { return leftPath < rightPath }
 
             if leftName == 5, leftPath == 5,
-               $0.spotlightRelevance != $1.spotlightRelevance {
-                return $0.spotlightRelevance > $1.spotlightRelevance
+               left.item.spotlightRelevance != right.item.spotlightRelevance {
+                return left.item.spotlightRelevance > right.item.spotlightRelevance
             }
-            if $0.title.count != $1.title.count { return $0.title.count < $1.title.count }
-            return $0.title.localizedStandardCompare($1.title) == .orderedAscending
-        }.prefix(max(0, limit)).map { $0 }
+            if left.item.title.count != right.item.title.count {
+                return left.item.title.count < right.item.title.count
+            }
+            return left.item.title.localizedStandardCompare(right.item.title) == .orderedAscending
+        }.prefix(max(0, limit)).map(\.item)
     }
 }

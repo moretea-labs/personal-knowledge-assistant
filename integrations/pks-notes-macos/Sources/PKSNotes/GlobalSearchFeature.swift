@@ -252,34 +252,39 @@ enum GlobalSearchRanker {
             if item.isRelated { return 14 }
             return 13 // body-only PKS/Spotlight match
         }
-        let ranked = unique.sorted { left, right in
-            let a = weight(left)
-            let b = weight(right)
+        // Filename, path, transliteration and typo ranking are comparatively
+        // expensive. Keep them out of the sort comparator: Swift may invoke
+        // that comparator O(n log n) times for the same candidate.
+        let ranked = unique.map { item in
+            (item: item, weight: weight(item))
+        }.sorted { left, right in
+            let a = left.weight
+            let b = right.weight
             if a != b { return a < b }
             if a >= 6 {
-                if let leftHit = left.sourceHit, let rightHit = right.sourceHit {
+                if let leftHit = left.item.sourceHit, let rightHit = right.item.sourceHit {
                     let leftScore = leftHit.score ?? -.infinity
                     let rightScore = rightHit.score ?? -.infinity
                     if leftScore != rightScore { return leftScore > rightScore }
-                } else if left.sourceHit != nil {
+                } else if left.item.sourceHit != nil {
                     // PKS carries a grounded snippet and canonical navigation; its score is not a Spotlight score.
                     return true
-                } else if right.sourceHit != nil {
+                } else if right.item.sourceHit != nil {
                     return false
-                } else if left.spotlightRelevance != right.spotlightRelevance {
-                    return left.spotlightRelevance > right.spotlightRelevance
+                } else if left.item.spotlightRelevance != right.item.spotlightRelevance {
+                    return left.item.spotlightRelevance > right.item.spotlightRelevance
                 }
             }
-            if left.title.count != right.title.count {
-                return left.title.count < right.title.count
+            if left.item.title.count != right.item.title.count {
+                return left.item.title.count < right.item.title.count
             }
-            return left.title.localizedStandardCompare(right.title) == .orderedAscending
+            return left.item.title.localizedStandardCompare(right.item.title) == .orderedAscending
         }
         // Keep all direct-result slots. Related suggestions have a separate
         // eight-item budget so a large Spotlight list cannot hide them.
-        let direct = ranked.lazy.filter { !$0.isRelated }.prefix(max(0, limit))
-        let suggestions = ranked.lazy.filter(\.isRelated).prefix(8)
-        return Array(direct) + Array(suggestions)
+        let direct = ranked.lazy.filter { !$0.item.isRelated }.prefix(max(0, limit))
+        let suggestions = ranked.lazy.filter(\.item.isRelated).prefix(8)
+        return Array(direct.map(\.item)) + Array(suggestions.map(\.item))
     }
 }
 
