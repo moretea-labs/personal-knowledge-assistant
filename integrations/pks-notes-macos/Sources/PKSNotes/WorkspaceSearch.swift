@@ -5,22 +5,6 @@ import NaturalLanguage
 /// An on-demand read of the existing workspace directory projection. No database,
 /// background hydration, or second document authority is introduced.
 enum WorkspaceSearch {
-    struct Entry: Sendable {
-        let url: URL
-        let name: String
-        let isMarkdown: Bool
-        let pathTransliterationKey: NoteTreePresentation.TransliterationKey
-        let nameTransliterationKey: NoteTreePresentation.TransliterationKey
-
-        init(_ entry: NoteTreePresentation.QuickOpenEntry) {
-            url = entry.item.url
-            name = entry.item.name
-            isMarkdown = entry.item.isMarkdown
-            pathTransliterationKey = entry.pathTransliterationKey
-            nameTransliterationKey = entry.nameTransliterationKey
-        }
-    }
-
     struct Coverage: Sendable {
         var readFiles = 0
         var skippedFiles = 0
@@ -40,7 +24,7 @@ enum WorkspaceSearch {
     }
 
     static func search(
-        entries: [Entry], root: URL, query: String,
+        entries: [NoteTreePresentation.QuickOpenEntry], root: URL, query: String,
         draftURL: URL? = nil, draft: String? = nil,
         searchBodies: Bool = true, limits: Limits = Limits()
     ) -> Result {
@@ -64,10 +48,11 @@ enum WorkspaceSearch {
 
         for (order, entry) in entries.enumerated() {
             if Task.isCancelled { break }
-            let item = entry
+            let item = entry.item
             let itemPath = item.url.standardizedFileURL.path
-            guard WorkspaceFiles.contains(item.url, inCanonicalRootPath: canonicalRootPath),
-                  WorkspaceFiles.fileStamp(item.url) != nil else { continue }
+            guard WorkspaceFiles.fileStampIfContained(
+                item.url, inCanonicalRootPath: canonicalRootPath
+            ) != nil else { continue }
             let path = String(itemPath.dropFirst(rootPathPrefixLength))
             let rawPathTerms = terms.allSatisfy { contains(path, $0) }
             var pathFuzzyTokens: [[Character]]?
@@ -81,7 +66,7 @@ enum WorkspaceSearch {
             }
             let pathPinyinMatch = canMatchPinyin && !rawPathTerms
                 && matchesTransliteration(
-                    item.pathTransliterationKey,
+                    entry.pathTransliterationKey,
                     query: queryTransliteration,
                     minimumTokenStart: rootTransliterationLength
                 )
@@ -130,7 +115,7 @@ enum WorkspaceSearch {
             }
             let namePinyinMatch = canMatchPinyin
                 && !exactNameMatch && !rawNameTerms && !rawPathTerms
-                && matchesTransliteration(item.nameTransliterationKey, query: queryTransliteration)
+                && matchesTransliteration(entry.nameTransliterationKey, query: queryTransliteration)
             let rank: Int
             if exactNameMatch { rank = 0 }
             else if rawNameTerms { rank = 1 }

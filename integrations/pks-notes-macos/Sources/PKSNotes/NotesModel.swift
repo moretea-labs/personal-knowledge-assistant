@@ -50,7 +50,7 @@ struct ReadResponse: Decodable {
     let truncated: Bool?
 }
 
-struct NoteItem: Identifiable, Hashable {
+struct NoteItem: Identifiable, Hashable, Sendable {
     let url: URL
     let children: [NoteItem]?
 
@@ -92,6 +92,41 @@ enum WorkspaceFiles {
             changeSeconds: Int64(info.st_ctimespec.tv_sec),
             changeNanoseconds: Int64(info.st_ctimespec.tv_nsec)
         )
+    }
+
+    /// Validate containment and capture the final POSIX stamp in one path walk.
+    /// Search uses this to avoid repeating lstat on each candidate's leaf.
+    static func fileStampIfContained(
+        _ candidate: URL,
+        inCanonicalRootPath canonicalRoot: String
+    ) -> WorkspaceFileStamp? {
+        let path = candidate.standardizedFileURL.path
+        let prefix = canonicalRoot + "/"
+        guard path.hasPrefix(prefix) else { return nil }
+        let components = Array(path.dropFirst(prefix.count).split(separator: "/"))
+        guard !components.isEmpty else { return nil }
+
+        var cursor = URL(fileURLWithPath: canonicalRoot, isDirectory: true)
+        var finalStamp: WorkspaceFileStamp?
+        for (index, component) in components.enumerated() {
+            cursor.appendPathComponent(String(component))
+            var info = Darwin.stat()
+            guard cursor.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+                  (info.st_mode & mode_t(S_IFMT)) != mode_t(S_IFLNK) else {
+                return nil
+            }
+            guard index == components.count - 1 else { continue }
+            finalStamp = WorkspaceFileStamp(
+                device: UInt64(info.st_dev),
+                inode: UInt64(info.st_ino),
+                size: Int64(info.st_size),
+                modificationSeconds: Int64(info.st_mtimespec.tv_sec),
+                modificationNanoseconds: Int64(info.st_mtimespec.tv_nsec),
+                changeSeconds: Int64(info.st_ctimespec.tv_sec),
+                changeNanoseconds: Int64(info.st_ctimespec.tv_nsec)
+            )
+        }
+        return finalStamp
     }
 
     /// NSTextView canonicalizes CRLF/CR into LF. Normalize once at the file/editor
@@ -2656,7 +2691,7 @@ final class NotesModel: ObservableObject {
             return WorkspaceSearch.Result()
         }
         // Reuse the complete-vault Quick Open projection; do not create another index.
-        let entries = globalQuickOpenEntries.map { WorkspaceSearch.Entry($0) }
+        let entries = globalQuickOpenEntries
         let currentNote = selected
         let currentDraft = draft
         let localTask = Task.detached(priority: .userInitiated) {

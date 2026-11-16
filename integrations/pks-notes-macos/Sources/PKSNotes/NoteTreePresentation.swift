@@ -40,7 +40,7 @@ enum NoteTreePresentation {
     }
 
     /// Search keys are built with the Quick Open projection and reused across queries.
-    struct QuickOpenEntry: Identifiable {
+    struct QuickOpenEntry: Identifiable, Sendable {
         let item: NoteItem
         let foldedName: String
         let foldedFolder: String

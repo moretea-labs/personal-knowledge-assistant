@@ -10,9 +10,36 @@ final class WorkspaceSearchTests: XCTestCase {
         return root
     }
 
-    private func entries(_ root: URL) -> [WorkspaceSearch.Entry] {
+    private func entries(_ root: URL) -> [NoteTreePresentation.QuickOpenEntry] {
         NoteTreePresentation.quickOpenEntries(WorkspaceFiles.flatFiles(in: root))
-            .map { WorkspaceSearch.Entry($0) }
+    }
+
+    func testSearchRejectsSymlinkedFilesAndParentDirectories() throws {
+        let root = try fixture()
+        let outside = root.deletingLastPathComponent()
+            .appendingPathComponent("LeafspanOutside-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+
+        let outsideNote = outside.appendingPathComponent("Secret.md")
+        try "# Secret".write(to: outsideNote, atomically: true, encoding: .utf8)
+        let directLink = root.appendingPathComponent("Direct.md")
+        let parentLink = root.appendingPathComponent("LinkedFolder", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: directLink, withDestinationURL: outsideNote)
+        try FileManager.default.createSymbolicLink(at: parentLink, withDestinationURL: outside)
+
+        let entries = [
+            NoteTreePresentation.QuickOpenEntry(
+                item: NoteItem(url: directLink, children: nil), insertionOrder: 0
+            ),
+            NoteTreePresentation.QuickOpenEntry(
+                item: NoteItem(url: parentLink.appendingPathComponent("Secret.md"), children: nil),
+                insertionOrder: 1
+            )
+        ]
+        let result = WorkspaceSearch.search(entries: entries, root: root, query: "Secret")
+        XCTAssertTrue(result.hits.isEmpty)
+        XCTAssertEqual(result.coverage.readFiles, 0)
     }
 
     func testStandaloneContentSearchUsesAllTermsAndShowsMatchingExcerpt() throws {
@@ -283,9 +310,9 @@ final class WorkspaceSearchTests: XCTestCase {
         let link = root.appendingPathComponent("link.md")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
         let candidates = [link, outside].enumerated().map {
-            WorkspaceSearch.Entry(
-                NoteTreePresentation.QuickOpenEntry(item: NoteItem(url: $0.element, children: nil),
-                                                     insertionOrder: $0.offset)
+            NoteTreePresentation.QuickOpenEntry(
+                item: NoteItem(url: $0.element, children: nil),
+                insertionOrder: $0.offset
             )
         }
         XCTAssertTrue(WorkspaceSearch.search(entries: candidates, root: root, query: "needle").hits.isEmpty)
