@@ -775,7 +775,8 @@ extension MindMapOutline {
                 removedCursor += 1
             }
             let afterRemovals = oldPosition - removedCursor
-            while insertedCursor < inserted.count, inserted[insertedCursor] <= afterRemovals {
+            while insertedCursor < inserted.count,
+                  inserted[insertedCursor] <= afterRemovals + insertedCursor {
                 insertedCursor += 1
             }
             let shiftedPosition = afterRemovals + insertedCursor
