@@ -142,6 +142,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Find in Notes": "在笔记中查找",
         "Refresh Files": "刷新文件",
         "Reload PDF": "重新加载 PDF",
+        "Clear Search": "清除搜索",
         "The PDF file could not be found. It may have been moved or deleted.": "找不到此 PDF 文件。它可能已被移动或删除。",
         "Leafspan cannot read this PDF. Check the file's permissions or choose the workspace folder again.": "Leafspan 无法读取此 PDF。请检查文件权限，或重新选择工作区文件夹。",
         "This PDF is not available from its cloud provider yet. Check your connection and cloud-drive status, then reload.": "此 PDF 尚未从云端下载完成。请检查网络和云盘状态，然后重新加载。",

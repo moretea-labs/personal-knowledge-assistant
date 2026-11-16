@@ -1248,6 +1248,19 @@ struct NativePDFPreview: View {
                     }
                     .accessibilityLabel(language.text("Find in PDF"))
                     .accessibilityIdentifier("pks-pdf-search-field")
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                        pdfSearchFocused = true
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tertiary)
+                    .help(language.text("Clear Search"))
+                    .accessibilityLabel(language.text("Clear Search"))
+                    .accessibilityIdentifier("pks-pdf-search-clear")
+                }
                 Button {
                     controller.search(searchText)
                 } label: {
