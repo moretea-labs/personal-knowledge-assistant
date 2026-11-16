@@ -386,6 +386,43 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         UserDefaults.standard.set(positions, forKey: PDFReadingPositionStore.defaultsKey)
     }
 
+    func testPDFReadingPositionFollowsFolderRelocationWithoutClobberingOtherPDFs() throws {
+        let suite = "PKSNotesPDFPositionMove-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let oldFolder = URL(fileURLWithPath: "/tmp/Workspace/Reading")
+        let newFolder = URL(fileURLWithPath: "/tmp/Workspace/Archive/Reading")
+        let oldPDF = oldFolder.appendingPathComponent("Book.pdf")
+        let nestedPDF = oldFolder.appendingPathComponent("Chapters/Part.pdf")
+        let renamedPDF = newFolder.appendingPathComponent("Book.pdf")
+        let renamedNestedPDF = newFolder.appendingPathComponent("Chapters/Part.pdf")
+        let unrelatedPDF = URL(fileURLWithPath: "/tmp/Workspace/ReadingElse.pdf")
+
+        PDFReadingPositionStore.save(pageIndex: 8, for: oldPDF, defaults: defaults)
+        PDFReadingPositionStore.save(pageIndex: 3, for: nestedPDF, defaults: defaults)
+        PDFReadingPositionStore.save(pageIndex: 5, for: unrelatedPDF, defaults: defaults)
+        PDFReadingPositionStore.save(pageIndex: 1, for: renamedPDF, defaults: defaults)
+
+        PDFReadingPositionStore.replacePath(oldFolder, with: newFolder, defaults: defaults)
+
+        XCTAssertEqual(PDFReadingPositionStore.pageIndex(
+            for: renamedPDF, pageCount: 20, defaults: defaults
+        ), 8)
+        XCTAssertEqual(PDFReadingPositionStore.pageIndex(
+            for: renamedNestedPDF, pageCount: 20, defaults: defaults
+        ), 3)
+        XCTAssertNil(PDFReadingPositionStore.pageIndex(
+            for: oldPDF, pageCount: 20, defaults: defaults
+        ))
+        XCTAssertNil(PDFReadingPositionStore.pageIndex(
+            for: nestedPDF, pageCount: 20, defaults: defaults
+        ))
+        XCTAssertEqual(PDFReadingPositionStore.pageIndex(
+            for: unrelatedPDF, pageCount: 20, defaults: defaults
+        ), 5)
+    }
+
     func testPDFReadingPositionStoreRetainsNewestEntryWhenCapacityIsFull() throws {
         let suite = "PKSNotesPDFPositionCapacity-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

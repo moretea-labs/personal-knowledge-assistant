@@ -3046,6 +3046,7 @@ final class NotesModel: ObservableObject {
                 UserDefaults.standard.set(renamed.path, forKey: "PKSNotesLastOpenedMarkdown")
             }
             NoteNavigationStore.replacePath(target, with: destination, in: root)
+            PDFReadingPositionStore.replacePath(target, with: destination)
             reloadNavigationPreferences()
             if isFolder {
                 // Directory rename rebases every descendant identity, so retain
@@ -3358,6 +3359,7 @@ final class NotesModel: ObservableObject {
                 UserDefaults.standard.set(moved.path, forKey: "PKSNotesLastOpenedMarkdown")
             }
             NoteNavigationStore.replacePath(target, with: destination, in: root)
+            PDFReadingPositionStore.replacePath(target, with: destination)
             reloadNavigationPreferences()
             if targetIsDirectory {
                 // Directory moves recursively rebase descendant paths; do not

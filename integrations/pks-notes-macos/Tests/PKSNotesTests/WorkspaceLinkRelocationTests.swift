@@ -195,11 +195,27 @@ final class WorkspaceLinkRelocationTests: XCTestCase {
         try Data("%PDF-1.4\n%%EOF".utf8).write(to: pdf)
         try "[Book](Book.pdf\(fragment))".write(to: note, atomically: true, encoding: .utf8)
 
+        PDFReadingPositionStore.save(pageIndex: 4, for: pdf)
+        defer {
+            var positions = UserDefaults.standard.dictionary(
+                forKey: PDFReadingPositionStore.defaultsKey
+            ) ?? [:]
+            positions.removeValue(forKey: pdf.standardizedFileURL.path)
+            positions.removeValue(forKey: movedPDF.standardizedFileURL.path)
+            UserDefaults.standard.set(positions, forKey: PDFReadingPositionStore.defaultsKey)
+        }
+        let priorWorkspace = UserDefaults.standard.object(forKey: "PKSNotesWorkspace")
+        defer {
+            if let priorWorkspace { UserDefaults.standard.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { UserDefaults.standard.removeObject(forKey: "PKSNotesWorkspace") }
+        }
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(root))
         let result = await model.moveItem(pdf, to: archive)
 
         XCTAssertEqual(result, movedPDF)
+        XCTAssertEqual(PDFReadingPositionStore.pageIndex(for: movedPDF, pageCount: 10), 4)
+        XCTAssertNil(PDFReadingPositionStore.pageIndex(for: pdf, pageCount: 10))
         let expectedTarget = try XCTUnwrap(
             WorkspaceFiles.canonicalLinkTarget(for: movedPDF, in: root)
         )
@@ -211,6 +227,41 @@ final class WorkspaceLinkRelocationTests: XCTestCase {
             model.message,
             AppLanguage.current.text("Path changed and related links were updated.")
         )
+    }
+
+    @MainActor
+    func testRenamingFolderPreservesNestedPDFReadingPosition() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let oldFolder = root.appendingPathComponent("Reading", isDirectory: true)
+        let newFolder = root.appendingPathComponent("Research")
+        try fm.createDirectory(at: oldFolder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let oldPDF = oldFolder.appendingPathComponent("Book.pdf")
+        let newPDF = newFolder.appendingPathComponent("Book.pdf")
+        try Data("%PDF-1.4\n%%EOF".utf8).write(to: oldPDF)
+        PDFReadingPositionStore.save(pageIndex: 6, for: oldPDF)
+        defer {
+            var positions = UserDefaults.standard.dictionary(
+                forKey: PDFReadingPositionStore.defaultsKey
+            ) ?? [:]
+            positions.removeValue(forKey: oldPDF.standardizedFileURL.path)
+            positions.removeValue(forKey: newPDF.standardizedFileURL.path)
+            UserDefaults.standard.set(positions, forKey: PDFReadingPositionStore.defaultsKey)
+        }
+
+        let priorWorkspace = UserDefaults.standard.object(forKey: "PKSNotesWorkspace")
+        defer {
+            if let priorWorkspace { UserDefaults.standard.set(priorWorkspace, forKey: "PKSNotesWorkspace") }
+            else { UserDefaults.standard.removeObject(forKey: "PKSNotesWorkspace") }
+        }
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        let renamed = await model.renameItem(oldFolder, to: "Research")
+        XCTAssertEqual(renamed, newFolder)
+        XCTAssertEqual(PDFReadingPositionStore.pageIndex(for: newPDF, pageCount: 12), 6)
+        XCTAssertNil(PDFReadingPositionStore.pageIndex(for: oldPDF, pageCount: 12))
     }
 
     @MainActor

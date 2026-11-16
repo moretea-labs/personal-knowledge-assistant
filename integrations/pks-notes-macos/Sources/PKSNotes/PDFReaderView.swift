@@ -409,6 +409,34 @@ enum PDFReadingPositionStore {
         defaults.set(values, forKey: defaultsKey)
     }
 
+    /// A successful workspace rename/move changes PDF identity, not reading progress.
+    /// Rebase the one existing preferences dictionary, including PDFs inside moved folders.
+    static func replacePath(
+        _ from: URL, with to: URL, defaults: UserDefaults = .standard
+    ) {
+        let oldPath = from.standardizedFileURL.path
+        let newPath = to.standardizedFileURL.path
+        guard oldPath != newPath,
+              var values = defaults.dictionary(forKey: defaultsKey) else { return }
+
+        let moved = values.compactMap { path, value -> (String, Any)? in
+            guard path == oldPath || path.hasPrefix(oldPath + "/") else { return nil }
+            return (newPath + path.dropFirst(oldPath.count), value)
+        }
+        // The target may have belonged to a previously deleted PDF. Its stale
+        // path history must not supersede the newly moved file's position.
+        for path in values.keys where path == newPath || path.hasPrefix(newPath + "/") {
+            values.removeValue(forKey: path)
+        }
+        for path in values.keys where path == oldPath || path.hasPrefix(oldPath + "/") {
+            values.removeValue(forKey: path)
+        }
+        for (path, value) in moved {
+            values[path] = value
+        }
+        defaults.set(values, forKey: defaultsKey)
+    }
+
     private static func storedPageIndex(in value: Any) -> Int? {
         if let legacyValue = value as? Int {
             return legacyValue
