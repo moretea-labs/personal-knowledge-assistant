@@ -221,10 +221,17 @@ enum MindMapViewportGeometry {
         zoom: CGFloat,
         offset: CGSize
     ) -> Bool {
-        guard viewport.width > 0, viewport.height > 0,
-              viewport.width.isFinite, viewport.height.isFinite,
+        guard viewport.width.isFinite, viewport.height.isFinite,
               zoom > 0, zoom.isFinite,
               offset.width.isFinite, offset.height.isFinite else { return false }
+        // GeometryReader can report .zero before the first real layout pass.
+        // That is still the untouched opening state when the initial transform
+        // has not moved; let the first non-zero size apply the root overview.
+        guard viewport.width > 0, viewport.height > 0 else {
+            return abs(zoom - 1) < 0.001
+                && abs(offset.width) < 0.5
+                && abs(offset.height) < 0.5
+        }
 
         let initial = initialRootViewport(
             root: root, visiblePlacements: visiblePlacements, mapSize: mapSize, viewport: viewport

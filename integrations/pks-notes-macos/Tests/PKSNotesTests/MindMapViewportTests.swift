@@ -417,6 +417,21 @@ final class MindMapViewportTests: XCTestCase {
         let root = try XCTUnwrap(layout.placements.first { $0.parentID == nil })
         let firstLevel = layout.placements.filter { $0.parentID == root.id }
         let viewport = CGSize(width: 1000, height: 680)
+        XCTAssertTrue(MindMapViewportGeometry.isAtInitialRootViewport(
+            root: root, visiblePlacements: firstLevel,
+            mapSize: layout.size, viewport: .zero,
+            zoom: 1, offset: .zero
+        ), "An unlaid-out canvas with its untouched transform must still receive its opening overview.")
+        XCTAssertFalse(MindMapViewportGeometry.isAtInitialRootViewport(
+            root: root, visiblePlacements: firstLevel,
+            mapSize: layout.size, viewport: .zero,
+            zoom: 0.9, offset: .zero
+        ), "A user zoom made before a zero-size transition must be preserved.")
+        XCTAssertFalse(MindMapViewportGeometry.isAtInitialRootViewport(
+            root: root, visiblePlacements: firstLevel,
+            mapSize: layout.size, viewport: .zero,
+            zoom: 1, offset: CGSize(width: 2, height: 0)
+        ), "A user pan made before a zero-size transition must be preserved.")
         let initial = MindMapViewportGeometry.initialRootViewport(
             root: root, visiblePlacements: firstLevel,
             mapSize: layout.size, viewport: viewport
