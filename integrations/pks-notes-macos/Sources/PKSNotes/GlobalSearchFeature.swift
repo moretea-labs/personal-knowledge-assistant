@@ -553,6 +553,7 @@ final class GlobalSearchResults: ObservableObject {
     func moveSelection(_ offset: Int) {
         guard !items.isEmpty else { return }
         selectedIndex = max(0, min(items.count - 1, selectedIndex + offset))
+        prefetchSelectedFile()
     }
 
     var selected: GlobalSearchItem? {
@@ -562,7 +563,14 @@ final class GlobalSearchResults: ObservableObject {
     func select(_ item: GlobalSearchItem) {
         if let index = items.firstIndex(where: { $0.id == item.id }) {
             selectedIndex = index
+            prefetchSelectedFile()
         }
+    }
+
+    private func prefetchSelectedFile() {
+        guard let selected, case .file = selected.kind,
+              let model = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel else { return }
+        model.prefetchFile(selected.url)
     }
 }
 
@@ -793,6 +801,9 @@ private struct GlobalSearchPalette: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .onHover { hovering in
+                                if hovering { results.select(item) }
+                            }
                             .contextMenu {
                                 let chinese = AppLanguage.current.resolved == .simplifiedChinese
                                 Button(chinese ? "打开" : "Open") { GlobalSearchController.shared.open(item) }
