@@ -277,7 +277,7 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testMultiPagePDFSelectionCannotProduceASinglePageAnchor() throws {
+    func testMultiPagePDFSelectionKeepsQuoteWithFirstPageOnlyLink() throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let firstText = NSTextView(frame: bounds)
         firstText.string = "First page evidence"
@@ -332,11 +332,11 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         XCTAssertTrue(snippet.contains("My observation"))
         XCTAssertTrue(snippet.contains("#page=1"))
         XCTAssertFalse(snippet.contains("&rects="))
-        XCTAssertFalse(snippet.contains("> First page evidence"))
-        XCTAssertFalse(snippet.contains("> Second page evidence"))
+        XCTAssertTrue(snippet.contains("> First page evidence"))
+        XCTAssertTrue(snippet.contains("> Second page evidence"))
     }
 
-    func testPDFPageReferenceFallsBackForWrongPageOrMismatchedAnchor() throws {
+    func testPDFPageReferenceFallsBackToPageOnlyLinkButKeepsSelectedQuote() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -362,7 +362,7 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
             XCTAssertTrue(snippet.contains("My observation"))
             XCTAssertTrue(snippet.contains("#page=2"))
             XCTAssertFalse(snippet.contains("&rects="))
-            XCTAssertFalse(snippet.contains("> Selected source evidence"))
+            XCTAssertTrue(snippet.contains("> Selected source evidence"))
         }
     }
 

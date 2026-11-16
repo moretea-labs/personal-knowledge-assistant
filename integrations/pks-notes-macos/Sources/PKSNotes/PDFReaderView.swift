@@ -305,8 +305,8 @@ enum PDFPageReference {
            let anchor, anchor.page == page, anchor.matches(text: trimmedSelection) {
             validAnchor = anchor
         } else {
-            // An unanchorable selection may still be useful context, but it must
-            // never be stored as a quote that cannot be returned to precisely.
+            // Keep the selected evidence even when its geometry cannot be trusted.
+            // Only the return link degrades to a page reference; never invent a highlight.
             validAnchor = nil
         }
         guard let reference = markdown(
@@ -320,7 +320,7 @@ enum PDFPageReference {
         }
         sections.append(reference)
 
-        if let trimmedSelection, !trimmedSelection.isEmpty, validAnchor != nil {
+        if let trimmedSelection, !trimmedSelection.isEmpty {
             let quote = trimmedSelection
                 .components(separatedBy: .newlines)
                 .map { "> \(MindMapOutline.escapeInlineText($0))" }
