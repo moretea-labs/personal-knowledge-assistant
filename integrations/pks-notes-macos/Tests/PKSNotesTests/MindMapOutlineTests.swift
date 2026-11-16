@@ -70,6 +70,39 @@ final class MindMapOutlineTests: XCTestCase {
         )
     }
 
+    func testPDFCitationLinkStaysWithNodeWhenSubtreeReparented() throws {
+        let link = "/Reading.pdf#page=2&rects=0.1,0.2,0.3,0.04&fp=1234567890abcdef"
+        let markdown = """
+        # Plan
+        - Source
+          - Evidence
+            [Reading.pdf · p. 2](\(link))
+            > Selected fact
+        - Destination
+        """
+        let nodes = MindMapOutline.nodes(in: markdown)
+        let evidence = try XCTUnwrap(nodes.first { $0.title == "Evidence" })
+        let destination = try XCTUnwrap(nodes.first { $0.title == "Destination" })
+
+        let moved = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
+            in: markdown,
+            nodeID: evidence.id,
+            relativeTo: destination.id,
+            placement: .child
+        ))
+        XCTAssertEqual(
+            moved.source,
+            "# Plan\n- Source\n- Destination\n  - Evidence\n    [Reading.pdf · p. 2](\(link))\n    > Selected fact"
+        )
+
+        let movedNodes = MindMapOutline.nodes(in: moved.source)
+        let movedEvidence = try XCTUnwrap(movedNodes.first { $0.title == "Evidence" })
+        let movedDestination = try XCTUnwrap(movedNodes.first { $0.title == "Destination" })
+        let links = MindMapOutline.presentations(in: moved.source, nodes: movedNodes)
+        XCTAssertEqual(links[movedEvidence.id]?.links.map(\.target), [link])
+        XCTAssertTrue(links[movedDestination.id]?.links.isEmpty ?? true)
+    }
+
     func testWorkspaceFileLinksCanAttachToHeadingNodes() throws {
         let markdown = "# Root\n## Child\n"
         let updated = try XCTUnwrap(
