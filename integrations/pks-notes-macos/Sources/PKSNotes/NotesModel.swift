@@ -151,7 +151,16 @@ enum WorkspaceFiles {
     }
 
     static func contains(_ candidate: URL, in root: URL) -> Bool {
-        let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath().path
+        contains(
+            candidate,
+            inCanonicalRootPath: root.standardizedFileURL.resolvingSymlinksInPath().path
+        )
+    }
+
+    /// Search walks one already-selected workspace snapshot. Resolve its root
+    /// once per query, while still checking every candidate path component for
+    /// symlinks so the optimization does not weaken workspace containment.
+    static func contains(_ candidate: URL, inCanonicalRootPath canonicalRoot: String) -> Bool {
         let path = candidate.standardizedFileURL.path
         guard path.hasPrefix(canonicalRoot + "/") else { return false }
 

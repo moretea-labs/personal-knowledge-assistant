@@ -46,13 +46,16 @@ enum WorkspaceSearch {
     ) -> Result {
         let terms = query.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !terms.isEmpty, limits.results > 0 else { return Result() }
+        let rootPath = root.standardizedFileURL.path
+        let canonicalRootPath = root.standardizedFileURL.resolvingSymlinksInPath().path
+        let rootPathPrefixLength = rootPath.count + 1
         let fuzzyQueryTerms = terms.map(fuzzyQueryCharacters)
         // Normalize the query once. NaturalLanguage tokenization and pinyin
         // transforms are substantially more expensive than literal path checks.
         let queryTransliteration = transliterationKey(query)
         let canMatchPinyin = queryTransliteration.value.count >= 4
         let rootTransliterationLength = canMatchPinyin
-            ? transliterationKey(root.standardizedFileURL.path).value.count
+            ? transliterationKey(rootPath).value.count
             : 0
         var result = Result()
         var ranked: [(hit: SearchHit, rank: Int, order: Int)] = []
@@ -62,9 +65,10 @@ enum WorkspaceSearch {
         for (order, entry) in entries.enumerated() {
             if Task.isCancelled { break }
             let item = entry
-            guard WorkspaceFiles.contains(item.url, in: root),
+            let itemPath = item.url.standardizedFileURL.path
+            guard WorkspaceFiles.contains(item.url, inCanonicalRootPath: canonicalRootPath),
                   WorkspaceFiles.fileStamp(item.url) != nil else { continue }
-            let path = String(item.url.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1))
+            let path = String(itemPath.dropFirst(rootPathPrefixLength))
             let rawPathTerms = terms.allSatisfy { contains(path, $0) }
             var pathFuzzyTokens: [[Character]]?
             let fuzzyPathTerms = terms.indices.allSatisfy { index in
