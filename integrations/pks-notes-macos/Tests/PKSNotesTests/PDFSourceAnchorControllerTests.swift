@@ -1159,6 +1159,48 @@ extension PDFSourceAnchorControllerTests {
         XCTAssertEqual(controller.currentPageIndex, 1)
     }
 
+    @MainActor
+    func testOutlineFlatteningHandlesDeepBookmarkTreesIteratively() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let text = NSTextView(frame: bounds)
+        text.string = "Deep outline"
+        let source = try XCTUnwrap(PDFDocument(data: text.dataWithPDF(inside: bounds)))
+        let document = PDFDocument()
+        document.insert(try XCTUnwrap(source.page(at: 0)), at: 0)
+        let page = try XCTUnwrap(document.page(at: 0))
+
+        let root = PDFOutline()
+        let section = PDFOutline()
+        section.label = "Part One"
+        section.destination = PDFDestination(page: page, at: .zero)
+        root.insertChild(section, at: 0)
+        var parent = section
+        for index in 0..<4_096 {
+            let group = PDFOutline()
+            group.label = "Group \(index)"
+            parent.insertChild(group, at: 0)
+            parent = group
+        }
+        let chapter = PDFOutline()
+        chapter.label = "Deep chapter"
+        chapter.destination = PDFDestination(page: page, at: .zero)
+        parent.insertChild(chapter, at: 0)
+        document.outlineRoot = root
+
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        defer { controller.detach(view: view) }
+        controller.attach(
+            view: view, document: document,
+            url: FileManager.default.temporaryDirectory
+                .appendingPathComponent("Leafspan-Deep-Outline-\(UUID().uuidString).pdf"),
+            requestedPage: nil, requestedAnchor: nil
+        )
+        XCTAssertEqual(controller.outline.map(\.title), ["Part One", "Deep chapter"])
+        XCTAssertEqual(controller.outline.map(\.depth), [0, 1])
+        XCTAssertEqual(controller.outline.map(\.pageIndex), [0, 0])
+    }
+
     func testSourceAnchorParserRejectsMalformedAndUnboundedFragments() throws {
         let fingerprint = "0123456789abcdef"
         let rect = "0.10000,0.20000,0.30000,0.04000"

@@ -947,35 +947,46 @@ final class PDFReaderController: ObservableObject {
     ) -> [PDFOutlineEntry] {
         guard let root else { return [] }
         var entries: [PDFOutlineEntry] = []
+        // PDF bookmarks come from untrusted documents and can be deeply nested.
+        // Preserve recursive depth-first order without consuming the call stack.
+        var pending: [(parent: PDFOutline, nextChild: Int, depth: Int, path: String)] = [
+            (parent: root, nextChild: 0, depth: 0, path: "outline")
+        ]
 
-        func visit(_ parent: PDFOutline, depth: Int, path: String) {
-            for index in 0..<parent.numberOfChildren {
-                guard let child = parent.child(at: index) else { continue }
-                let childPath = path + ".\(index)"
-                var descendantDepth = depth
-                if let destination = child.destination,
-                   let page = destination.page {
-                    let pageIndex = document.index(for: page)
-                    let title = child.label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    // PDFKit can return an out-of-range sentinel for a
-                    // destination owned by another document; never expose it.
-                    if !title.isEmpty, (0..<document.pageCount).contains(pageIndex) {
-                        entries.append(.init(
-                            id: childPath,
-                            title: title,
-                            depth: depth,
-                            pageIndex: pageIndex
-                        ))
-                        // Skipped grouping/stale bookmarks must not leave visible
-                        // descendants at an indentation with no visible parent.
-                        descendantDepth += 1
-                    }
-                }
-                visit(child, depth: descendantDepth, path: childPath)
+        while !pending.isEmpty {
+            let frameIndex = pending.count - 1
+            let frame = pending[frameIndex]
+            guard frame.nextChild < frame.parent.numberOfChildren else {
+                pending.removeLast()
+                continue
             }
-        }
+            let index = frame.nextChild
+            // Advance this parent in place so wide outlines use O(depth) stack
+            // memory rather than retaining one continuation for every sibling.
+            pending[frameIndex].nextChild += 1
+            guard let child = frame.parent.child(at: index) else { continue }
 
-        visit(root, depth: 0, path: "outline")
+            let childPath = frame.path + ".\(index)"
+            var descendantDepth = frame.depth
+            if let destination = child.destination,
+               let page = destination.page {
+                let pageIndex = document.index(for: page)
+                let title = child.label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                // PDFKit can return an out-of-range sentinel for another document.
+                if !title.isEmpty, (0..<document.pageCount).contains(pageIndex) {
+                    entries.append(.init(
+                        id: childPath, title: title,
+                        depth: frame.depth, pageIndex: pageIndex
+                    ))
+                    // Only a visible parent contributes to descendant indentation.
+                    descendantDepth += 1
+                }
+            }
+            pending.append((
+                parent: child, nextChild: 0,
+                depth: descendantDepth, path: childPath
+            ))
+        }
         return entries
     }
 }
