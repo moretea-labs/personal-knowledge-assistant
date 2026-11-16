@@ -54,9 +54,13 @@ enum NoteTreePresentation {
             self.foldedName = NoteTreePresentation.fold(item.name)
             self.foldedFolder = NoteTreePresentation.fold(item.url.deletingLastPathComponent().path)
             self.pathTransliterationKey = NoteTreePresentation.transliterationKey(
-                item.url.standardizedFileURL.path
+                item.url.standardizedFileURL.path,
+                useASCIIIndexFastPath: true
             )
-            self.nameTransliterationKey = NoteTreePresentation.transliterationKey(item.name)
+            self.nameTransliterationKey = NoteTreePresentation.transliterationKey(
+                item.name,
+                useASCIIIndexFastPath: true
+            )
             self.insertionOrder = insertionOrder
         }
     }
@@ -181,7 +185,43 @@ enum NoteTreePresentation {
         return normalized.isEmpty ? nil : normalized
     }
 
-    static func transliterationKey(_ value: String) -> TransliterationKey {
+    static func transliterationKey(
+        _ value: String,
+        useASCIIIndexFastPath: Bool = false
+    ) -> TransliterationKey {
+        if useASCIIIndexFastPath {
+            // Most workspace paths are Latin. Keep index construction cheap;
+            // content-body transliteration stays on NaturalLanguage below.
+            let folded = value.folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                locale: .current
+            )
+            if folded.utf8.allSatisfy({ $0 < 0x80 }) {
+                var keyBytes = [UInt8]()
+                var tokenStarts = Set<Int>()
+                var insideToken = false
+                for byte in folded.utf8 {
+                    let isAlphanumeric =
+                        (byte >= 0x30 && byte <= 0x39)
+                        || (byte >= 0x41 && byte <= 0x5A)
+                        || (byte >= 0x61 && byte <= 0x7A)
+                    if isAlphanumeric {
+                        if !insideToken { tokenStarts.insert(keyBytes.count) }
+                        keyBytes.append(byte)
+                        insideToken = true
+                    } else if byte == 0x27 && insideToken {
+                        continue
+                    } else {
+                        insideToken = false
+                    }
+                }
+                return TransliterationKey(
+                    value: String(decoding: keyBytes, as: UTF8.self),
+                    tokenStarts: tokenStarts
+                )
+            }
+        }
+
         let tokenizer = NLTokenizer(unit: .word)
         tokenizer.string = value
         var key = ""

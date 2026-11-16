@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 import XCTest
 @testable import PKSNotes
 
@@ -12,6 +13,32 @@ final class WorkspaceSearchTests: XCTestCase {
 
     private func entries(_ root: URL) -> [NoteTreePresentation.QuickOpenEntry] {
         NoteTreePresentation.quickOpenEntries(WorkspaceFiles.flatFiles(in: root))
+    }
+
+    private func naturalLanguageKey(_ value: String) -> NoteTreePresentation.TransliterationKey {
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = value
+        var key = ""
+        var tokenStarts = Set<Int>()
+        for range in tokenizer.tokens(for: value.startIndex..<value.endIndex) {
+            let token = String(value[range])
+            guard let normalized = NoteTreePresentation.transliterationToken(token) else { continue }
+            tokenStarts.insert(key.count)
+            key.append(normalized)
+        }
+        return .init(value: key, tokenStarts: tokenStarts)
+    }
+
+    func testLatinTransliterationFastPathPreservesNaturalLanguageTokenization() {
+        for value in [
+            "Night-Piano.md", "don't know", "don'tknow", "foo_bar",
+            "Café Research", "night—piano", "hello’world"
+        ] {
+            let actual = NoteTreePresentation.transliterationKey(value, useASCIIIndexFastPath: true)
+            let expected = naturalLanguageKey(value)
+            XCTAssertEqual(actual.value, expected.value, value)
+            XCTAssertEqual(actual.tokenStarts, expected.tokenStarts, value)
+        }
     }
 
     func testSearchRejectsSymlinkedFilesAndParentDirectories() throws {
