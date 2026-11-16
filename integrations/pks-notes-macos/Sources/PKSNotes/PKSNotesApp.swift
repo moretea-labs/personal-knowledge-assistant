@@ -421,7 +421,9 @@ final class PDFCitationDropTarget {
         var candidate = contentView.hitTest(contentPoint)
         while let view = candidate {
             let textView = (view as? NSTextView)
-                ?? (view as? NSScrollView)?.documentView as? NSTextView
+                ?? (view as? NSScrollView).flatMap {
+                    editableTextView(in: $0.documentView, window: window)
+                }
             if let textView,
                textView.isEditable, !textView.isFieldEditor,
                !textView.isHiddenOrHasHiddenAncestor,
@@ -432,6 +434,22 @@ final class PDFCitationDropTarget {
                 return textView
             }
             candidate = view.superview
+        }
+        return nil
+    }
+
+    private static func editableTextView(in view: NSView?, window: NSWindow) -> NSTextView? {
+        guard let view else { return nil }
+        if let textView = view as? NSTextView,
+           textView.isEditable, !textView.isFieldEditor,
+           !textView.isHiddenOrHasHiddenAncestor,
+           textView.window === window {
+            return textView
+        }
+        for child in view.subviews {
+            if let textView = editableTextView(in: child, window: window) {
+                return textView
+            }
         }
         return nil
     }

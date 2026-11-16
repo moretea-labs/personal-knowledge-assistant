@@ -789,6 +789,24 @@ final class PDFCitationDragTests: XCTestCase {
     }
 
     @MainActor
+    func testPDFCitationDropResolvesEditorNestedInScrollDocumentWrapper() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 260),
+                              styleMask: [], backing: .buffered, defer: true)
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 260))
+        let wrapper = NSView(frame: NSRect(x: 0, y: 0, width: 380, height: 260))
+        let editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 380, height: 34))
+        editor.isEditable = true
+        editor.string = "# Reading note"
+        wrapper.addSubview(editor)
+        scroll.documentView = wrapper
+        window.contentView = scroll
+
+        let point = NSPoint(x: 140, y: 170)
+        let screenPoint = window.convertPoint(toScreen: scroll.convert(point, to: nil))
+        XCTAssertTrue(PDFCitationDropTarget.editableTextView(at: screenPoint, in: window) === editor)
+    }
+
+    @MainActor
     func testPDFCitationDropTargetKeepsTheOriginalNoteRevisionAndCaret() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 240),
