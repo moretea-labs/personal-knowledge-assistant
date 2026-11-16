@@ -33,6 +33,10 @@ enum WorkspaceSearch {
         let rootPath = root.standardizedFileURL.path
         let canonicalRootPath = root.standardizedFileURL.resolvingSymlinksInPath().path
         let rootPathPrefixLength = rootPath.count + 1
+        let foldedRootPath = fold(rootPath)
+        let foldedFolderPrefix = foldedRootPath.hasSuffix("/") ? foldedRootPath : foldedRootPath + "/"
+        let foldedQuery = fold(query)
+        let foldedTerms = terms.map(fold)
         let fuzzyQueryTerms = terms.map(fuzzyQueryCharacters)
         // Normalize the query once. NaturalLanguage tokenization and pinyin
         // transforms are substantially more expensive than literal path checks.
@@ -54,10 +58,24 @@ enum WorkspaceSearch {
                 item.url, inCanonicalRootPath: canonicalRootPath
             ) != nil else { continue }
             let path = String(itemPath.dropFirst(rootPathPrefixLength))
-            let rawPathTerms = terms.allSatisfy { contains(path, $0) }
+            // Quick Open already owns normalized folder/name keys for this exact
+            // workspace snapshot. Reuse them rather than case/diacritic-folding
+            // every path and filename again on each search keystroke.
+            let foldedPath: String
+            if entry.foldedFolder == foldedRootPath {
+                foldedPath = entry.foldedName
+            } else if entry.foldedFolder.hasPrefix(foldedFolderPrefix) {
+                let relativeFolder = entry.foldedFolder.dropFirst(foldedFolderPrefix.count)
+                foldedPath = relativeFolder.isEmpty
+                    ? entry.foldedName
+                    : String(relativeFolder) + "/" + entry.foldedName
+            } else {
+                foldedPath = fold(path)
+            }
+            let rawPathTerms = foldedTerms.allSatisfy { foldedPath.contains($0) }
             var pathFuzzyTokens: [[Character]]?
             let fuzzyPathTerms = terms.indices.allSatisfy { index in
-                guard !contains(path, terms[index]) else { return true }
+                guard !foldedPath.contains(foldedTerms[index]) else { return true }
                 guard let query = fuzzyQueryTerms[index] else { return false }
                 if pathFuzzyTokens == nil {
                     pathFuzzyTokens = fuzzyTokens(in: path)
@@ -94,7 +112,9 @@ enum WorkspaceSearch {
             }
             var contentTransliterationMatch: Range<String.Index>?
             let contentMatch = content.map { body in
-                let literalMatch = terms.allSatisfy { contains(path, $0) || contains(body, $0) }
+                let literalMatch = foldedTerms.indices.allSatisfy { index in
+                    foldedPath.contains(foldedTerms[index]) || contains(body, terms[index])
+                }
                 guard !literalMatch else { return true }
                 contentTransliterationMatch = transliteratedMatchRange(
                     in: body, query: queryTransliteration
@@ -102,11 +122,11 @@ enum WorkspaceSearch {
                 return contentTransliterationMatch != nil
             } ?? false
             guard nameMatch || contentMatch else { continue }
-            let exactNameMatch = contains(item.name, query)
-            let rawNameTerms = terms.allSatisfy { contains(item.name, $0) }
+            let exactNameMatch = entry.foldedName.contains(foldedQuery)
+            let rawNameTerms = foldedTerms.allSatisfy { entry.foldedName.contains($0) }
             var nameFuzzyTokens: [[Character]]?
             let fuzzyNameTerms = terms.indices.allSatisfy { index in
-                guard !contains(item.name, terms[index]) else { return true }
+                guard !entry.foldedName.contains(foldedTerms[index]) else { return true }
                 guard let query = fuzzyQueryTerms[index] else { return false }
                 if nameFuzzyTokens == nil {
                     nameFuzzyTokens = fuzzyTokens(in: item.name)
@@ -281,6 +301,10 @@ enum WorkspaceSearch {
 
     private static func transliterationKey(_ value: String) -> NoteTreePresentation.TransliterationKey {
         NoteTreePresentation.transliterationKey(value)
+    }
+
+    private static func fold(_ value: String) -> String {
+        value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
 
     private static func contains(_ text: String, _ query: String) -> Bool {

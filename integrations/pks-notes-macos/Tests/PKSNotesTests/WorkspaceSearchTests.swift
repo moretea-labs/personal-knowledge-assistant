@@ -66,6 +66,37 @@ final class WorkspaceSearchTests: XCTestCase {
         XCTAssertEqual(result.coverage.readFiles, 0)
     }
 
+    func testWorkspaceSearchDoesNotMatchWorkspaceRootNameFromFoldedFolderKey() throws {
+        let parent = try fixture()
+        let root = parent.appendingPathComponent("Café Research", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("Unrelated.md")
+        try "".write(to: file, atomically: true, encoding: .utf8)
+
+        let result = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "cafe", searchBodies: false
+        )
+
+        XCTAssertTrue(result.hits.isEmpty)
+    }
+
+    func testWorkspaceSearchReusesFoldedFolderAndFilenameKeys() throws {
+        let root = try fixture()
+        let folder = root.appendingPathComponent("Café Research", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("Night Piano.md")
+        try "The query belongs in the path, not the body.".write(
+            to: file, atomically: true, encoding: .utf8
+        )
+
+        let result = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "CAFE piano", searchBodies: false
+        )
+
+        XCTAssertEqual(result.hits.map(\.uri), [file.path])
+        XCTAssertEqual(result.coverage.readFiles, 0)
+    }
+
     func testPinyinAndChineseQueriesFindEachOtherInFilenamesWithoutReadingBinary() throws {
         let root = try fixture()
         let folder = root.appendingPathComponent("吉他谱", isDirectory: true)
