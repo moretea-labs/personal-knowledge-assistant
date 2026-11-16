@@ -1522,6 +1522,21 @@ enum PDFSelectionHitTesting {
     }
 }
 
+@MainActor
+final class PDFSelectionDragGestureRecognizer: NSPanGestureRecognizer {
+    private(set) var initialMouseDownEvent: NSEvent?
+
+    override func mouseDown(with event: NSEvent) {
+        initialMouseDownEvent = event
+        super.mouseDown(with: event)
+    }
+
+    override func reset() {
+        super.reset()
+        initialMouseDownEvent = nil
+    }
+}
+
 private struct PDFCanvas: NSViewRepresentable {
     let document: PDFDocument
     let url: URL
@@ -1562,12 +1577,12 @@ private struct PDFCanvas: NSViewRepresentable {
             )
         }
 
-        @objc func dragSelectedText(_ recognizer: NSPanGestureRecognizer) {
+        @objc func dragSelectedText(_ recognizer: PDFSelectionDragGestureRecognizer) {
             guard recognizer.state == .began,
                   let view, let pdf, let root,
                   let citation = controller.selectedCitationForDrag(pdf: pdf, root: root),
-                  let event = NSApp.currentEvent,
-                  event.type == .leftMouseDragged else { return }
+                  let event = recognizer.initialMouseDownEvent,
+                  event.type == .leftMouseDown else { return }
 
             let item = NSPasteboardItem()
             item.setString(citation, forType: .string)
@@ -1583,7 +1598,8 @@ private struct PDFCanvas: NSViewRepresentable {
                                      withAttributes: [.font: NSFont.systemFont(ofSize: 12),
                                                       .foregroundColor: NSColor.labelColor])
             image.unlockFocus()
-            drag.setDraggingFrame(NSRect(origin: recognizer.location(in: view),
+            let initialLocation = view.convert(event.locationInWindow, from: nil)
+            drag.setDraggingFrame(NSRect(origin: initialLocation,
                                          size: image.size), contents: image)
             view.beginDraggingSession(with: [drag], event: event, source: self)
         }
@@ -1607,8 +1623,8 @@ private struct PDFCanvas: NSViewRepresentable {
         context.coordinator.view = view
         context.coordinator.pdf = url
         context.coordinator.root = root
-        let recognizer = NSPanGestureRecognizer(target: context.coordinator,
-                                                action: #selector(Coordinator.dragSelectedText(_:)))
+        let recognizer = PDFSelectionDragGestureRecognizer(target: context.coordinator,
+                                                              action: #selector(Coordinator.dragSelectedText(_:)))
         recognizer.delegate = context.coordinator
         view.addGestureRecognizer(recognizer)
         controller.attach(
