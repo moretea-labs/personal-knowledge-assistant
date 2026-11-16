@@ -158,6 +158,21 @@ final class WorkspaceSearchTests: XCTestCase {
         XCTAssertFalse(wordStartResult.hits.contains { $0.uri == middleMatch.path })
     }
 
+    func testPinyinBodySearchLocatesLateMatchInLongMarkdown() throws {
+        let root = try fixture()
+        let file = root.appendingPathComponent("Lecture.md")
+        let body = String(repeating: "普通词条和学习记录。", count: 2_000)
+            + "最后一段专门讨论夜的钢琴曲五。"
+        try body.write(to: file, atomically: true, encoding: .utf8)
+
+        let result = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "ye de gang qin qu"
+        )
+        XCTAssertEqual(result.hits.map(\.uri), [file.path])
+        XCTAssertTrue(result.hits[0].snippet?.contains("夜的钢琴曲五") == true)
+        XCTAssertEqual(result.coverage.readFiles, 1)
+    }
+
     func testFilenameSearchAllowsOneTypoButDoesNotBroadenShortOrTwoEditTerms() throws {
         let root = try fixture()
         let file = root.appendingPathComponent("night-piano.md")

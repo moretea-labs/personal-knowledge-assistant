@@ -176,12 +176,12 @@ enum WorkspaceSearch {
         in text: String,
         query: NoteTreePresentation.TransliterationKey
     ) -> Range<String.Index>? {
-        let needle = query.value
+        let needle = Array(query.value)
         guard needle.count >= 4 else { return nil }
 
         let tokenizer = NLTokenizer(unit: .word)
         tokenizer.string = text
-        var key = ""
+        var key: [Character] = []
         var tokenStarts: [Int] = []
         var tokenEnds: [Int] = []
         var tokenRanges: [Range<String.Index>] = []
@@ -190,15 +190,16 @@ enum WorkspaceSearch {
             let token = String(text[range])
             guard let normalized = transliterationToken(token) else { continue }
             tokenStarts.append(key.count)
-            key.append(normalized)
+            key.append(contentsOf: normalized)
             tokenEnds.append(key.count)
             tokenRanges.append(range)
         }
 
         for index in tokenStarts.indices {
-            let start = key.index(key.startIndex, offsetBy: tokenStarts[index])
-            guard key[start...].hasPrefix(needle) else { continue }
-            let targetEnd = tokenStarts[index] + needle.count
+            let start = tokenStarts[index]
+            let targetEnd = start + needle.count
+            guard targetEnd <= key.count,
+                  key[start..<targetEnd].elementsEqual(needle) else { continue }
             guard let endIndex = tokenEnds.firstIndex(where: { $0 >= targetEnd }) else {
                 return nil
             }
