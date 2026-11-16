@@ -578,6 +578,44 @@ final class MindMapViewportTests: XCTestCase {
         )
     }
 
+    func testInitialOverviewFitsVisibleCardsWhenPreferredZoomFloorWouldClip() throws {
+        let nodes = [
+            MindMapNode(id: 0, depth: 0, title: "Root"),
+            MindMapNode(id: 1, depth: 1, title: "Long branch"),
+            MindMapNode(id: 82, depth: 1, title: "Short branch"),
+            MindMapNode(id: 83, depth: 2, title: "One visible child")
+        ]
+        let layout = MindMapSpatialLayout.layout(nodes)
+        let root = try XCTUnwrap(layout.placements.first { $0.parentID == nil })
+        let viewport = CGSize(width: 600, height: 645)
+        let initial = MindMapViewportGeometry.initialRootViewport(
+            root: root, visiblePlacements: layout.placements,
+            mapSize: layout.size, viewport: viewport
+        )
+        let inset = MindMapViewportGeometry.initialInset(for: viewport.width)
+        let verticalInset = MindMapViewportGeometry.initialInset(for: viewport.height)
+        XCTAssertLessThan(initial.zoom, MindMapViewportGeometry.minimumInitialZoom)
+        let cardBounds = layout.placements.map { placement in
+            let center = CGPoint(
+                x: viewport.width / 2 + initial.offset.width
+                    + (placement.center.x - layout.size.width / 2) * initial.zoom,
+                y: viewport.height / 2 + initial.offset.height
+                    + (placement.center.y - layout.size.height / 2) * initial.zoom
+            )
+            return CGRect(
+                x: center.x - placement.size.width * initial.zoom / 2,
+                y: center.y - placement.size.height * initial.zoom / 2,
+                width: placement.size.width * initial.zoom,
+                height: placement.size.height * initial.zoom
+            )
+        }
+        XCTAssertTrue(cardBounds.allSatisfy {
+            $0.minX >= inset - 0.5 && $0.maxX <= viewport.width - inset + 0.5
+                && $0.minY >= verticalInset - 0.5
+                && $0.maxY <= viewport.height - verticalInset + 0.5
+        })
+    }
+
     func testSeveralModerateBranchesCollapseEnoughToFitOpeningViewport() throws {
         var nodes = [MindMapNode(id: 0, depth: 0, title: "Root")]
         var nextID = 1

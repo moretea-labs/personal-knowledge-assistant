@@ -3,6 +3,7 @@ import SwiftUI
 
 /// Geometry only: the Markdown layout is never rewritten for viewport moves.
 enum MindMapViewportGeometry {
+    // Used by initial disclosure; exact viewport fitting may zoom below this preferred floor.
     static let minimumInitialZoom: CGFloat = 0.68
 
     static func initialInset(for dimension: CGFloat) -> CGFloat {
@@ -176,13 +177,9 @@ enum MindMapViewportGeometry {
         let verticalInset = Self.initialInset(for: viewport.height)
         let availableWidth = max(1, viewport.width - horizontalInset * 2)
         let availableHeight = max(1, viewport.height - verticalInset * 2)
-        let fitZoom = min(
-            1,
-            max(Self.minimumInitialZoom, min(
-                availableWidth / contentWidth,
-                availableHeight / contentHeight
-            ))
-        )
+        let fitZoom = min(1, max(0.0001, min(
+            availableWidth / contentWidth, availableHeight / contentHeight
+        )))
 
         let minimumRootX = horizontalInset + (root.center.x - contentBounds.minX) * fitZoom
         let maximumRootX = viewport.width - horizontalInset
