@@ -949,8 +949,8 @@ final class PDFReaderController: ObservableObject {
         var entries: [PDFOutlineEntry] = []
         // PDF bookmarks come from untrusted documents and can be deeply nested.
         // Preserve recursive depth-first order without consuming the call stack.
-        var pending: [(parent: PDFOutline, nextChild: Int, depth: Int, path: String)] = [
-            (parent: root, nextChild: 0, depth: 0, path: "outline")
+        var pending: [(parent: PDFOutline, nextChild: Int, depth: Int, pathIndex: Int?)] = [
+            (parent: root, nextChild: 0, depth: 0, pathIndex: nil)
         ]
 
         while !pending.isEmpty {
@@ -966,7 +966,6 @@ final class PDFReaderController: ObservableObject {
             pending[frameIndex].nextChild += 1
             guard let child = frame.parent.child(at: index) else { continue }
 
-            let childPath = frame.path + ".\(index)"
             var descendantDepth = frame.depth
             if let destination = child.destination,
                let page = destination.page {
@@ -974,6 +973,11 @@ final class PDFReaderController: ObservableObject {
                 let title = child.label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 // PDFKit can return an out-of-range sentinel for another document.
                 if !title.isEmpty, (0..<document.pageCount).contains(pageIndex) {
+                    // Store only one path component per stack frame; materialize
+                    // the stable ID only for navigable entries, not skipped groups.
+                    let childPath = "outline"
+                        + pending.compactMap { $0.pathIndex }.map { ".\($0)" }.joined()
+                        + ".\(index)"
                     entries.append(.init(
                         id: childPath, title: title,
                         depth: frame.depth, pageIndex: pageIndex
@@ -984,7 +988,7 @@ final class PDFReaderController: ObservableObject {
             }
             pending.append((
                 parent: child, nextChild: 0,
-                depth: descendantDepth, path: childPath
+                depth: descendantDepth, pathIndex: index
             ))
         }
         return entries
@@ -1043,7 +1047,7 @@ struct NativePDFPreview: View {
                     } else if root != nil && controller.selectionNeedsPageOnlyReference {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle")
-                            Text(language.text("This PDF selection cannot be linked precisely. Only a page link will be saved; the selected text will be omitted. Select a smaller passage on one page to save the quote with precise highlighting."))
+                            Text(language.text("This PDF selection cannot be highlighted precisely. The selected quote and a link to its first page will still be saved. Select a smaller passage on one page to enable precise highlighting."))
                             Spacer()
                         }
                         .font(.caption)
