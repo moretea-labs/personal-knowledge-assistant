@@ -329,6 +329,24 @@ enum MarkdownShortcut {
 }
 
 enum MarkdownNativeCommand {
+    /// Reset old-document undo only while the editor still holds the same draft.
+    /// A deferred reset must never erase undo for a user's first keystroke/IME edit.
+    @discardableResult
+    static func resetUndoBaselineIfUnchanged(
+        in textView: NSTextView,
+        expectedText: String,
+        currentText: String,
+        expectedRevision: UInt64,
+        currentRevision: UInt64
+    ) -> Bool {
+        guard expectedRevision == currentRevision,
+              currentText == expectedText,
+              textView.string == expectedText,
+              !textView.hasMarkedText() else { return false }
+        textView.undoManager?.removeAllActions()
+        return true
+    }
+
     static func activeTextView() -> NSTextView? {
         let responder = (NSApp.keyWindow ?? NSApp.mainWindow)?.firstResponder
         guard let textView = responder as? NSTextView,
@@ -3196,12 +3214,21 @@ struct NotesWindow: View {
     /// A newly mounted/reloaded TextEditor must not inherit undo operations
     /// recorded while its visible string represented another draft/view state.
     private func resetNativeEditorUndoBaseline() {
+        // Capture the current document before waiting for SwiftUI to mount NSTextView.
+        // A fast first edit or note switch invalidates the pending undo reset.
+        guard let note = model.selected, !model.loadingNote else { return }
+        let revision = model.draftRevision
+        let text = model.draft
         Task { @MainActor in
             await Task.yield()
             try? await Task.sleep(for: .milliseconds(60))
-            guard let textView = markdownTextView(in: NSApp.keyWindow?.contentView) else { return }
+            guard !Task.isCancelled, model.selected == note, !model.loadingNote,
+                  let textView = markdownTextView(in: NSApp.keyWindow?.contentView) else { return }
             NotesGeometry.configureMarkdownEditorTextView(textView)
-            textView.undoManager?.removeAllActions()
+            MarkdownNativeCommand.resetUndoBaselineIfUnchanged(
+                in: textView, expectedText: text, currentText: model.draft,
+                expectedRevision: revision, currentRevision: model.draftRevision
+            )
         }
     }
 

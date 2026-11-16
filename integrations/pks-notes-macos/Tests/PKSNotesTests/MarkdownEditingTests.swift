@@ -314,6 +314,66 @@ extension MarkdownEditingTests {
     }
 
     @MainActor
+    func testDeferredEditorUndoResetPreservesNewUserEdit() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),
+            styleMask: [], backing: .buffered, defer: true
+        )
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 240))
+        textView.allowsUndo = true
+        window.contentView = textView
+        window.makeFirstResponder(textView)
+        textView.string = "Draft"
+        textView.undoManager?.removeAllActions()
+
+        // The reset was scheduled for "Draft", but the user typed before it ran.
+        XCTAssertTrue(MarkdownNativeCommand.insertText(" updated", at: 5, in: textView))
+        let undo = try XCTUnwrap(textView.undoManager)
+        XCTAssertTrue(undo.canUndo)
+        XCTAssertFalse(MarkdownNativeCommand.resetUndoBaselineIfUnchanged(
+            in: textView, expectedText: "Draft", currentText: textView.string,
+            expectedRevision: 8, currentRevision: 9
+        ))
+        XCTAssertTrue(undo.canUndo)
+        undo.undo()
+        XCTAssertEqual(textView.string, "Draft")
+
+        // Even if SwiftUI has not yet published a new revision, native text wins.
+        XCTAssertTrue(MarkdownNativeCommand.insertText("!", at: 5, in: textView))
+        XCTAssertFalse(MarkdownNativeCommand.resetUndoBaselineIfUnchanged(
+            in: textView, expectedText: "Draft", currentText: "Draft",
+            expectedRevision: 8, currentRevision: 8
+        ))
+        XCTAssertTrue(undo.canUndo)
+        undo.undo()
+        XCTAssertEqual(textView.string, "Draft")
+    }
+
+    @MainActor
+    func testDeferredEditorUndoResetClearsOnlyUnchangedBaseline() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),
+            styleMask: [], backing: .buffered, defer: true
+        )
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 240))
+        textView.allowsUndo = true
+        window.contentView = textView
+        window.makeFirstResponder(textView)
+        textView.string = "Previous"
+        textView.undoManager?.removeAllActions()
+        XCTAssertTrue(MarkdownNativeCommand.insertText(" note", at: 8, in: textView))
+        let undo = try XCTUnwrap(textView.undoManager)
+        XCTAssertTrue(undo.canUndo)
+
+        // The new note was mounted unchanged; the old undo action must not survive.
+        XCTAssertTrue(MarkdownNativeCommand.resetUndoBaselineIfUnchanged(
+            in: textView, expectedText: "Previous note", currentText: "Previous note",
+            expectedRevision: 20, currentRevision: 20
+        ))
+        XCTAssertFalse(undo.canUndo)
+    }
+
+    @MainActor
     func testOrderedListNativeCommandUsesOneStepAppKitUndo() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),
