@@ -352,7 +352,7 @@ enum MindMapSpatialLayout {
     static func initialCollapsedBranches(
         nodes: [MindMapNode], layout: MindMapLayoutSnapshot, viewport: CGSize
     ) -> Set<Int> {
-        guard viewport.height > 0,
+        guard viewport.width > 0, viewport.height > 0,
               let root = layout.placements.first(where: { $0.parentID == nil }),
               let rootIndex = nodes.firstIndex(where: { $0.id == root.id }) else { return [] }
         let branches = layout.placements.filter { $0.parentID == root.id }
@@ -363,7 +363,7 @@ enum MindMapSpatialLayout {
         // viewport. Keep short siblings expanded beside a tall collapsed branch.
         let placementsByID = Dictionary(uniqueKeysWithValues: layout.placements.map { ($0.id, $0) })
         var currentBranchID: Int?
-        var subtreeBounds: [Int: ClosedRange<CGFloat>] = [:]
+        var subtreeRects: [Int: CGRect] = [:]
         var rootPlacements = [root]
         for node in nodes.dropFirst(rootIndex + 1) {
             if node.depth == 0 { break }
@@ -371,20 +371,35 @@ enum MindMapSpatialLayout {
             guard let branchID = currentBranchID,
                   let placement = placementsByID[node.id] else { continue }
             rootPlacements.append(placement)
-            let nodeTop = placement.center.y - placement.size.height / 2
-            let nodeBottom = placement.center.y + placement.size.height / 2
-            if let bounds = subtreeBounds[branchID] {
-                subtreeBounds[branchID] = min(bounds.lowerBound, nodeTop)...max(bounds.upperBound, nodeBottom)
+            let nodeBounds = CGRect(
+                x: placement.center.x - placement.size.width / 2,
+                y: placement.center.y - placement.size.height / 2,
+                width: placement.size.width,
+                height: placement.size.height
+            )
+            if let bounds = subtreeRects[branchID] {
+                subtreeRects[branchID] = bounds.union(nodeBounds)
             } else {
-                subtreeBounds[branchID] = nodeTop...nodeBottom
+                subtreeRects[branchID] = nodeBounds
             }
+
         }
 
         var collapsed = Set(expandableBranches.compactMap { branch -> Int? in
-            guard let bounds = subtreeBounds[branch.id],
-                  bounds.upperBound - bounds.lowerBound > threshold else { return nil }
+            guard let bounds = subtreeRects[branch.id],
+                  bounds.height > threshold else { return nil }
             return branch.id
         })
+
+        // Deep horizontal subtrees can shrink every card to an unreadable scale
+        // even when their vertical span is modest. Collapse only branches that
+        // extend well beyond the opening viewport; keep shallow siblings visible.
+        let maximumReadableBranchWidth = viewport.width * 1.5
+        for branch in expandableBranches {
+            guard let bounds = subtreeRects[branch.id],
+                  bounds.width > maximumReadableBranchWidth else { continue }
+            collapsed.insert(branch.id)
+        }
 
         // Several individually moderate branches can still overflow together.
         // Estimate the post-collapse height by subtracting each collapsed
@@ -406,21 +421,15 @@ enum MindMapSpatialLayout {
         )
         var estimatedContentHeight = contentBounds.height
         for branch in expandableBranches where collapsed.contains(branch.id) {
-            guard let bounds = subtreeBounds[branch.id] else { continue }
-            estimatedContentHeight -= max(
-                0,
-                bounds.upperBound - bounds.lowerBound - branch.size.height
-            )
+            guard let bounds = subtreeRects[branch.id] else { continue }
+            estimatedContentHeight -= max(0, bounds.height - branch.size.height)
         }
 
         let additionalCandidates = expandableBranches.enumerated().compactMap {
             index, branch -> (id: Int, reduction: CGFloat, distance: CGFloat, order: Int)? in
             guard !collapsed.contains(branch.id),
-                  let bounds = subtreeBounds[branch.id] else { return nil }
-            let reduction = max(
-                0,
-                bounds.upperBound - bounds.lowerBound - branch.size.height
-            )
+                  let bounds = subtreeRects[branch.id] else { return nil }
+            let reduction = max(0, bounds.height - branch.size.height)
             guard reduction > 0 else { return nil }
             return (
                 id: branch.id,

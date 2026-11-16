@@ -616,6 +616,50 @@ final class MindMapViewportTests: XCTestCase {
         })
     }
 
+    func testDeepHorizontalBranchCollapsesWithoutHidingShortSiblingChild() throws {
+        let nodes = [
+            MindMapNode(id: 0, depth: 0, title: "Root"),
+            MindMapNode(id: 1, depth: 1, title: "Deep branch"),
+            MindMapNode(id: 2, depth: 2, title: "Level two"),
+            MindMapNode(id: 3, depth: 3, title: "Level three"),
+            MindMapNode(id: 4, depth: 4, title: "Level four"),
+            MindMapNode(id: 5, depth: 5, title: "Level five"),
+            MindMapNode(id: 82, depth: 1, title: "Short branch"),
+            MindMapNode(id: 83, depth: 2, title: "Visible child")
+        ]
+        let viewport = CGSize(width: 600, height: 645)
+        let expanded = MindMapSpatialLayout.layout(nodes)
+        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
+            nodes: nodes, layout: expanded, viewport: viewport
+        )
+        XCTAssertEqual(collapsed, Set([1]))
+
+        var hiddenBelow: Int?
+        let exposed = nodes.filter { node in
+            if let depth = hiddenBelow {
+                if node.depth > depth { return false }
+                hiddenBelow = nil
+            }
+            if collapsed.contains(node.id) { hiddenBelow = node.depth }
+            return true
+        }
+        XCTAssertEqual(exposed.map(\.id), [0, 1, 82, 83])
+
+        let overview = MindMapSpatialLayout.layout(exposed)
+        let root = try XCTUnwrap(overview.placements.first { $0.parentID == nil })
+        let initial = MindMapViewportGeometry.initialRootViewport(
+            root: root, visiblePlacements: overview.placements,
+            mapSize: overview.size, viewport: viewport
+        )
+        XCTAssertEqual(
+            MindMapViewportGeometry.visibleNodeIDs(
+                in: overview, viewport: viewport,
+                offset: initial.offset, zoom: initial.zoom, overscan: 0
+            ),
+            Set(exposed.map(\.id))
+        )
+    }
+
     func testSeveralModerateBranchesCollapseEnoughToFitOpeningViewport() throws {
         var nodes = [MindMapNode(id: 0, depth: 0, title: "Root")]
         var nextID = 1
