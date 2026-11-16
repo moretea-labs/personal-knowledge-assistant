@@ -180,6 +180,26 @@ enum WorkspaceSearch {
         NoteTreePresentation.transliterationToken(token)
     }
 
+    /// A conservative ASCII-only prefilter. Removing separators can introduce
+    /// false positives, but cannot hide a match produced by NaturalLanguage's
+    /// word-token transliteration; possible matches still use the canonical path.
+    static func asciiTransliterationMayContain(_ text: String, query: String) -> Bool? {
+        guard !query.isEmpty, query.utf8.allSatisfy({ $0 < 0x80 }) else { return nil }
+        var normalized = [UInt8]()
+        normalized.reserveCapacity(text.utf8.count)
+        for byte in text.utf8 {
+            guard byte < 0x80 else { return nil }
+            if byte >= 0x30 && byte <= 0x39 {
+                normalized.append(byte)
+            } else if byte >= 0x41 && byte <= 0x5A {
+                normalized.append(byte + 0x20)
+            } else if byte >= 0x61 && byte <= 0x7A {
+                normalized.append(byte)
+            }
+        }
+        return String(decoding: normalized, as: UTF8.self).contains(query)
+    }
+
     /// Returns the source range for a word-start pinyin match in the original text.
     private static func transliteratedMatchRange(
         in text: String,
@@ -187,6 +207,9 @@ enum WorkspaceSearch {
     ) -> Range<String.Index>? {
         let needle = Array(query.value)
         guard needle.count >= 4 else { return nil }
+        if asciiTransliterationMayContain(text, query: query.value) == false {
+            return nil
+        }
 
         let tokenizer = NLTokenizer(unit: .word)
         tokenizer.string = text

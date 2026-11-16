@@ -41,6 +41,36 @@ final class WorkspaceSearchTests: XCTestCase {
         }
     }
 
+    func testASCIITransliterationPrefilterNeverRejectsNaturalLanguageMatches() {
+        let cases = [
+            ("Night-Piano.md", "night piano"),
+            ("don't stop", "dontstop"),
+            ("foo_bar", "foobar"),
+            ("hello.world", "helloworld"),
+            ("Unrelated body", "unrelatedbody")
+        ]
+        for (text, query) in cases {
+            let candidate = naturalLanguageKey(text)
+            let needle = naturalLanguageKey(query).value
+            let naturalLanguageMatches = candidate.tokenStarts.contains { offset in
+                let start = candidate.value.index(candidate.value.startIndex, offsetBy: offset)
+                return candidate.value[start...].hasPrefix(needle)
+            }
+            if naturalLanguageMatches {
+                XCTAssertEqual(
+                    WorkspaceSearch.asciiTransliterationMayContain(text, query: needle),
+                    true,
+                    "\(text) should not be rejected for \(query)"
+                )
+            }
+        }
+        XCTAssertEqual(
+            WorkspaceSearch.asciiTransliterationMayContain("Unrelated body", query: "yedegangqinqu"),
+            false
+        )
+        XCTAssertNil(WorkspaceSearch.asciiTransliterationMayContain("夜的钢琴曲", query: "yedegangqinqu"))
+    }
+
     func testSearchRejectsSymlinkedFilesAndParentDirectories() throws {
         let root = try fixture()
         let outside = root.deletingLastPathComponent()
