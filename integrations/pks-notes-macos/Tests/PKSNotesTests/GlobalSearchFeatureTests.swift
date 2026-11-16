@@ -218,6 +218,39 @@ final class GlobalSearchFeatureTests: XCTestCase {
         )
     }
 
+    func testSpotlightMatchRanksAreReusedByMergeAndRecomputedForANewQuery() {
+        let direct = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Other/Research-plan.md"),
+            title: "Research-plan.md", isFolder: false
+        )
+        let body = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Other/body.pdf"),
+            title: "body.pdf", isFolder: false, contentMatch: true, relevance: 0.99
+        )
+
+        let spotlight = GlobalSpotlightLookup.rank([body, direct], for: "Research")
+        XCTAssertEqual(spotlight.map(\.title), ["Research-plan.md", "body.pdf"])
+        XCTAssertEqual(spotlight[0].searchRanking?.query, "research")
+        XCTAssertEqual(spotlight[0].searchRanking?.mergeWeight, 3)
+        XCTAssertEqual(spotlight[1].searchRanking?.mergeWeight, 13)
+        XCTAssertTrue(spotlight[1].spotlightContentMatch)
+
+        let merged = GlobalSearchRanker.merge(
+            apps: [], documents: [], spotlight: spotlight, query: "Research"
+        )
+        XCTAssertEqual(merged.map(\.title), ["Research-plan.md", "body.pdf"])
+        XCTAssertEqual(merged[1].searchRanking?.query, "research")
+        XCTAssertTrue(merged[1].spotlightContentMatch)
+
+        // A cached rank is valid only for its normalized query.
+        let nextQuery = GlobalSearchRanker.merge(
+            apps: [], documents: [], spotlight: spotlight, query: "body"
+        )
+        XCTAssertEqual(nextQuery.map(\.title), ["body.pdf", "Research-plan.md"])
+        XCTAssertEqual(nextQuery[0].searchRanking?.query, "body")
+        XCTAssertFalse(nextQuery[0].spotlightContentMatch)
+    }
+
     func testDirectNameMatchesOutrankGlobalSpotlightBodyMatches() {
         let direct = GlobalSearchItem.spotlight(
             URL(fileURLWithPath: "/Users/test/Documents/OpenClaw-guide.md"),

@@ -40,6 +40,14 @@ enum GlobalSearchShortcut: String, CaseIterable, Identifiable {
     }
 }
 
+struct GlobalSearchRanking: Sendable {
+    let query: String
+    let spotlightNameRank: Int
+    let spotlightPathRank: Int
+    let mergeWeight: Int
+    let contentMatch: Bool
+}
+
 struct GlobalSearchItem: Identifiable, Sendable {
     enum Kind: Sendable {
         case application
@@ -58,19 +66,23 @@ struct GlobalSearchItem: Identifiable, Sendable {
     let isRelated: Bool
     let spotlightContentMatch: Bool
     let spotlightRelevance: Double
+    // One query-scoped rank is reused by Spotlight top-N and final provider merge.
+    let searchRanking: GlobalSearchRanking?
 
     static func application(_ url: URL, title: String) -> GlobalSearchItem {
         .init(id: "app:" + url.path, kind: .application, title: title,
               subtitle: url.deletingLastPathComponent().path, url: url,
               snippet: nil, sourceHit: nil, isRelated: false,
-              spotlightContentMatch: false, spotlightRelevance: 0)
+              spotlightContentMatch: false, spotlightRelevance: 0,
+              searchRanking: nil)
     }
 
     static func file(_ hit: SearchHit, url: URL, isRelated: Bool = false) -> GlobalSearchItem {
         .init(id: "file:" + url.path, kind: .file, title: hit.title,
               subtitle: url.deletingLastPathComponent().path, url: url,
               snippet: hit.snippet, sourceHit: hit, isRelated: isRelated,
-              spotlightContentMatch: false, spotlightRelevance: 0)
+              spotlightContentMatch: false, spotlightRelevance: 0,
+              searchRanking: nil)
     }
 
     static func spotlight(_ url: URL, title: String, isFolder: Bool,
@@ -79,14 +91,22 @@ struct GlobalSearchItem: Identifiable, Sendable {
               kind: isFolder ? .folder : .file, title: title,
               subtitle: url.deletingLastPathComponent().path, url: url,
               snippet: nil, sourceHit: nil, isRelated: false,
-              spotlightContentMatch: contentMatch, spotlightRelevance: relevance)
+              spotlightContentMatch: contentMatch, spotlightRelevance: relevance,
+              searchRanking: nil)
     }
 
     func withSnippet(_ snippet: String) -> GlobalSearchItem {
         .init(id: id, kind: kind, title: title, subtitle: subtitle, url: url,
               snippet: snippet, sourceHit: sourceHit, isRelated: isRelated,
               spotlightContentMatch: spotlightContentMatch,
-              spotlightRelevance: spotlightRelevance)
+              spotlightRelevance: spotlightRelevance, searchRanking: searchRanking)
+    }
+
+    func withRanking(_ ranking: GlobalSearchRanking) -> GlobalSearchItem {
+        .init(id: id, kind: kind, title: title, subtitle: subtitle, url: url,
+              snippet: snippet, sourceHit: sourceHit, isRelated: isRelated,
+              spotlightContentMatch: ranking.contentMatch,
+              spotlightRelevance: spotlightRelevance, searchRanking: ranking)
     }
 
     static func isLeafspanWorkspaceDocument(_ item: GlobalSearchItem, in root: URL?) -> Bool {
@@ -221,6 +241,61 @@ enum GlobalSearchRanker {
         return 3
     }
 
+    static func ranking(for item: GlobalSearchItem, query: String) -> GlobalSearchRanking {
+        let rawQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let term = rawQuery.folding(
+            options: [.caseInsensitive, .diacriticInsensitive], locale: .current
+        )
+        let name = item.title.folding(
+            options: [.caseInsensitive, .diacriticInsensitive], locale: .current
+        )
+
+        if item.kind == .application {
+            let weight = name == term ? 0
+                : name.hasPrefix(term) ? 2
+                : name.contains(term) ? 4 : 13
+            return GlobalSearchRanking(
+                query: term, spotlightNameRank: 5, spotlightPathRank: 5,
+                mergeWeight: weight, contentMatch: false
+            )
+        }
+
+        let nameRank: Int
+        if name == term { nameRank = 0 }
+        else if name.hasPrefix(term) { nameRank = 1 }
+        else if name.contains(term) { nameRank = 2 }
+        else if WorkspaceSearch.transliteratedContains(item.title, term) { nameRank = 3 }
+        else if WorkspaceSearch.fuzzyContains(item.title, term) { nameRank = 4 }
+        else { nameRank = 5 }
+
+        let rawPathRank = pathMatchRank(url: item.url, for: term)
+        let folder = item.url.deletingLastPathComponent().path
+        let pathRank = rawPathRank < 3 ? rawPathRank
+            : WorkspaceSearch.transliteratedContains(folder, term) ? 3
+            : WorkspaceSearch.fuzzyContains(folder, term) ? 4 : 5
+
+        let mergeWeight: Int
+        if nameRank == 0 { mergeWeight = 1 }
+        else if nameRank == 1 { mergeWeight = 3 }
+        else if nameRank == 2 { mergeWeight = 5 }
+        else if pathRank < 3 { mergeWeight = 6 + pathRank }
+        else if nameRank == 3 { mergeWeight = 9 }
+        else if pathRank == 3 { mergeWeight = 10 }
+        else if nameRank == 4 { mergeWeight = 11 }
+        else if pathRank == 4 { mergeWeight = 12 }
+        else { mergeWeight = item.isRelated ? 14 : 13 }
+
+        // Spotlight's content badge is true only when the filename and every
+        // direct/transliterated/fuzzy path/name signal failed.
+        let contentMatch = item.sourceHit == nil
+            && !item.title.localizedStandardContains(rawQuery)
+            && nameRank == 5 && pathRank == 5
+        return GlobalSearchRanking(
+            query: term, spotlightNameRank: nameRank, spotlightPathRank: pathRank,
+            mergeWeight: mergeWeight, contentMatch: contentMatch
+        )
+    }
+
     static func merge(apps: [GlobalSearchItem], documents: [GlobalSearchItem],
                       spotlight: [GlobalSearchItem],
                       related: [GlobalSearchItem] = [], query: String,
@@ -231,35 +306,19 @@ enum GlobalSearchRanker {
         let unique = (apps + documents + spotlight + related).filter {
             seen.insert($0.url.standardizedFileURL.path).inserted
         }
-        func weight(_ item: GlobalSearchItem) -> Int {
-            let name = item.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            let isApp = item.kind == .application
-            if name == term { return isApp ? 0 : 1 }
-            if name.hasPrefix(term) { return isApp ? 2 : 3 }
-            if name.contains(term) { return isApp ? 4 : 5 }
-            if !isApp {
-                let pathRank = pathMatchRank(url: item.url, for: term)
-                if pathRank < 3 { return 6 + pathRank }
-            }
-            if !isApp, WorkspaceSearch.transliteratedContains(item.title, term) { return 9 }
-            if !isApp, WorkspaceSearch.transliteratedContains(
-                item.url.deletingLastPathComponent().path, term
-            ) { return 10 }
-            if !isApp, WorkspaceSearch.fuzzyContains(item.title, term) { return 11 }
-            if !isApp, WorkspaceSearch.fuzzyContains(
-                item.url.deletingLastPathComponent().path, term
-            ) { return 12 }
-            if item.isRelated { return 14 }
-            return 13 // body-only PKS/Spotlight match
-        }
         // Filename, path, transliteration and typo ranking are comparatively
         // expensive. Keep them out of the sort comparator: Swift may invoke
         // that comparator O(n log n) times for the same candidate.
+        // Spotlight results arrive with the same query-scoped rank used by its
+        // top-N projection. Reuse it instead of repeating transliteration and
+        // fuzzy path/name matching during the final provider merge.
         let ranked = unique.map { item in
-            (item: item, weight: weight(item))
+            let cached = item.searchRanking
+            let ranking = cached?.query == term ? cached! : Self.ranking(for: item, query: term)
+            return (item: item.withRanking(ranking), ranking: ranking)
         }.sorted { left, right in
-            let a = left.weight
-            let b = right.weight
+            let a = left.ranking.mergeWeight
+            let b = right.ranking.mergeWeight
             if a != b { return a < b }
             if a >= 6 {
                 if let leftHit = left.item.sourceHit, let rightHit = right.item.sourceHit {

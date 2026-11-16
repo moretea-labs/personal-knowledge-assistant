@@ -45,24 +45,11 @@ final class GlobalSpotlightLookup {
                     let name = result.value(forAttribute: NSMetadataItemFSNameKey) as? String
                         ?? url.lastPathComponent
                     let type = result.value(forAttribute: NSMetadataItemContentTypeKey) as? String
-                    let pathMatch = GlobalSearchRanker.pathMatchRank(url: url, for: term) < 3
-                    let transliteratedNameMatch = WorkspaceSearch.transliteratedContains(name, term)
-                    let transliteratedPathMatch = WorkspaceSearch.transliteratedContains(
-                        url.deletingLastPathComponent().path, term
-                    )
-                    let fuzzyNameMatch = WorkspaceSearch.fuzzyContains(name, term)
-                    let fuzzyPathMatch = WorkspaceSearch.fuzzyContains(
-                        url.deletingLastPathComponent().path, term
-                    )
-                    let contentOnly = !name.localizedStandardContains(term)
-                        && !pathMatch && !transliteratedNameMatch && !transliteratedPathMatch
-                        && !fuzzyNameMatch && !fuzzyPathMatch
                     let relevance = (result.value(
                         forAttribute: NSMetadataQueryResultContentRelevanceAttribute
                     ) as? NSNumber)?.doubleValue ?? 0
                     return GlobalSearchItem.spotlight(url, title: name,
                                                       isFolder: type == "public.folder",
-                                                      contentMatch: contentOnly,
                                                       relevance: relevance)
                 }
                 let ranked = GlobalSpotlightLookup.rank(hits, for: term)
@@ -145,34 +132,18 @@ final class GlobalSpotlightLookup {
 
     /// Deterministic top-N projection; no local catalog or alternate index.
     nonisolated static func rank(_ entries: [GlobalSearchItem], for term: String, limit: Int = 35) -> [GlobalSearchItem] {
-        let q = term.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-        func nameRank(_ item: GlobalSearchItem) -> Int {
-            let name = item.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            if name == q { return 0 }
-            if name.hasPrefix(q) { return 1 }
-            if name.contains(q) { return 2 }
-            if WorkspaceSearch.transliteratedContains(item.title, q) { return 3 }
-            if WorkspaceSearch.fuzzyContains(item.title, q) { return 4 }
-            return 5
-        }
-        // Spotlight can return thousands of candidates. Compute the
-        // transliteration/fuzzy/name/path ranks once per item, not once for
-        // every pair compared by the sort implementation.
+        // Derive all query-specific matching once. The same cached result
+        // drives Spotlight top-N, the content-match badge and unified merge.
         let ranked = entries.map { item in
-            let itemNameRank = nameRank(item)
-            let rawPathRank = GlobalSearchRanker.pathMatchRank(url: item.url, for: q)
-            let folder = item.url.deletingLastPathComponent().path
-            let itemPathRank = rawPathRank < 3 ? rawPathRank
-                : WorkspaceSearch.transliteratedContains(folder, q) ? 3
-                : WorkspaceSearch.fuzzyContains(folder, q) ? 4 : 5
-            return (item: item, nameRank: itemNameRank, pathRank: itemPathRank)
+            let ranking = GlobalSearchRanker.ranking(for: item, query: term)
+            return (item: item.withRanking(ranking), ranking: ranking)
         }
         return ranked.sorted { left, right in
-            let leftName = left.nameRank
-            let rightName = right.nameRank
+            let leftName = left.ranking.spotlightNameRank
+            let rightName = right.ranking.spotlightNameRank
             if leftName != rightName { return leftName < rightName }
-            let leftPath = left.pathRank
-            let rightPath = right.pathRank
+            let leftPath = left.ranking.spotlightPathRank
+            let rightPath = right.ranking.spotlightPathRank
             if leftPath != rightPath { return leftPath < rightPath }
 
             if leftName == 5, leftPath == 5,
