@@ -61,6 +61,26 @@ final class WorkspaceSearchTests: XCTestCase {
         XCTAssertEqual(chineseQuery.coverage.readFiles, 0)
     }
 
+    func testPinyinFilenameMatchRanksAheadOfPinyinFolderMatch() throws {
+        let root = try fixture()
+        let folder = root.appendingPathComponent("夜的钢琴曲", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let nested = folder.appendingPathComponent("notes.md")
+        let filename = root.appendingPathComponent("夜的钢琴曲.md")
+        try "# Nested note".write(to: nested, atomically: true, encoding: .utf8)
+        try "# Filename match".write(to: filename, atomically: true, encoding: .utf8)
+
+        let result = WorkspaceSearch.search(
+            entries: entries(root), root: root, query: "ye de gang qin qu",
+            searchBodies: false
+        )
+        let paths = result.hits.map(\.uri)
+        XCTAssertLessThan(
+            try XCTUnwrap(paths.firstIndex(of: filename.path)),
+            try XCTUnwrap(paths.firstIndex(of: nested.path))
+        )
+    }
+
     func testPinyinFilenameSearchSkipsBodyReadWhenBodySearchIsEnabled() throws {
         let root = try fixture()
         let file = root.appendingPathComponent("夜的钢琴曲五.md")

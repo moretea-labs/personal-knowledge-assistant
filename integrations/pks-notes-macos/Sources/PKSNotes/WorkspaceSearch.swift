@@ -42,6 +42,10 @@ enum WorkspaceSearch {
     ) -> Result {
         let terms = query.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !terms.isEmpty, limits.results > 0 else { return Result() }
+        // Normalize the query once. NaturalLanguage tokenization and pinyin
+        // transforms are substantially more expensive than literal path checks.
+        let queryTransliteration = transliterationKey(query)
+        let canMatchPinyin = queryTransliteration.value.count >= 4
         var result = Result()
         var ranked: [(hit: SearchHit, rank: Int, order: Int)] = []
         var remainingBytes = max(0, limits.totalBytes)
@@ -53,9 +57,13 @@ enum WorkspaceSearch {
             guard WorkspaceFiles.contains(item.url, in: root),
                   WorkspaceFiles.fileStamp(item.url) != nil else { continue }
             let path = String(item.url.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1))
-            let nameMatch = terms.allSatisfy {
+            let rawPathTerms = terms.allSatisfy { contains(path, $0) }
+            let fuzzyPathTerms = terms.allSatisfy {
                 contains(path, $0) || fuzzyContains(path, $0)
-            } || transliteratedContains(path, query)
+            }
+            let pathPinyinMatch = canMatchPinyin && !rawPathTerms
+                && matchesTransliteration(transliterationKey(path), query: queryTransliteration)
+            let nameMatch = fuzzyPathTerms || pathPinyinMatch
             var content: String?
             if searchBodies, !nameMatch, item.isMarkdown {
                 if item.url == draftURL, let draft {
@@ -81,24 +89,26 @@ enum WorkspaceSearch {
             let contentMatch = content.map { body in
                 let literalMatch = terms.allSatisfy { contains(path, $0) || contains(body, $0) }
                 guard !literalMatch else { return true }
-                contentTransliterationMatch = transliteratedMatchRange(in: body, query: query)
+                contentTransliterationMatch = transliteratedMatchRange(
+                    in: body, query: queryTransliteration
+                )
                 return contentTransliterationMatch != nil
             } ?? false
             guard nameMatch || contentMatch else { continue }
+            let exactNameMatch = contains(item.name, query)
             let rawNameTerms = terms.allSatisfy { contains(item.name, $0) }
-            let rawPathTerms = terms.allSatisfy { contains(path, $0) }
             let fuzzyNameTerms = terms.allSatisfy {
                 contains(item.name, $0) || fuzzyContains(item.name, $0)
             }
-            let fuzzyPathTerms = terms.allSatisfy {
-                contains(path, $0) || fuzzyContains(path, $0)
-            }
+            let namePinyinMatch = canMatchPinyin
+                && !exactNameMatch && !rawNameTerms && !rawPathTerms
+                && matchesTransliteration(transliterationKey(item.name), query: queryTransliteration)
             let rank: Int
-            if contains(item.name, query) { rank = 0 }
+            if exactNameMatch { rank = 0 }
             else if rawNameTerms { rank = 1 }
             else if rawPathTerms { rank = 2 }
-            else if transliteratedContains(item.name, query) { rank = 3 }
-            else if transliteratedContains(path, query) { rank = 4 }
+            else if namePinyinMatch { rank = 3 }
+            else if pathPinyinMatch { rank = 4 }
             else if fuzzyNameTerms { rank = 5 }
             else if fuzzyPathTerms { rank = 6 }
             else { rank = 7 }
@@ -153,9 +163,9 @@ enum WorkspaceSearch {
     /// Returns the source range for a word-start pinyin match in the original text.
     private static func transliteratedMatchRange(
         in text: String,
-        query: String
+        query: TransliterationKey
     ) -> Range<String.Index>? {
-        let needle = transliterationKey(query).value
+        let needle = query.value
         guard needle.count >= 4 else { return nil }
 
         let tokenizer = NLTokenizer(unit: .word)
@@ -189,12 +199,19 @@ enum WorkspaceSearch {
     /// Match transliteration only at word starts. This prevents a query such as
     /// "shi jie" from matching the middle of the different words "历史结构".
     static func transliteratedContains(_ text: String, _ query: String) -> Bool {
-        let needle = transliterationKey(query).value
-        guard needle.count >= 4 else { return false }
-        let candidate = transliterationKey(text)
+        let queryKey = transliterationKey(query)
+        guard queryKey.value.count >= 4 else { return false }
+        return matchesTransliteration(transliterationKey(text), query: queryKey)
+    }
+
+    private static func matchesTransliteration(
+        _ candidate: TransliterationKey,
+        query: TransliterationKey
+    ) -> Bool {
+        guard query.value.count >= 4 else { return false }
         return candidate.tokenStarts.contains { offset in
             let start = candidate.value.index(candidate.value.startIndex, offsetBy: offset)
-            return candidate.value[start...].hasPrefix(needle)
+            return candidate.value[start...].hasPrefix(query.value)
         }
     }
 
