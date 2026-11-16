@@ -299,14 +299,19 @@ enum PDFPageReference {
         selectedText: String? = nil,
         anchor: PDFSourceAnchor? = nil
     ) -> String? {
-        guard let reference = markdown(for: url, page: page, root: root, anchor: anchor) else { return nil }
-
-        if let selectedText {
-            let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty, let anchor {
-                guard anchor.page == page, anchor.matches(text: trimmed) else { return nil }
-            }
+        let trimmedSelection = selectedText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let validAnchor: PDFSourceAnchor?
+        if let trimmedSelection, !trimmedSelection.isEmpty,
+           let anchor, anchor.page == page, anchor.matches(text: trimmedSelection) {
+            validAnchor = anchor
+        } else {
+            // An unanchorable selection may still be useful context, but it must
+            // never be stored as a quote that cannot be returned to precisely.
+            validAnchor = nil
         }
+        guard let reference = markdown(
+            for: url, page: page, root: root, anchor: validAnchor
+        ) else { return nil }
 
         var sections: [String] = []
         if let commentary {
@@ -315,15 +320,12 @@ enum PDFPageReference {
         }
         sections.append(reference)
 
-        if let selectedText {
-            let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                let quote = trimmed
-                    .components(separatedBy: .newlines)
-                    .map { "> \(MindMapOutline.escapeInlineText($0))" }
-                    .joined(separator: "\n")
-                sections.append(quote)
-            }
+        if let trimmedSelection, !trimmedSelection.isEmpty, validAnchor != nil {
+            let quote = trimmedSelection
+                .components(separatedBy: .newlines)
+                .map { "> \(MindMapOutline.escapeInlineText($0))" }
+                .joined(separator: "\n")
+            sections.append(quote)
         }
 
         return sections.joined(separator: "\n\n")
@@ -1026,7 +1028,7 @@ struct NativePDFPreview: View {
                     } else if root != nil && controller.selectionNeedsPageOnlyReference {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle")
-                            Text(language.text("This PDF selection cannot be linked precisely. The quote will still be saved with a page-only link to its first page. Select a smaller passage on one page to enable precise highlighting."))
+                            Text(language.text("This PDF selection cannot be linked precisely. Only a page link will be saved; the selected text will be omitted. Select a smaller passage on one page to save the quote with precise highlighting."))
                             Spacer()
                         }
                         .font(.caption)

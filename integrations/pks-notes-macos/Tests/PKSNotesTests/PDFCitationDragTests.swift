@@ -945,8 +945,8 @@ final class PDFCitationDragTests: XCTestCase {
         let markdown = try XCTUnwrap(controller.selectedCitationForDrag(pdf: pdf, root: root))
         XCTAssertTrue(markdown.contains("#page=1"))
         XCTAssertFalse(markdown.contains("&rects="))
-        XCTAssertTrue(markdown.contains("> Page one quotation"))
-        XCTAssertTrue(markdown.contains("> Page two quotation"))
+        XCTAssertFalse(markdown.contains("> Page one quotation"))
+        XCTAssertFalse(markdown.contains("> Page two quotation"))
 
         reader.currentSelection = nil
         await Task.yield()
@@ -1119,8 +1119,15 @@ extension PDFCitationDragTests {
         }
         let initialNodes = MindMapOutline.nodes(in: model.draft)
         let concept = try XCTUnwrap(initialNodes.first(where: { $0.title == "Concept" }))
+        let selectedText = "Source evidence"
+        let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: selectedText))
+        let anchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 2,
+            normalizedRects: [CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.05)],
+            fingerprint: fingerprint
+        ))
         let added = await model.appendPDFReference(
-            pdf: pdf, page: 2, selectedText: "Source evidence",
+            pdf: pdf, page: 2, selectedText: selectedText, anchor: anchor,
             to: note, mindMapNodeID: concept.id
         )
         XCTAssertTrue(added, model.message ?? "Mind Map capture was not saved")
@@ -1145,9 +1152,38 @@ extension PDFCitationDragTests {
         let selected = try XCTUnwrap(nodes.first(where: { $0.title == "Concept" }))
         let sibling = try XCTUnwrap(nodes.first(where: { $0.title == "Next" }))
         let presentations = MindMapOutline.presentations(in: reopened.draft, nodes: nodes)
-        XCTAssertEqual(presentations[selected.id]?.links.map(\.target), ["/Reading.pdf#page=2"])
+        XCTAssertEqual(presentations[selected.id]?.links.map(\.target), ["/Reading.pdf#\(anchor.fragment)"])
         XCTAssertEqual(presentations[sibling.id]?.links, [])
-        XCTAssertTrue(presentations[selected.id]?.body.contains("Source evidence") == true)
+        XCTAssertTrue(presentations[selected.id]?.body.contains("> Source evidence") == true)
+
+        let pageOnlyAdded = await reopened.appendPDFReference(
+            pdf: pdf, page: 3, commentary: "Page-only observation",
+            selectedText: "Unanchored passage", anchor: nil,
+            to: note, mindMapNodeID: selected.id
+        )
+        XCTAssertTrue(pageOnlyAdded, reopened.message ?? "Page-only Mind Map capture failed")
+        let pageOnlySaved = try String(contentsOf: note, encoding: .utf8)
+        XCTAssertEqual(reopened.draft, pageOnlySaved)
+
+        let pageOnlyReopened = NotesModel()
+        XCTAssertTrue(pageOnlyReopened.openWorkspace(root))
+        pageOnlyReopened.openNote(note)
+        for _ in 0..<400 where pageOnlyReopened.loadingNote {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(pageOnlyReopened.draft, pageOnlySaved)
+        let finalNodes = MindMapOutline.nodes(in: pageOnlyReopened.draft)
+        let finalSelected = try XCTUnwrap(finalNodes.first(where: { $0.title == "Concept" }))
+        let finalSibling = try XCTUnwrap(finalNodes.first(where: { $0.title == "Next" }))
+        let finalPresentations = MindMapOutline.presentations(in: pageOnlyReopened.draft, nodes: finalNodes)
+        XCTAssertEqual(
+            Set(finalPresentations[finalSelected.id]?.links.map(\.target) ?? []),
+            Set(["/Reading.pdf#\(anchor.fragment)", "/Reading.pdf#page=3"])
+        )
+        XCTAssertTrue(finalPresentations[finalSelected.id]?.body.contains("> Source evidence") == true)
+        XCTAssertTrue(finalPresentations[finalSelected.id]?.body.contains("Page-only observation") == true)
+        XCTAssertFalse(finalPresentations[finalSelected.id]?.body.contains("> Unanchored passage") == true)
+        XCTAssertEqual(finalPresentations[finalSibling.id]?.links, [])
     }
 
     @MainActor
@@ -1233,5 +1269,22 @@ extension PDFCitationDragTests {
             "Appending PDF evidence must not introduce bare LF into a CRLF note."
         )
         XCTAssertTrue(otherContent.contains(anchor.fragment))
+
+        let pageOnlySaved = await model.appendPDFReference(
+            pdf: pdf, page: 2, commentary: "Page-only observation",
+            selectedText: "First page evidence\nSecond page evidence", anchor: nil,
+            to: otherNote
+        )
+        XCTAssertTrue(pageOnlySaved, model.message ?? "Page-only PDF capture failed")
+        let pageOnlyContent = try String(contentsOf: otherNote, encoding: .utf8)
+        let normalizedPageOnlyContent = pageOnlyContent.replacingOccurrences(of: "\r\n", with: "\n")
+        XCTAssertTrue(normalizedPageOnlyContent.contains("Page-only observation"))
+        XCTAssertTrue(normalizedPageOnlyContent.contains("[Reading.pdf · p. 2](/Reading.pdf#page=2)"))
+        XCTAssertFalse(normalizedPageOnlyContent.contains("> First page evidence"))
+        XCTAssertFalse(normalizedPageOnlyContent.contains("> Second page evidence"))
+        XCTAssertFalse(
+            pageOnlyContent.replacingOccurrences(of: "\r\n", with: "").contains("\n"),
+            "Page-only PDF capture must preserve the destination note's CRLF line endings."
+        )
     }
 }

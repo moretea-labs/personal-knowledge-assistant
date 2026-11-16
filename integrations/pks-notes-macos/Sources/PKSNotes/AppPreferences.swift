@@ -381,7 +381,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Copy PDF page link": "复制 PDF 页码链接",
         "PDF page link copied": "PDF 页码链接已复制",
         "PDF page is unavailable.": "PDF 页码不可用。",
-        "This PDF selection cannot be linked precisely. The quote will still be saved with a page-only link to its first page. Select a smaller passage on one page to enable precise highlighting.": "当前 PDF 选区无法精确定位。原文仍会作为引用保存，但链接只会定位到选区的起始页。若要精确高亮，请缩小选区并确保内容位于同一页。",
+        "This PDF selection cannot be linked precisely. Only a page link will be saved; the selected text will be omitted. Select a smaller passage on one page to save the quote with precise highlighting.": "当前 PDF 选区无法精确定位。只会保存页码链接，不会保存选中的原文。请缩小选区并确保内容位于同一页，以保存引文并启用精确高亮。",
         "Referenced PDF selection changed. The page is open, but the exact highlight is no longer available.": "引用的 PDF 选区已发生变化。当前已打开对应页面，但无法恢复精确高亮。",
         "Linked Notes": "关联笔记",
         "Linked notes for this PDF": "查看关联到此 PDF 的笔记",

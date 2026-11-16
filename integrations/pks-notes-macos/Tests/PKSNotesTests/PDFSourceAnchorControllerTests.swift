@@ -331,8 +331,39 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         )
         XCTAssertTrue(snippet.contains("My observation"))
         XCTAssertTrue(snippet.contains("#page=1"))
-        XCTAssertTrue(snippet.contains("> First page evidence"))
-        XCTAssertTrue(snippet.contains("> Second page evidence"))
+        XCTAssertFalse(snippet.contains("&rects="))
+        XCTAssertFalse(snippet.contains("> First page evidence"))
+        XCTAssertFalse(snippet.contains("> Second page evidence"))
+    }
+
+    func testPDFPageReferenceFallsBackForWrongPageOrMismatchedAnchor() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let pdf = root.appendingPathComponent("Source.pdf")
+        try Data([0x25, 0x50, 0x44, 0x46]).write(to: pdf)
+        let selectedText = "Selected source evidence"
+        let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: selectedText))
+        let rect = CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.05)
+        let wrongPage = try XCTUnwrap(PDFSourceAnchor(
+            page: 3, normalizedRects: [rect], fingerprint: fingerprint
+        ))
+        let mismatchedText = try XCTUnwrap(PDFSourceAnchor(
+            page: 2, normalizedRects: [rect], fingerprint: "0000000000000000"
+        ))
+
+        for anchor in [wrongPage, mismatchedText] {
+            let snippet = try XCTUnwrap(PDFPageReference.noteSnippet(
+                for: pdf, page: 2, root: root, commentary: "My observation",
+                selectedText: selectedText, anchor: anchor
+            ))
+            XCTAssertTrue(snippet.contains("My observation"))
+            XCTAssertTrue(snippet.contains("#page=2"))
+            XCTAssertFalse(snippet.contains("&rects="))
+            XCTAssertFalse(snippet.contains("> Selected source evidence"))
+        }
     }
 
     @MainActor
