@@ -735,6 +735,7 @@ struct NoteBacklink: Identifiable, Equatable {
 struct BacklinkScanResult: Equatable {
     let backlinks: [NoteBacklink]
     let skippedDatalessFiles: Int
+    let skippedUnavailableFiles: Int
 }
 
 /// Transient projection of the complete vault file index for link resolution.
@@ -921,7 +922,11 @@ enum WorkspaceBacklinks {
         let target = target.standardizedFileURL
         guard WorkspaceFiles.contains(target, in: root),
               FileManager.default.fileExists(atPath: target.path) else {
-            return .init(backlinks: [], skippedDatalessFiles: 0)
+            return .init(
+                backlinks: [],
+                skippedDatalessFiles: 0,
+                skippedUnavailableFiles: 0
+            )
         }
 
         let candidateIndex = suppliedCandidateIndex
@@ -930,6 +935,7 @@ enum WorkspaceBacklinks {
         let candidateBasenames = candidateIndex.byBasename
         var result: [NoteBacklink] = []
         var skippedDatalessFiles = 0
+        var skippedUnavailableFiles = 0
 
         for source in candidates where source != target {
             if WorkspaceFiles.isDataless(source) {
@@ -939,15 +945,24 @@ enum WorkspaceBacklinks {
             let sourceStamp: WorkspaceFileStamp
             let occurrences: [MarkdownLinkOccurrence]
             if let parseCache {
-                guard let cached = parseCache.lookup(source) else { continue }
+                guard let cached = parseCache.lookup(source) else {
+                    skippedUnavailableFiles += 1
+                    continue
+                }
                 sourceStamp = cached.stamp
                 occurrences = cached.occurrences
             } else {
                 guard let stamp = WorkspaceFiles.fileStamp(source),
                       let content = try? String(contentsOf: source, encoding: .utf8)
-                else { continue }
+                else {
+                    skippedUnavailableFiles += 1
+                    continue
+                }
                 let parsed = MindMapOutline.linkOccurrences(in: content, includeContext: true)
-                guard WorkspaceFiles.fileStamp(source) == stamp else { continue }
+                guard WorkspaceFiles.fileStamp(source) == stamp else {
+                    skippedUnavailableFiles += 1
+                    continue
+                }
                 sourceStamp = stamp
                 occurrences = parsed
             }
@@ -981,7 +996,11 @@ enum WorkspaceBacklinks {
             if $0.count != $1.count { return $0.count > $1.count }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
-        return .init(backlinks: backlinks, skippedDatalessFiles: skippedDatalessFiles)
+        return .init(
+            backlinks: backlinks,
+            skippedDatalessFiles: skippedDatalessFiles,
+            skippedUnavailableFiles: skippedUnavailableFiles
+        )
     }
 
     static func find(target: URL, root: URL, files: [NoteItem]) -> [NoteBacklink] {
@@ -2273,6 +2292,14 @@ final class NotesModel: ObservableObject {
             self.cloudBacklinkCursor = nextCursor
             self.backlinks = scan.backlinks
             self.backlinkSkippedCloudFiles = scan.skippedDatalessFiles
+            if scan.skippedUnavailableFiles > 0, self.message == nil {
+                self.message = String(
+                    format: AppLanguage.current.text(
+                        "Some notes could not be checked for links: %d"
+                    ),
+                    scan.skippedUnavailableFiles
+                )
+            }
             self.loadingBacklinks = false
         }
     }
