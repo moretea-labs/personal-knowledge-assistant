@@ -200,6 +200,30 @@ enum WorkspaceSearch {
         return String(decoding: normalized, as: UTF8.self).contains(query)
     }
 
+    /// Excerpt a literal or word-start pinyin body match using the same
+    /// transliteration range as workspace search.
+    static func contentSnippet(
+        _ content: String?, matching query: String, limit: Int = 120
+    ) -> String? {
+        let maximum = max(1, limit)
+        guard let content, !content.isEmpty, !query.isEmpty, query.count <= maximum else { return nil }
+        let match = content.range(
+            of: query, options: [.caseInsensitive, .diacriticInsensitive]
+        ) ?? transliteratedMatchRange(in: content, query: transliterationKey(query))
+        guard let match else { return nil }
+        let matchLength = content.distance(from: match.lowerBound, to: match.upperBound)
+        let context = max(8, (maximum - matchLength) / 2)
+        let start = content.index(match.lowerBound, offsetBy: -context, limitedBy: content.startIndex)
+            ?? content.startIndex
+        let end = content.index(match.upperBound, offsetBy: context, limitedBy: content.endIndex)
+            ?? content.endIndex
+        let excerpt = content[start..<end].split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let clipped = String(excerpt.prefix(maximum))
+        guard !clipped.isEmpty else { return nil }
+        return (start > content.startIndex ? "…" : "") + clipped
+            + (end < content.endIndex ? "…" : "")
+    }
+
     /// Returns the source range for a word-start pinyin match in the original text.
     private static func transliteratedMatchRange(
         in text: String,

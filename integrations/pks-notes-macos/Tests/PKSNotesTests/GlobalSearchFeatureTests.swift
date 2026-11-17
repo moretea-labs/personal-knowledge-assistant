@@ -106,6 +106,13 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertLessThanOrEqual(snippet?.count ?? 0, 42)
     }
 
+    func testSpotlightSnippetUsesCJKExcerptForPinyinBodyMatch() {
+        let content = String(repeating: "前言内容。", count: 80) + "今天练习夜的钢琴曲五。"
+        let snippet = GlobalSpotlightLookup.contentSnippet(content, matching: "ye de gang qin qu")
+        XCTAssertTrue(snippet?.contains("夜的钢琴曲五") == true)
+        XCTAssertNil(GlobalSpotlightLookup.contentSnippet("今天研究历史结构。", matching: "shi jie"))
+    }
+
     func testSpotlightSnippetReturnsNilWhenContentDoesNotContainQuery() {
         XCTAssertNil(GlobalSpotlightLookup.contentSnippet("Unrelated source text", matching: "missing"))
         XCTAssertNil(GlobalSpotlightLookup.contentSnippet(nil, matching: "source"))

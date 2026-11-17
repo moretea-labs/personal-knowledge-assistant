@@ -118,31 +118,11 @@ final class GlobalSpotlightLookup {
         )
     }
 
-    /// Extract a short excerpt from Spotlight's existing indexed content. This reads
-    /// metadata only; it never opens or hydrates the matched document.
+    /// Excerpt from Spotlight's indexed metadata without opening or hydrating the file.
     nonisolated static func contentSnippet(
         _ content: String?, matching term: String, limit: Int = 120
     ) -> String? {
-        let maximum = max(1, limit)
-        guard let content, !content.isEmpty, !term.isEmpty, term.count <= maximum,
-              let match = content.range(
-                  of: term, options: [.caseInsensitive, .diacriticInsensitive]
-              ) else { return nil }
-
-        let context = max(8, (maximum - term.count) / 2)
-        let start = content.index(
-            match.lowerBound, offsetBy: -context, limitedBy: content.startIndex
-        ) ?? content.startIndex
-        let end = content.index(
-            match.upperBound, offsetBy: context, limitedBy: content.endIndex
-        ) ?? content.endIndex
-        let excerpt = content[start..<end]
-            .split(whereSeparator: \.isWhitespace)
-            .joined(separator: " ")
-        let clipped = String(excerpt.prefix(maximum))
-        guard !clipped.isEmpty else { return nil }
-        return (start > content.startIndex ? "…" : "") + clipped
-            + (end < content.endIndex ? "…" : "")
+        WorkspaceSearch.contentSnippet(content, matching: term, limit: limit)
     }
 
     // NSMetadataItemURLKey can be absent for iCloud Drive and local results;
