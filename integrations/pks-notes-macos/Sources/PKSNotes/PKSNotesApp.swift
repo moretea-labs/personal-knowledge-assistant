@@ -2620,6 +2620,8 @@ struct NotesWindow: View {
                     Section(language.text("Search results")) {
                         ForEach(model.groupedHits) { group in
                             let hit = group.primary
+                            let isSelected = hit.localFileURL?.standardizedFileURL
+                                == model.selected?.standardizedFileURL
                             VStack(alignment: .leading, spacing: 6) {
                             HStack(alignment: .top, spacing: 6) {
                                 Button {
@@ -2655,8 +2657,15 @@ struct NotesWindow: View {
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.vertical, 4)
+                                    .background(
+                                        isSelected
+                                            ? Color.accentColor.opacity(colorScheme == .dark ? 0.20 : 0.11)
+                                            : .clear,
+                                        in: RoundedRectangle(cornerRadius: NotesGeometry.selectionCorner)
+                                    )
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityAddTraits(isSelected ? .isSelected : [])
                                 .accessibilityIdentifier("pks-result-\(hit.documentId)")
 
                                 Menu {
