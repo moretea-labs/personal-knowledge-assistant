@@ -143,13 +143,22 @@ final class PDFCitationDropFlowTests: XCTestCase {
         let linkedURL = try XCTUnwrap(URL(string: link))
         let anchor = try XCTUnwrap(PDFPageReference.anchor(from: linkedURL))
         XCTAssertEqual(PDFPageReference.page(from: linkedURL), 1)
+        XCTAssertTrue(reopened.openInternalLink(linkedURL))
+        for _ in 0..<200 where reopened.previewPDF != pdf {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(reopened.selected, note.standardizedFileURL)
+        XCTAssertEqual(reopened.previewPDF, pdf.standardizedFileURL)
+        XCTAssertEqual(reopened.previewPDFAnchor, anchor)
 
         let reopenedPDF = try XCTUnwrap(PDFDocument(url: pdf))
         let reopenedPDFView = PDFView(frame: pageBounds)
         let reopenedPDFController = PDFReaderController()
         reopenedPDFController.attach(
             view: reopenedPDFView, document: reopenedPDF, url: pdf,
-            requestedPage: anchor.page, requestedAnchor: anchor
+            requestedPage: reopened.previewPDFPage,
+            requestedAnchor: reopened.previewPDFAnchor,
+            navigationSequence: reopened.previewPDFNavigationSequence
         )
         defer { reopenedPDFController.detach(view: reopenedPDFView) }
         XCTAssertFalse(reopenedPDFController.invalidRequestedSelection)
