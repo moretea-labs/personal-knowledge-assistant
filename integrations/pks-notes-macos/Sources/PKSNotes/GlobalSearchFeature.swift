@@ -241,7 +241,11 @@ enum GlobalSearchRanker {
         return 3
     }
 
-    static func ranking(for item: GlobalSearchItem, query: String) -> GlobalSearchRanking {
+    static func ranking(
+        for item: GlobalSearchItem,
+        query: String,
+        queryTransliteration: NoteTreePresentation.TransliterationKey? = nil
+    ) -> GlobalSearchRanking {
         let rawQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let term = rawQuery.folding(
             options: [.caseInsensitive, .diacriticInsensitive], locale: .current
@@ -260,18 +264,24 @@ enum GlobalSearchRanker {
             )
         }
 
+        let transliterationQuery = queryTransliteration
+            ?? WorkspaceSearch.queryTransliterationKey(term)
         let nameRank: Int
         if name == term { nameRank = 0 }
         else if name.hasPrefix(term) { nameRank = 1 }
         else if name.contains(term) { nameRank = 2 }
-        else if WorkspaceSearch.transliteratedContains(item.title, term) { nameRank = 3 }
+        else if WorkspaceSearch.transliteratedContains(
+            item.title, queryKey: transliterationQuery, useASCIIIndexFastPath: true
+        ) { nameRank = 3 }
         else if WorkspaceSearch.fuzzyContains(item.title, term) { nameRank = 4 }
         else { nameRank = 5 }
 
         let rawPathRank = pathMatchRank(url: item.url, for: term)
         let folder = item.url.deletingLastPathComponent().path
         let pathRank = rawPathRank < 3 ? rawPathRank
-            : WorkspaceSearch.transliteratedContains(folder, term) ? 3
+            : WorkspaceSearch.transliteratedContains(
+                folder, queryKey: transliterationQuery, useASCIIIndexFastPath: true
+            ) ? 3
             : WorkspaceSearch.fuzzyContains(folder, term) ? 4 : 5
 
         let mergeWeight: Int
@@ -312,9 +322,15 @@ enum GlobalSearchRanker {
         // Spotlight results arrive with the same query-scoped rank used by its
         // top-N projection. Reuse it instead of repeating transliteration and
         // fuzzy path/name matching during the final provider merge.
+        let needsDocumentRanking = unique.contains {
+            $0.kind != .application && $0.searchRanking?.query != term
+        }
+        let queryTransliteration = needsDocumentRanking
+            ? WorkspaceSearch.queryTransliterationKey(term) : nil
         let ranked = unique.map { item in
             let cached = item.searchRanking
-            let ranking = cached?.query == term ? cached! : Self.ranking(for: item, query: term)
+            let ranking = cached?.query == term ? cached!
+                : Self.ranking(for: item, query: term, queryTransliteration: queryTransliteration)
             return (item: item.withRanking(ranking), ranking: ranking)
         }.sorted { left, right in
             let a = left.ranking.mergeWeight

@@ -150,9 +150,13 @@ final class GlobalSpotlightLookup {
     nonisolated static func rank(_ entries: [GlobalSearchItem], for term: String, limit: Int = 35) -> [GlobalSearchItem] {
         // Derive all query-specific matching once. The same cached result
         // drives Spotlight top-N, the content-match badge and unified merge.
+        let queryTransliteration = entries.contains { $0.kind != .application }
+            ? WorkspaceSearch.queryTransliterationKey(term) : nil
         let ranked = entries.compactMap { item -> (item: GlobalSearchItem, ranking: GlobalSearchRanking)? in
             guard !Task.isCancelled else { return nil }
-            let ranking = GlobalSearchRanker.ranking(for: item, query: term)
+            let ranking = GlobalSearchRanker.ranking(
+                for: item, query: term, queryTransliteration: queryTransliteration
+            )
             return (item: item.withRanking(ranking), ranking: ranking)
         }
         guard !Task.isCancelled else { return [] }

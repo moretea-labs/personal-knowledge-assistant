@@ -40,10 +40,10 @@ enum WorkspaceSearch {
         let fuzzyQueryTerms = terms.map(fuzzyQueryCharacters)
         // Normalize the query once. NaturalLanguage tokenization and pinyin
         // transforms are substantially more expensive than literal path checks.
-        let queryTransliteration = transliterationKey(query)
+        let queryTransliteration = queryTransliterationKey(query)
         let canMatchPinyin = queryTransliteration.value.count >= 4
         let rootTransliterationLength = canMatchPinyin
-            ? transliterationKey(rootPath).value.count
+            ? queryTransliterationKey(rootPath).value.count
             : 0
         var result = Result()
         var ranked: [(hit: SearchHit, rank: Int, order: Int)] = []
@@ -209,7 +209,7 @@ enum WorkspaceSearch {
         guard let content, !content.isEmpty, !query.isEmpty, query.count <= maximum else { return nil }
         let match = content.range(
             of: query, options: [.caseInsensitive, .diacriticInsensitive]
-        ) ?? transliteratedMatchRange(in: content, query: transliterationKey(query))
+        ) ?? transliteratedMatchRange(in: content, query: queryTransliterationKey(query))
         guard let match else { return nil }
         let matchLength = content.distance(from: match.lowerBound, to: match.upperBound)
         let context = max(8, (maximum - matchLength) / 2)
@@ -267,9 +267,25 @@ enum WorkspaceSearch {
     /// Match transliteration only at word starts. This prevents a query such as
     /// "shi jie" from matching the middle of the different words "历史结构".
     static func transliteratedContains(_ text: String, _ query: String) -> Bool {
-        let queryKey = transliterationKey(query)
+        transliteratedContains(text, queryKey: queryTransliterationKey(query))
+    }
+
+    static func transliteratedContains(
+        _ text: String,
+        queryKey: NoteTreePresentation.TransliterationKey,
+        useASCIIIndexFastPath: Bool = false
+    ) -> Bool {
         guard queryKey.value.count >= 4 else { return false }
-        return matchesTransliteration(transliterationKey(text), query: queryKey)
+        return matchesTransliteration(
+            transliterationKey(text, useASCIIIndexFastPath: useASCIIIndexFastPath),
+            query: queryKey
+        )
+    }
+
+    /// Query keys are short and reused across candidates. ASCII pinyin can use
+    /// the parity-tested tokenizer instead of invoking NaturalLanguage per result.
+    static func queryTransliterationKey(_ value: String) -> NoteTreePresentation.TransliterationKey {
+        transliterationKey(value, useASCIIIndexFastPath: true)
     }
 
     private static func matchesTransliteration(
@@ -346,8 +362,10 @@ enum WorkspaceSearch {
         return edits <= 1
     }
 
-    private static func transliterationKey(_ value: String) -> NoteTreePresentation.TransliterationKey {
-        NoteTreePresentation.transliterationKey(value)
+    private static func transliterationKey(
+        _ value: String, useASCIIIndexFastPath: Bool = false
+    ) -> NoteTreePresentation.TransliterationKey {
+        NoteTreePresentation.transliterationKey(value, useASCIIIndexFastPath: useASCIIIndexFastPath)
     }
 
     private static func fold(_ value: String) -> String {

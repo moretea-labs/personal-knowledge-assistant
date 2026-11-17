@@ -309,6 +309,73 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertFalse(WorkspaceSearch.transliteratedContains("夜的钢琴曲五.pdf", "ye"))
     }
 
+    func testSpotlightBatchRankingSharesOneCJKQueryKeyAcrossOneThousandCandidates() {
+        let query = "钢琴曲"
+        let entries = (0..<1_000).map { index in
+            let folder = index.isMultiple(of: 4) ? "ye-de-gang-qin-qu" : "documents"
+            let title = index.isMultiple(of: 2)
+                ? "ye-de-gang-qin-qu-\(index).pdf" : "notes-\(index).pdf"
+            return GlobalSearchItem.spotlight(
+                URL(fileURLWithPath: "/Users/test/\(folder)/\(title)"),
+                title: title, isFolder: false
+            )
+        }
+        let clock = ContinuousClock()
+        let direct: () -> [String: GlobalSearchRanking] = {
+            Dictionary(uniqueKeysWithValues: entries.map {
+                ($0.id, GlobalSearchRanker.ranking(for: $0, query: query))
+            })
+        }
+        let shared: () -> [String: GlobalSearchRanking] = {
+            let key = WorkspaceSearch.queryTransliterationKey(query)
+            return Dictionary(uniqueKeysWithValues: entries.map {
+                ($0.id, GlobalSearchRanker.ranking(for: $0, query: query, queryTransliteration: key))
+            })
+        }
+        func seconds(_ duration: Duration) -> Double {
+            let value = duration.components
+            return Double(value.seconds) + Double(value.attoseconds) / 1_000_000_000_000_000_000
+        }
+        func elapsed(_ operation: () -> Void) -> Double {
+            let start = clock.now
+            operation()
+            return seconds(start.duration(to: clock.now))
+        }
+        var directSamples: [Double] = []
+        var sharedSamples: [Double] = []
+        var expected: [String: GlobalSearchRanking] = [:]
+        var actual: [String: GlobalSearchRanking] = [:]
+        for round in 0..<3 {
+            if round.isMultiple(of: 2) {
+                directSamples.append(elapsed { expected = direct() })
+                sharedSamples.append(elapsed { actual = shared() })
+            } else {
+                sharedSamples.append(elapsed { actual = shared() })
+                directSamples.append(elapsed { expected = direct() })
+            }
+        }
+        XCTAssertEqual(actual.count, expected.count)
+        for (id, ranking) in expected {
+            XCTAssertEqual(actual[id]?.spotlightNameRank, ranking.spotlightNameRank)
+            XCTAssertEqual(actual[id]?.spotlightPathRank, ranking.spotlightPathRank)
+            XCTAssertEqual(actual[id]?.mergeWeight, ranking.mergeWeight)
+            XCTAssertEqual(actual[id]?.contentMatch, ranking.contentMatch)
+        }
+        let ranked = GlobalSpotlightLookup.rank(entries, for: query, limit: entries.count)
+        XCTAssertEqual(ranked.count, entries.count)
+        for item in ranked {
+            guard let actual = item.searchRanking, let expected = expected[item.id] else {
+                XCTFail("Missing Spotlight batch ranking for \(item.id)")
+                continue
+            }
+            XCTAssertEqual(actual.spotlightNameRank, expected.spotlightNameRank)
+            XCTAssertEqual(actual.spotlightPathRank, expected.spotlightPathRank)
+            XCTAssertEqual(actual.mergeWeight, expected.mergeWeight)
+            XCTAssertEqual(actual.contentMatch, expected.contentMatch)
+        }
+        print("PKS_PERF spotlight_pinyin_rank_1000 direct=\(directSamples.sorted()[1])s shared=\(sharedSamples.sorted()[1])s")
+    }
+
     func testFuzzyFilenameMatchRanksBeforeBodyOnlyResults() {
         let typoMatch = GlobalSearchItem.spotlight(
             URL(fileURLWithPath: "/Users/test/Documents/night-piano.md"),
