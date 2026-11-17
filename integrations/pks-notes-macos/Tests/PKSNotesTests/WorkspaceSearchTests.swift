@@ -468,3 +468,60 @@ extension WorkspaceSearchTests {
         XCTAssertEqual(result.coverage.readFiles, 0)
     }
 }
+
+extension WorkspaceSearchTests {
+    func testCJKHeavyQuickOpenTransliterationBenchmark() {
+        let cases = (0..<1_000).map { index -> (String, String) in
+            let filename = "夜的钢琴曲\(index).md"
+            return ("/Users/test/学习资料/课程\(index % 20)/\(filename)", filename)
+        }
+        for (path, filename) in cases.prefix(16) {
+            _ = NoteTreePresentation.transliterationKey(path, useASCIIIndexFastPath: true)
+            _ = NoteTreePresentation.transliterationKey(filename, useASCIIIndexFastPath: true)
+            _ = NoteTreePresentation.transliterationKeys(
+                path: path, filename: filename, useASCIIIndexFastPath: true
+            )
+        }
+
+        let clock = ContinuousClock()
+        var twoPassSamples: [Duration] = []
+        var singlePassSamples: [Duration] = []
+        for round in 0..<3 {
+            let runTwoPass = {
+                cases.reduce(into: 0) { checksum, pair in
+                    let pathKey = NoteTreePresentation.transliterationKey(pair.0, useASCIIIndexFastPath: true)
+                    let nameKey = NoteTreePresentation.transliterationKey(pair.1, useASCIIIndexFastPath: true)
+                    checksum += pathKey.value.count + pathKey.tokenStarts.count
+                        + nameKey.value.count + nameKey.tokenStarts.count
+                }
+            }
+            let runSinglePass = {
+                cases.reduce(into: 0) { checksum, pair in
+                    let keys = NoteTreePresentation.transliterationKeys(
+                        path: pair.0, filename: pair.1, useASCIIIndexFastPath: true
+                    )
+                    checksum += keys.path.value.count + keys.path.tokenStarts.count
+                        + keys.name.value.count + keys.name.tokenStarts.count
+                }
+            }
+            if round.isMultiple(of: 2) {
+                let start = clock.now
+                let twoPassChecksum = runTwoPass()
+                twoPassSamples.append(start.duration(to: clock.now))
+                let singleStart = clock.now
+                let singlePassChecksum = runSinglePass()
+                singlePassSamples.append(singleStart.duration(to: clock.now))
+                XCTAssertEqual(twoPassChecksum, singlePassChecksum)
+            } else {
+                let start = clock.now
+                let singlePassChecksum = runSinglePass()
+                singlePassSamples.append(start.duration(to: clock.now))
+                let twoStart = clock.now
+                let twoPassChecksum = runTwoPass()
+                twoPassSamples.append(twoStart.duration(to: clock.now))
+                XCTAssertEqual(twoPassChecksum, singlePassChecksum)
+            }
+        }
+        print("PKS_PERF cjk_quick_open_1000 two_pass=\(twoPassSamples) single_pass=\(singlePassSamples)")
+    }
+}
