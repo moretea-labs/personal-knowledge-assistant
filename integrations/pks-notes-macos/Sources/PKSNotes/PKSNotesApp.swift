@@ -3422,6 +3422,7 @@ struct NotesWindow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityAddTraits(model.selected == note ? .isSelected : [])
                 .onHover { hovering in
                     if hovering { model.prefetchFile(note) }
                 }
