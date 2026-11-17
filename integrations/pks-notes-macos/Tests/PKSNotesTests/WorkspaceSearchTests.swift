@@ -120,6 +120,35 @@ final class WorkspaceSearchTests: XCTestCase {
         XCTAssertEqual(result.coverage.readFiles, 0)
     }
 
+    func testSearchAllowsSymlinkedWorkspaceRootButRejectsChildSymlinks() throws {
+        let actualRoot = try fixture()
+        let rootAlias = actualRoot.deletingLastPathComponent()
+            .appendingPathComponent("LeafspanRootAlias-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: rootAlias, withDestinationURL: actualRoot)
+        addTeardownBlock { try? FileManager.default.removeItem(at: rootAlias) }
+
+        let note = rootAlias.appendingPathComponent("Study.md")
+        try "# Study".write(to: note, atomically: true, encoding: .utf8)
+        let outside = rootAlias.deletingLastPathComponent()
+            .appendingPathComponent("LeafspanOutside-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: outside) }
+        let outsideNote = outside.appendingPathComponent("Secret.md")
+        try "# Secret".write(to: outsideNote, atomically: true, encoding: .utf8)
+        let childLink = rootAlias.appendingPathComponent("Linked.md")
+        try FileManager.default.createSymbolicLink(at: childLink, withDestinationURL: outsideNote)
+
+        let entries = [note, childLink].enumerated().map { index, url in
+            NoteTreePresentation.QuickOpenEntry(
+                item: NoteItem(url: url, children: nil), insertionOrder: index
+            )
+        }
+        let result = WorkspaceSearch.search(
+            entries: entries, root: rootAlias, query: "Study", searchBodies: false
+        )
+        XCTAssertEqual(result.hits.map(\.uri), [note.path])
+    }
+
     func testStandaloneContentSearchUsesAllTermsAndShowsMatchingExcerpt() throws {
         let root = try fixture()
         let file = root.appendingPathComponent("种植记录.md")

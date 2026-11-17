@@ -32,7 +32,8 @@ enum WorkspaceSearch {
         guard !terms.isEmpty, limits.results > 0 else { return Result() }
         let rootPath = root.standardizedFileURL.path
         let canonicalRootPath = root.standardizedFileURL.resolvingSymlinksInPath().path
-        let rootPathPrefixLength = rootPath.count + 1
+        let rootPathPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        let rootPathPrefixLength = rootPathPrefix.count
         let foldedRootPath = fold(rootPath)
         let foldedFolderPrefix = foldedRootPath.hasSuffix("/") ? foldedRootPath : foldedRootPath + "/"
         let foldedQuery = fold(query)
@@ -55,7 +56,7 @@ enum WorkspaceSearch {
             let item = entry.item
             let itemPath = item.url.standardizedFileURL.path
             guard WorkspaceFiles.fileStampIfContained(
-                item.url, inCanonicalRootPath: canonicalRootPath
+                item.url, inRootPath: rootPath, canonicalRootPath: canonicalRootPath
             ) != nil else { continue }
             let path = String(itemPath.dropFirst(rootPathPrefixLength))
             // Quick Open already owns normalized folder/name keys for this exact

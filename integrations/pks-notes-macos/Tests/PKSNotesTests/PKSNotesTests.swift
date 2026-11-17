@@ -1,4 +1,5 @@
 import Foundation
+import CoreServices
 import AppKit
 import PDFKit
 import SwiftUI
@@ -118,6 +119,27 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: recovered, encoding: .utf8), "Preserve this draft")
     }
 
+    func testWorkspaceChangeMonitorFiltersEventsBeforeStartupBaseline() {
+        let baseline: FSEventStreamEventId = 100
+        XCTAssertFalse(WorkspaceChangeMonitor.shouldDeliver(
+            eventID: 99, after: baseline, flags: FSEventStreamEventFlags(0)
+        ))
+        XCTAssertFalse(WorkspaceChangeMonitor.shouldDeliver(
+            eventID: baseline, after: baseline, flags: FSEventStreamEventFlags(0)
+        ))
+        XCTAssertTrue(WorkspaceChangeMonitor.shouldDeliver(
+            eventID: 101, after: baseline, flags: FSEventStreamEventFlags(0)
+        ))
+        XCTAssertFalse(WorkspaceChangeMonitor.shouldDeliver(
+            eventID: 99, after: baseline,
+            flags: FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs)
+        ))
+        XCTAssertTrue(WorkspaceChangeMonitor.shouldDeliver(
+            eventID: 99, after: baseline,
+            flags: FSEventStreamEventFlags(kFSEventStreamEventFlagEventIdsWrapped)
+        ))
+    }
+
     @MainActor
     func testGlobalSearchWorkspaceLookupFindsPinyinInActiveWorkspace() async throws {
         let defaults = UserDefaults.standard
@@ -177,7 +199,7 @@ final class PKSNotesTests: XCTestCase {
     }
 
     @MainActor
-    func testGlobalSearchPinyinLookupScalesToLargeActiveWorkspace() async throws {
+    func testGlobalSearchPinyinLookupScalesToCJKHeavyActiveWorkspace() async throws {
         let defaults = UserDefaults.standard
         let oldWorkspace = defaults.object(forKey: "PKSNotesWorkspace")
         let oldBookmark = defaults.object(forKey: "PKSNotesWorkspaceBookmark")
@@ -192,33 +214,37 @@ final class PKSNotesTests: XCTestCase {
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: root) }
         for index in 0..<1_000 {
-            let folder = root.appendingPathComponent(String(format: "Folder-%04d", index), isDirectory: true)
+            let folder = root.appendingPathComponent("学习资料-\(index)", isDirectory: true)
             try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-            let name = index == 999 ? "夜的钢琴曲五.md" : "Deep.md"
-            try "Unrelated body".write(to: folder.appendingPathComponent(name), atomically: true, encoding: .utf8)
+            let file = folder.appendingPathComponent("夜的钢琴曲-\(index).md")
+            try "Unrelated body".write(to: file, atomically: true, encoding: .utf8)
         }
 
+        let clock = ContinuousClock()
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(root))
         for _ in 0..<1_000 where model.loadingFiles { try await Task.sleep(for: .milliseconds(5)) }
         XCTAssertFalse(model.loadingFiles)
-        let clock = ContinuousClock()
-        let indexStarted = clock.now
-        _ = await model.searchWorkspace("no-match")
-        let indexElapsed = indexStarted.duration(to: clock.now)
-        let searchStarted = clock.now
-        let result = await model.searchWorkspace("ye de gang qin qu")
-        let searchElapsed = searchStarted.duration(to: clock.now)
+        let coldSearchStarted = clock.now
+        let coldResult = await model.searchWorkspace("ye de gang qin qu")
+        let coldSearchElapsed = coldSearchStarted.duration(to: clock.now)
+        let warmSearchStarted = clock.now
+        let warmResult = await model.searchWorkspace("ye de gang qin qu")
+        let warmSearchElapsed = warmSearchStarted.duration(to: clock.now)
 
         XCTAssertTrue(model.globalFileIndexReady)
-        XCTAssertEqual(result.hits.map(\.uri), [root.appendingPathComponent("Folder-0999/夜的钢琴曲五.md").path])
-        XCTAssertNil(result.hits.first?.snippet)
-        XCTAssertEqual(result.coverage.readFiles, 999)
-        XCTAssertEqual(result.coverage.skippedFiles, 0)
-        XCTAssertFalse(result.coverage.limited)
-        XCTAssertLessThan(indexElapsed, .seconds(10))
-        XCTAssertLessThan(searchElapsed, .seconds(2))
-        print("PKS_PERF global_pinyin_active_workspace_1000 index=\(indexElapsed) warm_search=\(searchElapsed)")
+        for result in [coldResult, warmResult] {
+            XCTAssertEqual(result.hits.count, 50)
+            XCTAssertTrue(result.hits.allSatisfy { $0.title.hasPrefix("夜的钢琴曲-") })
+            XCTAssertTrue(result.hits.allSatisfy { $0.uri.hasPrefix(root.path + "/") })
+            XCTAssertNil(result.hits.first?.snippet)
+            XCTAssertEqual(result.coverage.readFiles, 0)
+            XCTAssertEqual(result.coverage.skippedFiles, 0)
+            XCTAssertTrue(result.coverage.limited)
+        }
+        XCTAssertLessThan(coldSearchElapsed, .seconds(10))
+        XCTAssertLessThan(warmSearchElapsed, .seconds(2))
+        print("PKS_PERF global_cjk_pinyin_active_workspace_1000 cold_search=\(coldSearchElapsed) warm_search=\(warmSearchElapsed)")
     }
 
     @MainActor

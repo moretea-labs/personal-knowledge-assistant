@@ -98,15 +98,16 @@ enum WorkspaceFiles {
     /// Search uses this to avoid repeating lstat on each candidate's leaf.
     static func fileStampIfContained(
         _ candidate: URL,
-        inCanonicalRootPath canonicalRoot: String
+        inRootPath rootPath: String,
+        canonicalRootPath: String
     ) -> WorkspaceFileStamp? {
         let path = candidate.standardizedFileURL.path
-        let prefix = canonicalRoot + "/"
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
         guard path.hasPrefix(prefix) else { return nil }
         let components = Array(path.dropFirst(prefix.count).split(separator: "/"))
         guard !components.isEmpty else { return nil }
 
-        var cursor = URL(fileURLWithPath: canonicalRoot, isDirectory: true)
+        var cursor = URL(fileURLWithPath: canonicalRootPath, isDirectory: true)
         var finalStamp: WorkspaceFileStamp?
         for (index, component) in components.enumerated() {
             cursor.appendPathComponent(String(component))

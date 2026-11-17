@@ -39,21 +39,32 @@ final class WorkspaceExternalRefreshTests: XCTestCase {
             .appendingPathComponent("LeafspanMonitor-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let expected = root.resolvingSymlinksInPath().appendingPathComponent("External.md").path
+        let canonicalRoot = root.resolvingSymlinksInPath()
+        let preexisting = canonicalRoot.appendingPathComponent("Preexisting.md")
+        try "# Preexisting".write(to: preexisting, atomically: true, encoding: .utf8)
+        let expected = canonicalRoot.appendingPathComponent("External.md").path
         let observed = expectation(description: "FSEvents detected the external file")
         observed.assertForOverFulfill = false
+        let stale = expectation(description: "Pre-workspace file events are ignored")
+        stale.isInverted = true
         guard let monitor = WorkspaceChangeMonitor(root: root, onChanges: { paths, _ in
-            if paths.contains(where: { $0.hasSuffix("/External.md") }) {
+            let canonicalPaths = paths.map {
+                URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path
+            }
+            if canonicalPaths.contains(preexisting.path) {
+                stale.fulfill()
+            }
+            if canonicalPaths.contains(expected) {
                 observed.fulfill()
             }
         }) else {
             return XCTFail("FSEventStream failed to initialize for writable folder")
         }
-        try await Task.sleep(for: .milliseconds(350))
         try "# External".write(
             to: URL(fileURLWithPath: expected), atomically: true, encoding: .utf8
         )
         await fulfillment(of: [observed], timeout: 5)
+        await fulfillment(of: [stale], timeout: 0.5)
         withExtendedLifetime(monitor) {}
     }
 
