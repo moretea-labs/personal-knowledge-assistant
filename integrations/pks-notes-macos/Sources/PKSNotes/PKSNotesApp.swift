@@ -456,6 +456,10 @@ final class PDFCitationDropTarget {
                textView.isEditable, !textView.isFieldEditor,
                !textView.isHiddenOrHasHiddenAncestor,
                textView.window === window {
+                if let scrollView = textView.enclosingScrollView,
+                   !isInsideEditorViewport(windowPoint, scrollView: scrollView) {
+                    return nil
+                }
                 // In a short Markdown note the native NSTextView can be
                 // shorter than its enclosing scroll viewport. Accept drops
                 // in that blank editor space without accepting other panes.
@@ -464,6 +468,18 @@ final class PDFCitationDropTarget {
             candidate = view.superview
         }
         return nil
+    }
+
+    private static func isInsideEditorViewport(
+        _ windowPoint: NSPoint, scrollView: NSScrollView
+    ) -> Bool {
+        let scrollPoint = scrollView.convert(windowPoint, from: nil)
+        let scrollers = [scrollView.verticalScroller, scrollView.horizontalScroller].compactMap { $0 }
+        guard !scrollers.contains(where: {
+            !$0.isHidden && $0.frame.contains(scrollPoint)
+        }) else { return false }
+        let clipPoint = scrollView.contentView.convert(windowPoint, from: nil)
+        return scrollView.contentView.bounds.contains(clipPoint)
     }
 
     private static func editableTextView(in view: NSView?, window: NSWindow) -> NSTextView? {

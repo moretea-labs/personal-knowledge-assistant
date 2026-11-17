@@ -155,4 +155,39 @@ final class PDFCitationDropFlowTests: XCTestCase {
         XCTAssertFalse(reopenedPDFController.invalidRequestedSelection)
         XCTAssertEqual(reopenedPDFController.selectedText(), selectedText)
     }
+
+    func testPDFCitationDropRejectsScrollbarsButAcceptsBlankEditorViewport() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 360),
+            styleMask: [], backing: .buffered, defer: true
+        )
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 560, height: 360))
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = false
+        scroll.scrollerStyle = .overlay
+        let editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 720))
+        editor.isEditable = true
+        editor.isVerticallyResizable = false
+        scroll.documentView = editor
+        window.contentView = scroll
+        scroll.tile()
+        let scroller = try XCTUnwrap(scroll.verticalScroller)
+        XCTAssertFalse(scroller.isHidden)
+        let scrollerPoint = window.convertPoint(
+            toScreen: scroller.convert(
+                NSPoint(x: scroller.bounds.midX, y: scroller.bounds.midY), to: nil
+            )
+        )
+        XCTAssertNil(PDFCitationDropTarget.editableTextView(at: scrollerPoint, in: window))
+        editor.setFrameSize(NSSize(width: 520, height: 34))
+        scroll.tile()
+        let blankPoint = scroll.contentView.convert(
+            NSPoint(x: scroll.contentView.bounds.midX, y: scroll.contentView.bounds.maxY - 10),
+            to: nil
+        )
+        let blankScreenPoint = window.convertPoint(toScreen: blankPoint)
+        XCTAssertTrue(
+            PDFCitationDropTarget.editableTextView(at: blankScreenPoint, in: window) === editor
+        )
+    }
 }
