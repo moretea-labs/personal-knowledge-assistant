@@ -53,14 +53,13 @@ enum NoteTreePresentation {
             self.item = item
             self.foldedName = NoteTreePresentation.fold(item.name)
             self.foldedFolder = NoteTreePresentation.fold(item.url.deletingLastPathComponent().path)
-            self.pathTransliterationKey = NoteTreePresentation.transliterationKey(
-                item.url.standardizedFileURL.path,
+            let transliteration = NoteTreePresentation.transliterationKeys(
+                path: item.url.standardizedFileURL.path,
+                filename: item.name,
                 useASCIIIndexFastPath: true
             )
-            self.nameTransliterationKey = NoteTreePresentation.transliterationKey(
-                item.name,
-                useASCIIIndexFastPath: true
-            )
+            self.pathTransliterationKey = transliteration.path
+            self.nameTransliterationKey = transliteration.name
             self.insertionOrder = insertionOrder
         }
     }
@@ -233,6 +232,59 @@ enum NoteTreePresentation {
             key.append(normalized)
         }
         return TransliterationKey(value: key, tokenStarts: tokenStarts)
+    }
+
+    /// Build path and filename pinyin keys in one NaturalLanguage pass. The
+    /// filename is the path suffix, so its tokens can be collected while the
+    /// full path key is built instead of tokenizing the same CJK name twice.
+    static func transliterationKeys(
+        path: String, filename: String, useASCIIIndexFastPath: Bool = false
+    ) -> (path: TransliterationKey, name: TransliterationKey) {
+        guard path.hasSuffix(filename),
+              let filenameStart = path.index(
+                path.endIndex, offsetBy: -filename.count, limitedBy: path.startIndex
+              ) else {
+            return (
+                transliterationKey(path, useASCIIIndexFastPath: useASCIIIndexFastPath),
+                transliterationKey(filename, useASCIIIndexFastPath: useASCIIIndexFastPath)
+            )
+        }
+        if useASCIIIndexFastPath,
+           path.utf8.allSatisfy({ $0 < 0x80 })
+               || path.folding(
+                   options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current
+               ).utf8.allSatisfy({ $0 < 0x80 }) {
+            return (
+                transliterationKey(path, useASCIIIndexFastPath: true),
+                transliterationKey(filename, useASCIIIndexFastPath: true)
+            )
+        }
+
+        let filenameIsASCII = useASCIIIndexFastPath
+            && (filename.utf8.allSatisfy({ $0 < 0x80 })
+                || filename.folding(
+                    options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current
+                ).utf8.allSatisfy({ $0 < 0x80 }))
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = path
+        var pathValue = ""
+        var pathStarts: Set<Int> = []
+        var nameValue = ""
+        var nameStarts: Set<Int> = []
+        for range in tokenizer.tokens(for: path.startIndex..<path.endIndex) {
+            guard let normalized = transliterationToken(String(path[range])) else { continue }
+            pathStarts.insert(pathValue.count)
+            pathValue.append(normalized)
+            if !filenameIsASCII, range.lowerBound >= filenameStart {
+                nameStarts.insert(nameValue.count)
+                nameValue.append(normalized)
+            }
+        }
+        let pathKey = TransliterationKey(value: pathValue, tokenStarts: pathStarts)
+        let nameKey = filenameIsASCII
+            ? transliterationKey(filename, useASCIIIndexFastPath: true)
+            : TransliterationKey(value: nameValue, tokenStarts: nameStarts)
+        return (pathKey, nameKey)
     }
 
     enum Direction {

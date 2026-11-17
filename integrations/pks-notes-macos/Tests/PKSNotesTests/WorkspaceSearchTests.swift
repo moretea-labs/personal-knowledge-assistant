@@ -41,6 +41,27 @@ final class WorkspaceSearchTests: XCTestCase {
         }
     }
 
+    func testCombinedPathAndFilenameKeysPreserveIndependentNaturalLanguageResults() {
+        let cases = [
+            ("/Users/test/吉他谱/夜的钢琴曲五.pdf", "夜的钢琴曲五.pdf"),
+            ("/Users/test/资料/Café Research/夜的钢琴曲-Vol 2.md", "夜的钢琴曲-Vol 2.md"),
+            ("/Users/test/学习/ABC-夜的钢琴曲.md", "ABC-夜的钢琴曲.md"),
+            ("/Users/test/资料/Folder/Research.md", "Research.md"),
+            ("/Users/test/学习/研究笔记（第二版）.md", "研究笔记（第二版）.md")
+        ]
+        for (path, filename) in cases {
+            let combined = NoteTreePresentation.transliterationKeys(
+                path: path, filename: filename, useASCIIIndexFastPath: true
+            )
+            let expectedPath = naturalLanguageKey(path)
+            let expectedName = naturalLanguageKey(filename)
+            XCTAssertEqual(combined.path.value, expectedPath.value, path)
+            XCTAssertEqual(combined.path.tokenStarts, expectedPath.tokenStarts, path)
+            XCTAssertEqual(combined.name.value, expectedName.value, filename)
+            XCTAssertEqual(combined.name.tokenStarts, expectedName.tokenStarts, filename)
+        }
+    }
+
     func testASCIITransliterationPrefilterNeverRejectsNaturalLanguageMatches() {
         let cases = [
             ("Night-Piano.md", "night piano"),
