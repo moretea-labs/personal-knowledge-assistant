@@ -1499,19 +1499,25 @@ struct MindMapCanvas: View {
         // Disclosure and branch metadata are derived once with the layout snapshot.
         let branchByID = layout.branchByID
         let parentIDs = layout.parentIDs
-        ForEach(renderedPlacements) { placement in
-            nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id),
-                     branch: branchByID[placement.id] ?? 0,
-                     dropHeight: placement.size.height, exporting: exporting)
-                .frame(width: placement.size.width, height: placement.size.height)
-                .position(placement.center)
-                .id(placement.id)
-                .transition(
-                    reduceMotion || exporting
-                        ? .identity
-                        : .opacity.combined(with: .scale(scale: 0.985, anchor: .leading))
-                )
+        // Keep node positions in the exact same fixed-size coordinate space
+        // as connectorCanvas. A bare ForEach can be measured independently by
+        // the equatable card snapshot and shift card origins away from paths.
+        ZStack(alignment: .topLeading) {
+            ForEach(renderedPlacements) { placement in
+                nodeCard(placement.node, hasChildren: parentIDs.contains(placement.id),
+                         branch: branchByID[placement.id] ?? 0,
+                         dropHeight: placement.size.height, exporting: exporting)
+                    .frame(width: placement.size.width, height: placement.size.height)
+                    .position(placement.center)
+                    .id(placement.id)
+                    .transition(
+                        reduceMotion || exporting
+                            ? .identity
+                            : .opacity.combined(with: .scale(scale: 0.985, anchor: .leading))
+                    )
+            }
         }
+        .frame(width: layout.size.width, height: layout.size.height, alignment: .topLeading)
     }
 
     private func mapCenterAnchor(_ layout: MindMapLayoutSnapshot) -> some View {
