@@ -2680,6 +2680,7 @@ struct NotesWindow: View {
                                 .menuIndicator(.hidden)
                                 .frame(width: NotesGeometry.toolbarTarget)
                                 .help(language.text("Source actions"))
+                                .accessibilityLabel(language.text("Source actions"))
                             }
                             if group.hits.count > 1 {
                                 DisclosureGroup("\(group.hits.count) " + language.text("matching sections")) {
@@ -2761,6 +2762,7 @@ struct NotesWindow: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help(language.text("Quick Open a file in the current library") + " (⌘P)")
+                .accessibilityLabel(language.text("Quick Open a file in the current library"))
                 .accessibilityIdentifier("pks-sidebar-quick-open")
                 .padding(.bottom, 15)
             }
@@ -2786,6 +2788,7 @@ struct NotesWindow: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .help(language.text("New Markdown note (⌘N)"))
+                    .accessibilityLabel(language.text("New Markdown note (⌘N)"))
                     .accessibilityIdentifier("pks-new-note-button")
                 }
                 .padding(.leading, 17)
@@ -2812,6 +2815,7 @@ struct NotesWindow: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(language.text("Clear search"))
                     .accessibilityIdentifier("pks-search-clear")
                 } else if model.searching {
                     ProgressView().controlSize(.mini)
@@ -2867,6 +2871,7 @@ struct NotesWindow: View {
                     .menuIndicator(.hidden)
                     .foregroundStyle(.secondary)
                     .help(language.text("Current library folder"))
+                    .accessibilityLabel(language.text("Current library folder"))
                     .accessibilityIdentifier("pks-workspace-menu")
                 }
                 .padding(.leading, 22)

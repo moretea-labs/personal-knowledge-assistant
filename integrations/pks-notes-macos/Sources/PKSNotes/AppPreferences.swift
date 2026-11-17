@@ -311,6 +311,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Export PDF…": "导出 PDF…",
         "MindNode package interchange, OPML, PNG and PDF export": "MindNode 文件交换、OPML、PNG 与 PDF 导出",
         "Search notes and files…": "搜索笔记和文件…",
+        "Clear search": "清除搜索",
         "NAVIGATION": "导航",
         "All Notes": "全部笔记",
 
