@@ -451,6 +451,7 @@ final class GlobalSearchResults: ObservableObject {
         } else {
             selectedIndex = max(0, min(selectedIndex, max(0, combined.count - 1)))
         }
+        if selected?.id != selectedID { prefetchSelectedFile() }
     }
 
     private func scheduleSearch() {
