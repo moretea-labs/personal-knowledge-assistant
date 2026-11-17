@@ -1258,6 +1258,13 @@ struct NotesWindow: View {
                 compactStudyShowsStudyPane = false
             }
         }
+        .onChange(of: model.draftRevision) { _, _ in
+            refreshPDFBacklinksIfSaved()
+        }
+        .onChange(of: model.isDirty) { wasDirty, isDirty in
+            guard wasDirty, !isDirty else { return }
+            refreshPDFBacklinksIfSaved()
+        }
         .onChange(of: model.loadingNote) { _, loading in
             if !loading, mode != .read {
                 resetNativeEditorUndoBaseline()
@@ -1746,6 +1753,14 @@ struct NotesWindow: View {
                 }
             }
         }
+    }
+
+    private func refreshPDFBacklinksIfSaved() {
+        // Direct PDF capture saves synchronously; editor changes refresh only
+        // after autosave. Never rescan the workspace for each keystroke.
+        guard showingBacklinks, model.previewPDF != nil,
+              !model.loadingNote, !model.isDirty else { return }
+        model.loadRelationships()
     }
 
     private func openBacklinkLocation(
