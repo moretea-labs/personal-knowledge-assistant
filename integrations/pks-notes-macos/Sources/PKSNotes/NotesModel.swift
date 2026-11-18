@@ -1012,6 +1012,7 @@ enum WorkspaceBacklinks {
 struct MarkdownAnchorRequest: Equatable {
     let note: URL
     let fragment: String
+    let sectionID: Int?
     let sequence: UInt64
 }
 
@@ -2815,14 +2816,28 @@ final class NotesModel: ObservableObject {
         return try JSONDecoder().decode([SearchHit].self, from: data)
     }
 
-    private func requestMarkdownAnchor(_ fragment: String, note: URL) {
+    private func requestMarkdownAnchor(
+        _ fragment: String,
+        note: URL,
+        sectionID: Int? = nil
+    ) {
         let clean = fragment.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
         markdownAnchorSequence &+= 1
         markdownAnchorRequest = MarkdownAnchorRequest(
             note: note.standardizedFileURL,
             fragment: clean,
+            sectionID: sectionID,
             sequence: markdownAnchorSequence
+        )
+    }
+
+    func requestMarkdownHeadingNavigation(_ heading: MarkdownOutlineHeading) {
+        guard let selected else { return }
+        requestMarkdownAnchor(
+            heading.title,
+            note: selected,
+            sectionID: heading.sectionID
         )
     }
 

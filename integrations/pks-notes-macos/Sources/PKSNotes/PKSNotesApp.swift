@@ -3373,14 +3373,20 @@ struct NotesWindow: View {
             outlineHeadings = []
             return
         }
-        showingMindMap = false
-        mode = .edit
+
+        // Outline navigation is a locator, not a mode switch. Read scrolls the
+        // preview, Edit moves the native text cursor, and Split synchronizes both.
+        if mode == .read || mode == .split {
+            model.requestMarkdownHeadingNavigation(heading)
+        }
+        guard mode == .edit || mode == .split else { return }
+
         Task { @MainActor in
             editorFocused = true
-            // A read-only preview must first mount the native TextEditor before
-            // its NSTextView can become first responder.
+            // In Split the editor is already mounted; in Edit it may have just
+            // replaced the preview after another navigation action.
             try? await Task.sleep(for: .milliseconds(40))
-            guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView,
+            guard let textView = markdownTextView(in: NSApp.keyWindow?.contentView),
                   let location = MarkdownOutline.currentUTF16Offset(
                     for: heading, in: textView.string
                   ) else {
@@ -3388,6 +3394,7 @@ struct NotesWindow: View {
                 outlineHeadings = []
                 return
             }
+            NSApp.keyWindow?.makeFirstResponder(textView)
             let range = NSRange(
                 location: min(max(0, location), (textView.string as NSString).length),
                 length: 0

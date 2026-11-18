@@ -102,4 +102,12 @@ final class MarkdownOutlineTests: XCTestCase {
             ["Overview", "Unique"]
         )
     }
+
+    func testDuplicateOutlineHeadingsKeepDistinctSectionTargets() {
+        let source = "# Overview\n## Detail\nParagraph\n## Detail\nMore"
+        let headings = MarkdownOutline.headings(in: source)
+        XCTAssertEqual(headings.map(\.title), ["Overview", "Detail", "Detail"])
+        XCTAssertNotEqual(headings[1].sectionID, headings[2].sectionID)
+        XCTAssertNotEqual(headings[1].utf16Offset, headings[2].utf16Offset)
+    }
 }

@@ -194,10 +194,19 @@ struct MarkdownPreviewPane: View {
         if lastAnchorJumpSequence == request.sequence { return true }
         guard preparedAnchorSequence == request.sequence else { return true }
 
-        guard let heading = MarkdownOutline.heading(
-            matchingFragment: request.fragment,
-            in: source
-        ), rendered.contains(where: { $0.id == heading.sectionID }) else {
+        let sectionID: Int?
+        if let requestedSectionID = request.sectionID {
+            sectionID = rendered.contains(where: { $0.id == requestedSectionID })
+                ? requestedSectionID
+                : nil
+        } else {
+            sectionID = MarkdownOutline.heading(
+                matchingFragment: request.fragment,
+                in: source
+            )?.sectionID
+        }
+
+        guard let sectionID else {
             lastAnchorJumpSequence = request.sequence
             model.message = language.text("Heading not found in linked note.")
             return true
@@ -206,7 +215,7 @@ struct MarkdownPreviewPane: View {
         lastAnchorJumpSequence = request.sequence
         model.message = nil
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-            scroll.scrollTo(heading.sectionID, anchor: .top)
+            scroll.scrollTo(sectionID, anchor: .top)
         }
         return true
     }
