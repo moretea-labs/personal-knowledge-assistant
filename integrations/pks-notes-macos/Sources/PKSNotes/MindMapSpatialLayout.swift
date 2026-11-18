@@ -151,8 +151,12 @@ struct MindMapLayoutSnapshot: Equatable {
         }
         var bundledSpines: [Int: CGFloat] = [:]
         var resolvedConnectors: [MindMapConnector] = []
-        for (parentID, children) in childrenByParent where children.count >= 12 {
-            guard let parent = byID[parentID] else { continue }
+        // Emit shared trunks in Markdown placement order, not Dictionary order.
+        // Stable connector identity lets the equatable Canvas reuse unchanged
+        // geometry across layout refreshes and prevents unpredictable paint order.
+        for parent in placements {
+            let parentID = parent.id
+            guard let children = childrenByParent[parentID], children.count >= 12 else { continue }
             // Colorful root branches have distinct colors, so never merge
             // their connections under an arbitrarily colored common trunk.
             if style.usesBranchColors && parent.parentID == nil { continue }

@@ -706,6 +706,35 @@ final class MindMapViewportTests: XCTestCase {
                       "Viewport culling must retain the shared spine when panning along it.")
     }
 
+    func testMultipleDenseBranchesKeepStableMarkdownConnectorPaintOrder() throws {
+        let nodes = [
+            MindMapNode(id: 0, depth: 0, title: "Root"),
+            MindMapNode(id: 1, depth: 1, title: "First")
+        ] + (2..<14).map {
+            MindMapNode(id: $0, depth: 2, title: "First child \($0)")
+        } + [
+            MindMapNode(id: 14, depth: 1, title: "Second")
+        ] + (15..<27).map {
+            MindMapNode(id: $0, depth: 2, title: "Second child \($0)")
+        }
+        let layout = MindMapSpatialLayout.layout(nodes, style: .classic)
+        let first = try XCTUnwrap(layout.placementsByID[1])
+        let second = try XCTUnwrap(layout.placementsByID[14])
+        let firstExit = CGPoint(x: first.center.x + first.size.width / 2, y: first.center.y)
+        let secondExit = CGPoint(x: second.center.x + second.size.width / 2, y: second.center.y)
+
+        XCTAssertEqual(layout.connectors.count, 30) // 26 logical edges + 4 shared segments
+        XCTAssertEqual(layout.connectors[0].start, firstExit)
+        XCTAssertEqual(layout.connectors[1].start.x, layout.connectors[0].end.x)
+        XCTAssertEqual(layout.connectors[2].start, secondExit)
+        XCTAssertEqual(layout.connectors[3].start.x, layout.connectors[2].end.x)
+        XCTAssertEqual(
+            MindMapSpatialLayout.layout(nodes, style: .classic).connectors,
+            layout.connectors,
+            "The same Markdown must produce identical connector geometry and draw order."
+        )
+    }
+
     func testOrdinaryBranchesKeepOriginalCurvesAndColorfulRootsStayDistinct() {
         let small = [
             MindMapNode(id: 0, depth: 0, title: "Root"),
