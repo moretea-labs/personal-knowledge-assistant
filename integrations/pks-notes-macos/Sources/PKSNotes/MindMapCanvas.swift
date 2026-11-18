@@ -1496,7 +1496,8 @@ struct MindMapCanvas: View {
         exporting: Bool = false
     ) -> some View {
         let renderedPlacements = layout.visiblePlacements(for: visibleNodeIDs)
-        // Disclosure and branch metadata are derived once with the layout snapshot.
+        // Branch colors come from the layout snapshot; disclosure ownership comes from the complete
+        // Markdown projection so collapsed descendants never erase their own expand affordance.
         let branchByID = layout.branchByID
         let parentIDs = MindMapOutline.parentIDs(in: nodes)
         // Keep node positions in the exact same fixed-size coordinate space
@@ -1577,22 +1578,26 @@ struct MindMapCanvas: View {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .semibold))
                 } else {
+                    let disclosureTitle = language.text(
+                        collapsed.contains(node.id) ? "Expand Branch" : "Collapse Branch"
+                    )
                     Button {
                         selectedID = node.id
                         if !collapsed.insert(node.id).inserted { collapsed.remove(node.id) }
                         requestCanvasFocus()
                     } label: {
                         Image(systemName: collapsed.contains(node.id) ? "chevron.right" : "chevron.down")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.borderless)
+                    .help(disclosureTitle)
                     .accessibilityIdentifier("pks-mind-map-disclosure-\(node.id)")
-                    .accessibilityLabel(language.text(
-                        collapsed.contains(node.id) ? "Expand Branch" : "Collapse Branch"
-                    ))
+                    .accessibilityLabel(disclosureTitle)
                 }
             } else {
-                Color.clear.frame(width: 10, height: 10)
+                Color.clear.frame(width: 24, height: 24)
             }
 
             if !exporting && editingNodeID == node.id {
