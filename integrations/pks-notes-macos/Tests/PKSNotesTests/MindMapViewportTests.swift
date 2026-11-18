@@ -662,6 +662,66 @@ final class MindMapViewportTests: XCTestCase {
         XCTAssertLessThanOrEqual(screenMinY + contentBounds.height * fitted.zoom, viewport.height - 18)
     }
 
+    func testDenseSiblingFanOutDrawsOneSharedSpineInsteadOfOverlappingCurves() throws {
+        let nodes = [
+            MindMapNode(id: 0, depth: 0, title: "Root"),
+            MindMapNode(id: 1, depth: 1, title: "Long branch")
+        ] + (2..<82).map {
+            MindMapNode(id: $0, depth: 2, title: "Detail \($0)")
+        }
+        let layout = MindMapSpatialLayout.layout(nodes, style: .classic)
+        XCTAssertEqual(layout.placements.count, nodes.count)
+        XCTAssertEqual(layout.connectors.count, 83) // 81 logical edges + 2 shared segments
+
+        let parent = try XCTUnwrap(layout.placementsByID[1])
+        let parentExit = CGPoint(
+            x: parent.center.x + parent.size.width / 2,
+            y: parent.center.y
+        )
+        let outgoing = layout.connectors.filter {
+            abs($0.start.x - parentExit.x) < 0.001
+                && abs($0.start.y - parentExit.y) < 0.001
+        }
+        XCTAssertEqual(outgoing.count, 1, "Dense children must not repaint the parent port 80 times.")
+        let spineX = try XCTUnwrap(outgoing.first?.end.x)
+        let vertical = layout.connectors.filter {
+            $0.angular && abs($0.start.x - spineX) < 0.001
+                && abs($0.end.x - spineX) < 0.001
+                && abs($0.end.y - $0.start.y) > 1
+        }
+        XCTAssertEqual(vertical.count, 1, "Only one shared vertical stroke should be rendered.")
+        let spurs = layout.connectors.filter {
+            $0.angular && abs($0.start.x - spineX) < 0.001
+                && abs($0.start.y - $0.end.y) < 0.001
+                && $0.end.x > spineX
+        }
+        XCTAssertEqual(spurs.count, 80)
+        XCTAssertEqual(Set(spurs.map { $0.end.y }).count, 80)
+        let middle = try XCTUnwrap(layout.placementsByID[42])
+        let viewport = CGRect(
+            x: spineX - 3, y: middle.center.y - 10, width: 12, height: 20
+        )
+        let spine = try XCTUnwrap(vertical.first)
+        XCTAssertTrue(layout.visibleConnectors(in: viewport).contains(spine),
+                      "Viewport culling must retain the shared spine when panning along it.")
+    }
+
+    func testOrdinaryBranchesKeepOriginalCurvesAndColorfulRootsStayDistinct() {
+        let small = [
+            MindMapNode(id: 0, depth: 0, title: "Root"),
+            MindMapNode(id: 1, depth: 1, title: "First"),
+            MindMapNode(id: 2, depth: 1, title: "Second")
+        ]
+        XCTAssertTrue(MindMapSpatialLayout.layout(small, style: .classic).connectors.allSatisfy {
+            !$0.angular
+        })
+        let manyRootChildren = [MindMapNode(id: 0, depth: 0, title: "Root")]
+            + (1...20).map { MindMapNode(id: $0, depth: 1, title: "Branch \($0)") }
+        let colorful = MindMapSpatialLayout.layout(manyRootChildren, style: .colorful)
+        XCTAssertEqual(colorful.connectors.count, 20)
+        XCTAssertTrue(colorful.connectors.allSatisfy { !$0.angular })
+    }
+
     func testLayoutSnapshotPrecomputesStyleAwareConnectorGeometryAndStrokeBounds() throws {
         let nodes = [
             MindMapNode(id: 20, depth: 0, title: "Root"),

@@ -82,6 +82,26 @@ struct MindMapConnector: Equatable {
         angular = style.angularConnectors
         self.lineWidth = lineWidth
     }
+
+    /// A segment of a bundled fan-out. Straight segments are drawn once rather
+    /// than repeatedly painting nearly identical curves from the parent port.
+    init(straightFrom start: CGPoint, to end: CGPoint,
+         style: MindMapVisualStyle, branch: Int) {
+        self.start = start
+        self.end = end
+        control1 = start
+        control2 = end
+        let lineWidth = style.connectorWidth
+        bounds = CGRect(
+            x: min(start.x, end.x),
+            y: min(start.y, end.y),
+            width: abs(end.x - start.x),
+            height: abs(end.y - start.y)
+        ).insetBy(dx: -lineWidth / 2, dy: -lineWidth / 2)
+        self.branch = branch
+        angular = true
+        self.lineWidth = lineWidth
+    }
 }
 
 private struct MindMapSpatialCell: Hashable {
@@ -120,11 +140,56 @@ struct MindMapLayoutSnapshot: Equatable {
         parentIDs = Set(placements.compactMap(\.parentID))
         let branches = MindMapVisualStyle.branchIndices(placements.map(\.node))
         branchByID = branches
-        let resolvedConnectors: [MindMapConnector] = placements.compactMap { child -> MindMapConnector? in
-            guard let parentID = child.parentID, let parent = byID[parentID] else { return nil }
-            return MindMapConnector(
-                parent: parent, child: child, style: style, branch: branches[child.id] ?? 0
-            )
+        // A dense fan-out drawn as one curve per child accumulates into an
+        // opaque vertical smear. Bundle only genuinely crowded sibling groups:
+        // one short outgoing segment, one shared vertical spine, and distinct
+        // horizontal spurs. Other branches retain their original curves.
+        var childrenByParent: [Int: [MindMapPlacement]] = [:]
+        for child in placements {
+            guard let parentID = child.parentID, byID[parentID] != nil else { continue }
+            childrenByParent[parentID, default: []].append(child)
+        }
+        var bundledSpines: [Int: CGFloat] = [:]
+        var resolvedConnectors: [MindMapConnector] = []
+        for (parentID, children) in childrenByParent where children.count >= 12 {
+            guard let parent = byID[parentID] else { continue }
+            // Colorful root branches have distinct colors, so never merge
+            // their connections under an arbitrarily colored common trunk.
+            if style.usesBranchColors && parent.parentID == nil { continue }
+            let parentRight = parent.center.x + parent.size.width / 2
+            guard let firstChildLeft = children.map({
+                $0.center.x - $0.size.width / 2
+            }).min(), firstChildLeft - parentRight >= 24 else { continue }
+            let spineX = (parentRight + firstChildLeft) / 2
+            let top = min(parent.center.y, children.map(\.center.y).min() ?? parent.center.y)
+            let bottom = max(parent.center.y, children.map(\.center.y).max() ?? parent.center.y)
+            let branch = branches[parent.id] ?? branches[children[0].id] ?? 0
+            bundledSpines[parentID] = spineX
+            resolvedConnectors.append(MindMapConnector(
+                straightFrom: CGPoint(x: parentRight, y: parent.center.y),
+                to: CGPoint(x: spineX, y: parent.center.y),
+                style: style, branch: branch
+            ))
+            resolvedConnectors.append(MindMapConnector(
+                straightFrom: CGPoint(x: spineX, y: top),
+                to: CGPoint(x: spineX, y: bottom),
+                style: style, branch: branch
+            ))
+        }
+        for child in placements {
+            guard let parentID = child.parentID, let parent = byID[parentID] else { continue }
+            let branch = branches[child.id] ?? 0
+            if let spineX = bundledSpines[parentID] {
+                resolvedConnectors.append(MindMapConnector(
+                    straightFrom: CGPoint(x: spineX, y: child.center.y),
+                    to: CGPoint(x: child.center.x - child.size.width / 2, y: child.center.y),
+                    style: style, branch: branch
+                ))
+            } else {
+                resolvedConnectors.append(MindMapConnector(
+                    parent: parent, child: child, style: style, branch: branch
+                ))
+            }
         }
         connectors = resolvedConnectors
 
