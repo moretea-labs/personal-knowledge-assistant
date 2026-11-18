@@ -1498,7 +1498,7 @@ struct MindMapCanvas: View {
         let renderedPlacements = layout.visiblePlacements(for: visibleNodeIDs)
         // Disclosure and branch metadata are derived once with the layout snapshot.
         let branchByID = layout.branchByID
-        let parentIDs = layout.parentIDs
+        let parentIDs = MindMapOutline.parentIDs(in: nodes)
         // Keep node positions in the exact same fixed-size coordinate space
         // as connectorCanvas. A bare ForEach can be measured independently by
         // the equatable card snapshot and shift card origins away from paths.

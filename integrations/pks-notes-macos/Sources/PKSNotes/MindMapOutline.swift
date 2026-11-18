@@ -40,6 +40,18 @@ struct MindMapActionAvailability: Equatable {
 }
 
 enum MindMapOutline {
+    /// Return every node that owns at least one descendant in the complete Markdown projection.
+    /// A visible/collapsed layout may omit those descendants, so disclosure affordances must
+    /// never derive this fact from the filtered canvas projection.
+    static func parentIDs(in nodes: [MindMapNode]) -> Set<Int> {
+        guard nodes.count > 1 else { return [] }
+        var result = Set<Int>()
+        for index in 0..<(nodes.count - 1) where nodes[index + 1].depth > nodes[index].depth {
+            result.insert(nodes[index].id)
+        }
+        return result
+    }
+
     /// Escape plain text before embedding it in Markdown structure.
     static func escapeInlineText(_ text: String) -> String {
         let flattened = text.components(separatedBy: .newlines)

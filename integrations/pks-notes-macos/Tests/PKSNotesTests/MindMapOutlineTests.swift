@@ -1183,3 +1183,39 @@ extension MindMapOutlineTests {
         )
     }
 }
+
+
+extension MindMapOutlineTests {
+    func testCollapsedBranchKeepsItsDisclosureFromTheCompleteMarkdownProjection() {
+        let nodes = MindMapOutline.nodes(in: """
+        # Root
+        - Deep branch
+          - Level 2
+            - Level 3
+        - Short branch
+          - Visible child
+        """)
+        let root = nodes.first { $0.title == "Root" }!
+        let deepBranch = nodes.first { $0.title == "Deep branch" }!
+        let shortBranch = nodes.first { $0.title == "Short branch" }!
+        let visibleChild = nodes.first { $0.title == "Visible child" }!
+
+        var hiddenBelow: Int?
+        let collapsedVisibleNodes = nodes.filter { node in
+            if let depth = hiddenBelow {
+                if node.depth > depth { return false }
+                hiddenBelow = nil
+            }
+            if node.id == deepBranch.id { hiddenBelow = node.depth }
+            return true
+        }
+
+        let fullParentIDs = MindMapOutline.parentIDs(in: nodes)
+        let visibleParentIDs = MindMapOutline.parentIDs(in: collapsedVisibleNodes)
+        XCTAssertTrue(fullParentIDs.contains(root.id))
+        XCTAssertTrue(fullParentIDs.contains(deepBranch.id))
+        XCTAssertFalse(visibleParentIDs.contains(deepBranch.id))
+        XCTAssertTrue(fullParentIDs.contains(shortBranch.id))
+        XCTAssertFalse(fullParentIDs.contains(visibleChild.id))
+    }
+}
