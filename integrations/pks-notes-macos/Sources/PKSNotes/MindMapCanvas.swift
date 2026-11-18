@@ -715,9 +715,27 @@ struct MindMapCanvas: View {
                 NSApp.keyWindow?.firstResponder as? NSTextView
             )
         }
-        .onChange(of: collapsed) { _, _ in
+        .onChange(of: collapsed) { oldValue, newValue in
+            let changedIDs = oldValue.symmetricDifference(newValue)
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
                 rebuildVisibleLayout()
+
+                // Expanding a branch changes the vertical geometry of the whole
+                // subtree. Keep the branch that was just opened in view so its
+                // newly revealed descendants are reachable immediately instead
+                // of appearing outside the current viewport.
+                guard changedIDs.count == 1,
+                      let changedID = changedIDs.first,
+                      oldValue.contains(changedID),
+                      !newValue.contains(changedID),
+                      let position = mapLayout.placements.first(where: { $0.id == changedID })
+                else { return }
+
+                viewportOffset = MindMapViewportGeometry.centeredOffset(
+                    for: position.center,
+                    mapSize: mapLayout.size,
+                    zoom: zoom
+                )
             }
         }
         .onChange(of: mapStyleID) { _, _ in
