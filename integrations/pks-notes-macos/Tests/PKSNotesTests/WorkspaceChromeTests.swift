@@ -40,12 +40,19 @@ final class WorkspaceChromeTests: XCTestCase {
     }
 
     func testMarkdownFormattingToolbarUsesTheDocumentTopInset() {
+        XCTAssertEqual(NotesGeometry.markdownFormattingToolbarHeight, 30)
+        XCTAssertEqual(NotesGeometry.markdownFormattingToolbarTarget, 30)
+        XCTAssertEqual(NotesGeometry.markdownFormattingSymbolSize, 15)
         XCTAssertEqual(NotesGeometry.editorContentTopInset(showingFormattingToolbar: false),
                        NotesGeometry.documentInset)
         XCTAssertEqual(
             NotesGeometry.markdownFormattingToolbarHeight
                 + NotesGeometry.editorContentTopInset(showingFormattingToolbar: true),
             NotesGeometry.documentInset
+        )
+        XCTAssertEqual(
+            NotesGeometry.editorContentTopInset(showingFormattingToolbar: true),
+            2
         )
     }
 

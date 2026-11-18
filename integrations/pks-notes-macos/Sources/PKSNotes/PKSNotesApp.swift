@@ -256,7 +256,9 @@ enum NotesGeometry {
     static let toolbarTarget: CGFloat = 28
     static let railSymbolSize: CGFloat = 16
     static let documentInset: CGFloat = 32
-    static let markdownFormattingToolbarHeight: CGFloat = documentInset
+    static let markdownFormattingToolbarHeight: CGFloat = 30
+    static let markdownFormattingToolbarTarget: CGFloat = 30
+    static let markdownFormattingSymbolSize: CGFloat = 15
     static let markdownSectionVerticalInset: CGFloat = 4
     static let markdownLineFragmentPadding: CGFloat = 0
     static let selectionCorner: CGFloat = 9
@@ -267,7 +269,9 @@ enum NotesGeometry {
     }
 
     static func editorContentTopInset(showingFormattingToolbar: Bool) -> CGFloat {
-        showingFormattingToolbar ? 0 : documentInset
+        showingFormattingToolbar
+            ? documentInset - markdownFormattingToolbarHeight
+            : documentInset
     }
     static let workspacePanelRadius: CGFloat = 14
     static let workspacePanelInset: CGFloat = 9
