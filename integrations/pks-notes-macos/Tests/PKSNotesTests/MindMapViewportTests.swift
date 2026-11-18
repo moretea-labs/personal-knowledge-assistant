@@ -815,3 +815,45 @@ final class MindMapViewportTests: XCTestCase {
         )
     }
 }
+
+
+extension MindMapViewportTests {
+    func testNineLevelKeyboardNavigationKeepsOffscreenSelectionMountedAndCenterable() throws {
+        let markdown = (0..<9).map { depth in
+            String(repeating: " ", count: depth * 2) + "- Level \(depth + 1)"
+        }.joined(separator: "\n")
+        let nodes = MindMapOutline.nodes(in: markdown)
+        XCTAssertEqual(nodes.map(\.depth), Array(0..<9))
+        var selectedID = try XCTUnwrap(nodes.first).id
+        for child in nodes.dropFirst() {
+            XCTAssertEqual(
+                MindMapKeyboard.selection(from: selectedID, in: nodes, moving: .childOrExpand),
+                child.id
+            )
+            selectedID = child.id
+        }
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: selectedID, in: nodes, moving: .parentOrCollapse),
+            nodes[nodes.count - 2].id
+        )
+
+        let layout = MindMapSpatialLayout.layout(nodes)
+        let viewport = CGSize(width: 600, height: 420)
+        let deepest = try XCTUnwrap(layout.placements.first { $0.id == selectedID })
+        let offscreen = MindMapViewportGeometry.visibleNodeIDs(
+            in: layout, viewport: viewport, offset: .zero, zoom: 1, overscan: 0
+        )
+        XCTAssertFalse(offscreen.contains(selectedID))
+        XCTAssertTrue(MindMapViewportGeometry.visibleNodeIDs(
+            in: layout, viewport: viewport, offset: .zero, zoom: 1,
+            overscan: 0, pinnedIDs: [selectedID]
+        ).contains(selectedID))
+        let offset = MindMapViewportGeometry.centeredOffset(
+            for: deepest.center, mapSize: layout.size, zoom: 1
+        )
+        XCTAssertEqual(viewport.width / 2 + offset.width + deepest.center.x - layout.size.width / 2,
+                       viewport.width / 2, accuracy: 0.001)
+        XCTAssertEqual(viewport.height / 2 + offset.height + deepest.center.y - layout.size.height / 2,
+                       viewport.height / 2, accuracy: 0.001)
+    }
+}
