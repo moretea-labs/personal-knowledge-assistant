@@ -1019,6 +1019,44 @@ extension MindMapOutlineTests {
         XCTAssertNil(MindMapKeyboard.command(for: .delete, modifiers: [.command, .shift]))
     }
 
+    func testNineLevelMarkdownChainIsReachableAndReversibleWithKeyboard() throws {
+        let nested = (2...9).map { level in
+            String(repeating: "  ", count: level - 2) + "- Level \(level)"
+        }
+        let source = (["# Root"] + nested + ["- Sibling"]).joined(separator: "\n")
+        let outline = MindMapOutline.nodes(in: source)
+
+        XCTAssertEqual(outline.map(\.depth), Array(0...8) + [1])
+        XCTAssertEqual(
+            outline.map(\.title), ["Root"] + (2...9).map { "Level \($0)" } + ["Sibling"]
+        )
+        var selected = try XCTUnwrap(outline.first?.id)
+        for level in 2...9 {
+            selected = try XCTUnwrap(
+                MindMapKeyboard.selection(from: selected, in: outline, moving: .childOrExpand)
+            )
+            XCTAssertEqual(outline.first(where: { $0.id == selected })?.title, "Level \(level)")
+        }
+
+        XCTAssertNil(
+            MindMapKeyboard.selection(from: selected, in: outline, moving: .childOrExpand),
+            "The last deep node must not treat its shallow sibling as a child"
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.selection(from: selected, in: outline, moving: .next),
+            outline.last?.id,
+            "Linear traversal must continue beyond the deepest branch"
+        )
+
+        for depth in stride(from: 7, through: 0, by: -1) {
+            selected = try XCTUnwrap(
+                MindMapKeyboard.selection(from: selected, in: outline, moving: .parentOrCollapse)
+            )
+            XCTAssertEqual(outline.first(where: { $0.id == selected })?.depth, depth)
+        }
+        XCTAssertEqual(selected, outline.first?.id)
+    }
+
     func testKeyboardParentChildAndLinearNavigationFollowVisibleMarkdownOutline() {
         let outline = MindMapOutline.nodes(in: "# Root\n- A\n  - A1\n- B\n## Another")
         XCTAssertEqual(outline.map(\.id), [0, 1, 2, 3, 4])
