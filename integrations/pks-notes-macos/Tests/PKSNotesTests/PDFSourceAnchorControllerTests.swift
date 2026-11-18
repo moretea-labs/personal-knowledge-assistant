@@ -1201,6 +1201,40 @@ extension PDFSourceAnchorControllerTests {
         XCTAssertEqual(controller.outline.map(\.pageIndex), [0, 0])
     }
 
+    func testCJKAndReservedCharactersInPDFPathRoundTripThroughMarkdownReference() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-CJK-PDF-Path-\(UUID().uuidString)", isDirectory: true)
+        let directory = root.appendingPathComponent("学习资料", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let pdf = directory.appendingPathComponent("夜的钢琴曲(五)（修订）#原版?.pdf")
+        XCTAssertTrue(FileManager.default.createFile(atPath: pdf.path, contents: Data()))
+        let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "夜的钢琴曲 第五乐章"))
+        let anchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 3,
+            normalizedRects: [CGRect(x: 0.12, y: 0.24, width: 0.42, height: 0.06)],
+            fingerprint: fingerprint
+        ))
+
+        let markdown = try XCTUnwrap(PDFPageReference.markdown(
+            for: pdf, page: 3, root: root, anchor: anchor
+        ))
+        let target = try XCTUnwrap(MindMapOutline.links(in: markdown).first?.target)
+        let url = try XCTUnwrap(URL(string: target))
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        XCTAssertTrue(components.percentEncodedPath.localizedCaseInsensitiveContains("%23"))
+        XCTAssertTrue(components.percentEncodedPath.localizedCaseInsensitiveContains("%3F"))
+        XCTAssertTrue(markdown.localizedCaseInsensitiveContains("%28"))
+        XCTAssertTrue(markdown.localizedCaseInsensitiveContains("%29"))
+        XCTAssertTrue(markdown.localizedCaseInsensitiveContains("%EF%BC%88"))
+        XCTAssertTrue(markdown.localizedCaseInsensitiveContains("%EF%BC%89"))
+        XCTAssertEqual(components.path, "/学习资料/夜的钢琴曲(五)（修订）#原版?.pdf")
+        XCTAssertEqual(PDFPageReference.page(from: url), 3)
+        XCTAssertEqual(PDFPageReference.anchor(from: url), anchor)
+    }
+
     func testSourceAnchorParserRejectsMalformedAndUnboundedFragments() throws {
         let fingerprint = "0123456789abcdef"
         let rect = "0.10000,0.20000,0.30000,0.04000"
