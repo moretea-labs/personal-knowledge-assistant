@@ -256,9 +256,9 @@ enum NotesGeometry {
     static let toolbarTarget: CGFloat = 28
     static let railSymbolSize: CGFloat = 16
     static let documentInset: CGFloat = 32
-    static let markdownFormattingToolbarHeight: CGFloat = 30
+    static let markdownFormattingToolbarHeight: CGFloat = 32
     static let markdownFormattingToolbarTarget: CGFloat = 30
-    static let markdownFormattingSymbolSize: CGFloat = 15
+    static let markdownFormattingSymbolSize: CGFloat = 16
     static let splitPaneHeaderHeight: CGFloat = 32
     static let markdownSectionVerticalInset: CGFloat = 4
     static let markdownLineFragmentPadding: CGFloat = 0
@@ -1382,11 +1382,15 @@ struct NotesWindow: View {
         }
     }
 
-    private func toolbarSymbol(_ name: String) -> some View {
+    private func toolbarSymbol(
+        _ name: String,
+        size: CGFloat = NotesGeometry.symbolSize,
+        target: CGFloat = NotesGeometry.toolbarTarget
+    ) -> some View {
         Image(systemName: name)
             .symbolRenderingMode(.hierarchical)
-            .font(.system(size: NotesGeometry.symbolSize, weight: .medium))
-            .frame(width: NotesGeometry.toolbarTarget, height: NotesGeometry.toolbarTarget)
+            .font(.system(size: size, weight: .medium))
+            .frame(width: target, height: target)
             .contentShape(Rectangle())
     }
 
@@ -3831,6 +3835,7 @@ struct NotesWindow: View {
                         HSplitView {
                             splitPane(
                                 title: url.lastPathComponent,
+                                subtitle: language.text("PDF"),
                                 symbol: "doc.richtext",
                                 identifier: "pks-pdf-pane"
                             ) {
@@ -3886,7 +3891,8 @@ struct NotesWindow: View {
                     && model.selected != nil && model.externalBody == nil {
             HSplitView {
                 splitPane(
-                    title: language.text("Mind Map"),
+                    title: model.selected?.deletingPathExtension().lastPathComponent ?? language.text("Mind Map"),
+                    subtitle: language.text("Mind Map"),
                     symbol: "point.3.connected.trianglepath.dotted",
                     identifier: "pks-mind-map-pane"
                 ) {
@@ -3898,7 +3904,8 @@ struct NotesWindow: View {
                 )
                 if showingMindMapSourcePane {
                     splitPane(
-                        title: language.text("Edit"),
+                        title: model.selected?.deletingPathExtension().lastPathComponent ?? language.text("Edit"),
+                        subtitle: language.text("Edit"),
                         symbol: "square.and.pencil",
                         identifier: "pks-mind-map-source-pane"
                     ) {
@@ -3919,7 +3926,8 @@ struct NotesWindow: View {
         } else {
             HSplitView {
                 splitPane(
-                    title: language.text("Edit"),
+                    title: model.selected?.deletingPathExtension().lastPathComponent ?? language.text("Edit"),
+                    subtitle: language.text("Edit"),
                     symbol: "square.and.pencil",
                     identifier: "pks-markdown-edit-pane"
                 ) {
@@ -3928,7 +3936,8 @@ struct NotesWindow: View {
                 .frame(minWidth: 270)
 
                 splitPane(
-                    title: language.text("Read"),
+                    title: model.selected?.deletingPathExtension().lastPathComponent ?? language.text("Read"),
+                    subtitle: language.text("Read"),
                     symbol: "book",
                     identifier: "pks-markdown-read-pane"
                 ) {
@@ -3941,6 +3950,7 @@ struct NotesWindow: View {
 
     private func splitPane<Content: View>(
         title: String,
+        subtitle: String,
         symbol: String,
         identifier: String,
         @ViewBuilder content: () -> Content
@@ -3953,6 +3963,10 @@ struct NotesWindow: View {
                     .foregroundStyle(.secondary)
                 Text(title)
                     .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -4214,94 +4228,7 @@ struct NotesWindow: View {
     }
 
     private var markdownFormattingToolbar: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 7) {
-                Menu {
-                    Button(language.text("Heading 1")) { applyMarkdownFormatting("h1") }
-                    Button(language.text("Heading 2")) { applyMarkdownFormatting("h2") }
-                    Button(language.text("Heading 3")) { applyMarkdownFormatting("h3") }
-                } label: {
-                    toolbarSymbol("textformat.size")
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .help(language.text("Heading"))
-                .accessibilityLabel(language.text("Heading"))
-                .accessibilityIdentifier("pks-markdown-format-heading")
-
-                markdownCommandButton("bold", title: "Bold", symbol: "bold",
-                                      identifier: "pks-markdown-format-bold")
-                markdownCommandButton("italic", title: "Italic", symbol: "italic",
-                                      identifier: "pks-markdown-format-italic")
-
-                Menu {
-                    Button(language.text("Bullet List")) { applyMarkdownFormatting("bullet") }
-                    Button(language.text("Numbered List")) { applyMarkdownFormatting("ordered") }
-                    Button(language.text("Task")) { applyMarkdownFormatting("task") }
-                } label: {
-                    toolbarSymbol("list.bullet")
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .help(language.text("List"))
-                .accessibilityLabel(language.text("List"))
-                .accessibilityIdentifier("pks-markdown-format-list")
-
-                markdownCommandButton("quote", title: "Quote", symbol: "text.quote",
-                                      identifier: "pks-markdown-format-quote")
-                markdownCommandButton("link", title: "Link", symbol: "link",
-                                      identifier: "pks-markdown-format-link")
-                Menu {
-                    Button(language.text("Inline Code")) { applyMarkdownFormatting("code") }
-                        .accessibilityIdentifier("pks-markdown-format-inline-code")
-                    Button(language.text("Code Block")) { applyMarkdownFormatting("codeBlock") }
-                        .accessibilityIdentifier("pks-markdown-format-code-block")
-                } label: {
-                    toolbarSymbol("chevron.left.forwardslash.chevron.right")
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .help(language.text("Code"))
-                .accessibilityLabel(language.text("Code"))
-                .accessibilityIdentifier("pks-markdown-format-code")
-
-                Menu {
-                    Button(language.text("Insert Table"), systemImage: "tablecells") {
-                        applyMarkdownFormatting("table")
-                    }
-                    Button(language.text("Choose Image…"), systemImage: "photo.on.rectangle") {
-                        chooseImageFile()
-                    }
-                    Button(language.text("Paste Image from Clipboard"), systemImage: "photo") {
-                        pasteImageFromClipboard()
-                    }
-                    pdfCitationInsertMenuSection
-                } label: {
-                    toolbarSymbol("plus")
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .help(language.text("Insert"))
-                .accessibilityLabel(language.text("Insert"))
-                .accessibilityIdentifier("pks-markdown-format-insert")
-
-                Spacer(minLength: 0)
-            }
-            .fixedSize(horizontal: true, vertical: false)
-            compactMarkdownFormattingToolbar
-                .fixedSize(horizontal: true, vertical: false)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .buttonStyle(.plain)
-        .controlSize(.small)
-        .padding(.horizontal, NotesGeometry.documentInset)
-        .frame(height: NotesGeometry.markdownFormattingToolbarHeight)
-        .background(Color(nsColor: NotesGeometry.toolbarSurfaceColor))
-        .accessibilityIdentifier("pks-markdown-formatting-toolbar")
-    }
-
-    private var compactMarkdownFormattingToolbar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             markdownCommandButton(
                 "bold", title: "Bold", symbol: "bold",
                 identifier: "pks-markdown-format-bold"
@@ -4312,20 +4239,28 @@ struct NotesWindow: View {
             )
 
             Menu {
-                Button(language.text("Heading 1")) { applyMarkdownFormatting("h1") }
-                Button(language.text("Heading 2")) { applyMarkdownFormatting("h2") }
-                Button(language.text("Heading 3")) { applyMarkdownFormatting("h3") }
+                Section(language.text("Heading")) {
+                    Button(language.text("Heading 1")) { applyMarkdownFormatting("h1") }
+                    Button(language.text("Heading 2")) { applyMarkdownFormatting("h2") }
+                    Button(language.text("Heading 3")) { applyMarkdownFormatting("h3") }
+                }
+                Section(language.text("List")) {
+                    Button(language.text("Bullet List")) { applyMarkdownFormatting("bullet") }
+                    Button(language.text("Numbered List")) { applyMarkdownFormatting("ordered") }
+                    Button(language.text("Task")) { applyMarkdownFormatting("task") }
+                }
                 Divider()
-                Button(language.text("Bullet List")) { applyMarkdownFormatting("bullet") }
-                Button(language.text("Numbered List")) { applyMarkdownFormatting("ordered") }
-                Button(language.text("Task")) { applyMarkdownFormatting("task") }
                 Button(language.text("Quote")) { applyMarkdownFormatting("quote") }
                 Button(language.text("Link")) { applyMarkdownFormatting("link") }
                 Button(language.text("Inline Code")) { applyMarkdownFormatting("code") }
                 Button(language.text("Code Block")) { applyMarkdownFormatting("codeBlock") }
             } label: {
                 HStack(spacing: 5) {
-                    toolbarSymbol("textformat")
+                    toolbarSymbol(
+                        "textformat",
+                        size: NotesGeometry.markdownFormattingSymbolSize,
+                        target: NotesGeometry.markdownFormattingToolbarTarget
+                    )
                     Text(language.text("Format"))
                         .font(.caption.weight(.medium))
                 }
@@ -4348,7 +4283,11 @@ struct NotesWindow: View {
                 }
                 pdfCitationInsertMenuSection
             } label: {
-                toolbarSymbol("plus")
+                toolbarSymbol(
+                    "plus",
+                    size: NotesGeometry.markdownFormattingSymbolSize,
+                    target: NotesGeometry.markdownFormattingToolbarTarget
+                )
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -4358,6 +4297,13 @@ struct NotesWindow: View {
 
             Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .buttonStyle(.plain)
+        .controlSize(.small)
+        .padding(.horizontal, NotesGeometry.documentInset)
+        .frame(height: NotesGeometry.markdownFormattingToolbarHeight)
+        .background(theme.canvas)
+        .accessibilityIdentifier("pks-markdown-formatting-toolbar")
     }
 
     private func markdownCommandButton(
@@ -4369,7 +4315,11 @@ struct NotesWindow: View {
         Button {
             applyMarkdownFormatting(command)
         } label: {
-            toolbarSymbol(symbol)
+            toolbarSymbol(
+                symbol,
+                size: NotesGeometry.markdownFormattingSymbolSize,
+                target: NotesGeometry.markdownFormattingToolbarTarget
+            )
         }
         .buttonStyle(.plain)
         .help(language.text(title))

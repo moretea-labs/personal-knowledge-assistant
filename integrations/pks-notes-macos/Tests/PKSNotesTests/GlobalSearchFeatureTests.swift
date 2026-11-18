@@ -137,6 +137,19 @@ final class GlobalSearchFeatureTests: XCTestCase {
                           GlobalSearchShortcut.controlOptionP.modifiers)
     }
 
+    @MainActor
+    func testCancelImmediatelyClearsGlobalSearchLoadingState() {
+        let results = GlobalSearchResults()
+        results.start()
+        results.query = "large workspace search"
+
+        XCTAssertTrue(results.loading)
+        results.cancel()
+
+        XCTAssertFalse(results.loading)
+        XCTAssertTrue(results.items.isEmpty)
+    }
+
     func testUnifiedResultsDeduplicateAndPreferFilenames() {
         let path = URL(fileURLWithPath: "/Users/test/Documents/Budget Plan.pdf")
         let application = GlobalSearchItem.application(

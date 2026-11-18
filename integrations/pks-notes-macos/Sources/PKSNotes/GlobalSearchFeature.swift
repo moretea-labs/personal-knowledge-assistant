@@ -373,7 +373,9 @@ final class GlobalSearchResults: ObservableObject {
     @Published private(set) var statusMessage: String?
     @Published private(set) var loading = false
 
-    private var applications: [GlobalSearchItem] = []
+    private var applications: [GlobalSearchItem]?
+    private var applicationCatalogTask: Task<Void, Never>?
+    private var isPresented = false
     private let spotlight = GlobalSpotlightLookup()
     private var appHits: [GlobalSearchItem] = []
     private var pksHits: [SearchHit] = []
@@ -386,23 +388,46 @@ final class GlobalSearchResults: ObservableObject {
     private var librarySearchUnavailable = false
 
     func start() {
-        if applications.isEmpty {
-            applications = GlobalApplicationCatalog.installed()
-        }
+        isPresented = true
+        cancelPendingSearch()
         query = ""
         items = []
         selectedIndex = 0
         workspaceCoverage = WorkspaceSearch.Coverage()
         librarySearchUnavailable = false
         statusMessage = nil
+        loadApplicationCatalogIfNeeded()
     }
 
     func cancel() {
+        isPresented = false
+        cancelPendingSearch()
+        loading = false
+    }
+
+    private func cancelPendingSearch() {
         searchTask?.cancel()
         searchTask = nil
         workspaceSearchTask?.cancel()
         workspaceSearchTask = nil
         spotlight.cancel()
+    }
+
+    // Bundle discovery touches the filesystem and can be slow on first use.
+    // Keep that work off the main actor; publish only if the palette is still open.
+    private func loadApplicationCatalogIfNeeded() {
+        guard applications == nil, applicationCatalogTask == nil else { return }
+        applicationCatalogTask = Task { [weak self] in
+            let loaded = await Task.detached(priority: .utility) {
+                GlobalApplicationCatalog.installed()
+            }.value
+            guard let self else { return }
+            self.applications = loaded
+            self.applicationCatalogTask = nil
+            guard self.isPresented else { return }
+            self.appHits = GlobalApplicationCatalog.matches(loaded, query: self.query)
+            self.publish()
+        }
     }
 
     static func makeStatusMessage(
@@ -455,13 +480,13 @@ final class GlobalSearchResults: ObservableObject {
     }
 
     private func scheduleSearch() {
-        cancel()
+        cancelPendingSearch()
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         selectedIndex = 0
         workspaceCoverage = WorkspaceSearch.Coverage()
         librarySearchUnavailable = false
         statusMessage = nil
-        appHits = GlobalApplicationCatalog.matches(applications, query: text)
+        appHits = GlobalApplicationCatalog.matches(applications ?? [], query: text)
         pksHits = []
         workspaceHits = []
         relatedHits = []
@@ -592,7 +617,7 @@ final class GlobalSearchResults: ObservableObject {
 }
 
 @MainActor
-final class GlobalSearchController: NSObject, ObservableObject {
+final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate {
     static let shared = GlobalSearchController()
 
     @Published private(set) var shortcutStatus = ""
@@ -660,6 +685,7 @@ final class GlobalSearchController: NSObject, ObservableObject {
         window.isFloatingPanel = true
         window.level = .floating
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.hidesOnDeactivate = true
         window.contentView = NSHostingView(rootView: GlobalSearchPalette(results: results))
         if let screen = NSScreen.main {
@@ -689,6 +715,17 @@ final class GlobalSearchController: NSObject, ObservableObject {
             self.keyMonitor = nil
         }
         panel?.close()
+        panel = nil
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let closingPanel = notification.object as? NSPanel,
+              closingPanel === panel else { return }
+        results.cancel()
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
         panel = nil
     }
 
@@ -763,6 +800,13 @@ private struct GlobalSearchPalette: View {
                     .onSubmit { if let item = results.selected { GlobalSearchController.shared.open(item) } }
                     .accessibilityIdentifier("leafspan-global-search-input")
                 if results.loading { ProgressView().controlSize(.small) }
+                Button(AppLanguage.current.resolved == .simplifiedChinese ? "取消" : "Cancel") {
+                    GlobalSearchController.shared.dismiss()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("leafspan-global-search-cancel")
             }
             .padding(.horizontal, 23)
             .padding(.top, 32)

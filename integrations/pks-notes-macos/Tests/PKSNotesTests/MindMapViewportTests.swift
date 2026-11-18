@@ -127,6 +127,24 @@ final class MindMapViewportTests: XCTestCase {
         )
     }
 
+    func testLargeMapInitialFocusKeepsEveryNodeExpandedAndRootReadable() {
+        let nodes = (0..<600).map { index in
+            MindMapNode(id: index, depth: index == 0 ? 0 : 1, title: "Node \(index)")
+        }
+        let layout = MindMapSpatialLayout.layout(nodes)
+        let root = layout.placements[0]
+        let initial = MindMapViewportGeometry.initialRootViewport(
+            root: root,
+            visiblePlacements: [root],
+            mapSize: layout.size,
+            viewport: CGSize(width: 1_000, height: 700)
+        )
+
+        XCTAssertEqual(initial.zoom, 1, accuracy: 0.001)
+        XCTAssertEqual(layout.placements.count, nodes.count)
+        XCTAssertEqual(layout.placements.map(\.node), nodes)
+    }
+
     func testLargeMapCullingKeepsVisibleCardCountBoundedAndPreservesSelection() {
         let placements = (0..<600).map { index in
             MindMapPlacement(
@@ -523,61 +541,6 @@ final class MindMapViewportTests: XCTestCase {
         )
     }
 
-    func testTallSubtreesStartWithVisibleTopLevelBranches() {
-        let nodes = [MindMapNode(id: 0, depth: 0, title: "Root")]
-            + [MindMapNode(id: 1, depth: 1, title: "First")]
-            + (2..<102).map { MindMapNode(id: $0, depth: 2, title: "Detail \($0)") }
-            + [MindMapNode(id: 102, depth: 1, title: "Second")]
-            + (103..<203).map { MindMapNode(id: $0, depth: 2, title: "Detail \($0)") }
-        let viewport = CGSize(width: 1000, height: 680)
-        let full = MindMapSpatialLayout.layout(nodes)
-        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
-            nodes: nodes, layout: full, viewport: viewport
-        )
-        XCTAssertEqual(collapsed, Set([1, 102]))
-        let overview = MindMapSpatialLayout.layout(nodes.filter { $0.depth <= 1 })
-        let root = overview.placements.first { $0.id == 0 }!
-        XCTAssertTrue(overview.placements.contains {
-            $0.parentID == root.id && abs($0.center.y - root.center.y) < viewport.height * 0.42
-        })
-    }
-
-    func testMixedTallAndShortBranchesOpenAsReadableOverview() throws {
-        let nodes = [
-            MindMapNode(id: 0, depth: 0, title: "Root"),
-            MindMapNode(id: 1, depth: 1, title: "Long branch")
-        ] + (2..<82).map {
-            MindMapNode(id: $0, depth: 2, title: "Detail \($0)")
-        } + [
-            MindMapNode(id: 82, depth: 1, title: "Short branch"),
-            MindMapNode(id: 83, depth: 2, title: "One visible child")
-        ]
-        let viewport = CGSize(width: 600, height: 645)
-        let expanded = MindMapSpatialLayout.layout(nodes)
-        let root = try XCTUnwrap(expanded.placements.first { $0.id == 0 })
-        let nearby = try XCTUnwrap(expanded.placements.first { $0.id == 1 })
-        XCTAssertLessThan(abs(nearby.center.y - root.center.y), viewport.height * 0.42)
-
-        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
-            nodes: nodes, layout: expanded, viewport: viewport
-        )
-        XCTAssertEqual(collapsed, Set([1]))
-        let overview = MindMapSpatialLayout.layout(nodes.filter { [0, 1, 82, 83].contains($0.id) })
-        let overviewRoot = try XCTUnwrap(overview.placements.first { $0.id == 0 })
-        let initial = MindMapViewportGeometry.initialRootViewport(
-            root: overviewRoot,
-            visiblePlacements: overview.placements,
-            mapSize: overview.size, viewport: viewport
-        )
-        XCTAssertEqual(
-            MindMapViewportGeometry.visibleNodeIDs(
-                in: overview, viewport: viewport,
-                offset: initial.offset, zoom: initial.zoom, overscan: 0
-            ),
-            Set([0, 1, 82, 83])
-        )
-    }
-
     func testInitialOverviewFitsVisibleCardsWhenPreferredZoomFloorWouldClip() throws {
         let nodes = [
             MindMapNode(id: 0, depth: 0, title: "Root"),
@@ -614,215 +577,6 @@ final class MindMapViewportTests: XCTestCase {
                 && $0.minY >= verticalInset - 0.5
                 && $0.maxY <= viewport.height - verticalInset + 0.5
         })
-    }
-
-    func testDeepHorizontalBranchCollapsesWithoutHidingShortSiblingChild() throws {
-        let nodes = [
-            MindMapNode(id: 0, depth: 0, title: "Root"),
-            MindMapNode(id: 1, depth: 1, title: "Deep branch"),
-            MindMapNode(id: 2, depth: 2, title: "Level two"),
-            MindMapNode(id: 3, depth: 3, title: "Level three"),
-            MindMapNode(id: 4, depth: 4, title: "Level four"),
-            MindMapNode(id: 5, depth: 5, title: "Level five"),
-            MindMapNode(id: 82, depth: 1, title: "Short branch"),
-            MindMapNode(id: 83, depth: 2, title: "Visible child")
-        ]
-        let viewport = CGSize(width: 600, height: 645)
-        let expanded = MindMapSpatialLayout.layout(nodes)
-        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
-            nodes: nodes, layout: expanded, viewport: viewport
-        )
-        XCTAssertEqual(collapsed, Set([1]))
-
-        var hiddenBelow: Int?
-        let exposed = nodes.filter { node in
-            if let depth = hiddenBelow {
-                if node.depth > depth { return false }
-                hiddenBelow = nil
-            }
-            if collapsed.contains(node.id) { hiddenBelow = node.depth }
-            return true
-        }
-        XCTAssertEqual(exposed.map(\.id), [0, 1, 82, 83])
-
-        let overview = MindMapSpatialLayout.layout(exposed)
-        let root = try XCTUnwrap(overview.placements.first { $0.parentID == nil })
-        let initial = MindMapViewportGeometry.initialRootViewport(
-            root: root, visiblePlacements: overview.placements,
-            mapSize: overview.size, viewport: viewport
-        )
-        XCTAssertEqual(
-            MindMapViewportGeometry.visibleNodeIDs(
-                in: overview, viewport: viewport,
-                offset: initial.offset, zoom: initial.zoom, overscan: 0
-            ),
-            Set(exposed.map(\.id))
-        )
-    }
-
-    func testSeveralModerateBranchesCollapseEnoughToFitOpeningViewport() throws {
-        var nodes = [MindMapNode(id: 0, depth: 0, title: "Root")]
-        var nextID = 1
-        for branch in 1...3 {
-            nodes.append(MindMapNode(id: nextID, depth: 1, title: "Branch \(branch)"))
-            nextID += 1
-            for detail in 1...5 {
-                nodes.append(MindMapNode(id: nextID, depth: 2, title: "Detail \(detail)"))
-                nextID += 1
-            }
-        }
-
-        let viewport = CGSize(width: 600, height: 645)
-        let expanded = MindMapSpatialLayout.layout(nodes)
-        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
-            nodes: nodes, layout: expanded, viewport: viewport
-        )
-        XCTAssertEqual(collapsed.count, 1)
-
-        var hiddenBelow: Int?
-        let exposed = nodes.filter { node in
-            if let depth = hiddenBelow {
-                if node.depth > depth { return false }
-                hiddenBelow = nil
-            }
-            if collapsed.contains(node.id) { hiddenBelow = node.depth }
-            return true
-        }
-        let overview = MindMapSpatialLayout.layout(exposed)
-        let root = try XCTUnwrap(overview.placements.first { $0.parentID == nil })
-        let initial = MindMapViewportGeometry.initialRootViewport(
-            root: root,
-            visiblePlacements: overview.placements.filter { $0.parentID == root.id },
-            mapSize: overview.size,
-            viewport: viewport
-        )
-
-        let visible = MindMapViewportGeometry.visibleNodeIDs(
-            in: overview, viewport: viewport,
-            offset: initial.offset, zoom: initial.zoom, overscan: 0
-        )
-        let openingOverview = Set([0] + nodes.filter { $0.depth == 1 }.map(\.id))
-        XCTAssertEqual(visible.intersection(openingOverview), openingOverview)
-    }
-
-    func testSingleTallRootBranchCollapsesItsSubtreeWithoutSiblingSpread() throws {
-        let nodes = [
-            MindMapNode(id: 0, depth: 0, title: "Root"),
-            MindMapNode(id: 1, depth: 1, title: "Only branch")
-        ] + (2..<102).map { MindMapNode(id: $0, depth: 2, title: "Detail \($0)") }
-        let viewport = CGSize(width: 1000, height: 680)
-        let expanded = MindMapSpatialLayout.layout(nodes)
-        let root = try XCTUnwrap(expanded.placements.first { $0.id == 0 })
-        let branch = try XCTUnwrap(expanded.placements.first { $0.id == 1 })
-        XCTAssertLessThan(root.size.height, viewport.height * 0.80)
-        XCTAssertLessThan(branch.size.height, viewport.height * 0.80)
-        XCTAssertGreaterThan(expanded.size.height, viewport.height * 2)
-
-        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
-            nodes: nodes, layout: expanded, viewport: viewport
-        )
-        XCTAssertEqual(collapsed, Set([1]))
-
-        var hiddenBelow: Int?
-        let exposed = nodes.filter { node in
-            if let depth = hiddenBelow {
-                if node.depth > depth { return false }
-                hiddenBelow = nil
-            }
-            if collapsed.contains(node.id) { hiddenBelow = node.depth }
-            return true
-        }
-        XCTAssertEqual(exposed.map(\.id), [0, 1])
-        let overview = MindMapSpatialLayout.layout(exposed)
-        let overviewRoot = try XCTUnwrap(overview.placements.first { $0.parentID == nil })
-        let initial = MindMapViewportGeometry.initialRootViewport(
-            root: overviewRoot,
-            visiblePlacements: overview.placements.filter { $0.parentID == overviewRoot.id },
-            mapSize: overview.size, viewport: viewport
-        )
-        XCTAssertEqual(
-            MindMapViewportGeometry.visibleNodeIDs(
-                in: overview, viewport: viewport,
-                offset: initial.offset, zoom: initial.zoom, overscan: 0
-            ),
-            Set([0, 1])
-        )
-    }
-
-    func testCommittedLargeOutlineFixtureShowsFirstLevelNodesOnInitialViewport() throws {
-        let fixture = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("verification/viewport-qa-20261115/Outline.md")
-        let markdown = try String(contentsOf: fixture, encoding: .utf8)
-        let nodes = MindMapOutline.nodes(in: markdown)
-        XCTAssertEqual(nodes.count, 243)
-
-        let viewport = CGSize(width: 1000, height: 680)
-        let full = MindMapSpatialLayout.layout(nodes)
-        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
-            nodes: nodes, layout: full, viewport: viewport
-        )
-        XCTAssertEqual(collapsed.count, 2)
-
-        var hiddenBelow: Int?
-        let exposed = nodes.filter { node in
-            if let depth = hiddenBelow {
-                if node.depth > depth { return false }
-                hiddenBelow = nil
-            }
-            if collapsed.contains(node.id) { hiddenBelow = node.depth }
-            return true
-        }
-        XCTAssertEqual(exposed.count, 3)
-        let overview = MindMapSpatialLayout.layout(exposed)
-        let root = try XCTUnwrap(overview.placements.first { $0.parentID == nil })
-        let initial = MindMapViewportGeometry.initialRootViewport(
-            root: root,
-            visiblePlacements: overview.placements.filter { $0.parentID == root.id },
-            mapSize: overview.size, viewport: viewport
-        )
-        let onScreen = MindMapViewportGeometry.visibleNodeIDs(
-            in: overview, viewport: viewport,
-            offset: initial.offset, zoom: initial.zoom, overscan: 0
-        )
-        XCTAssertEqual(onScreen, Set(exposed.map(\.id)))
-        XCTAssertTrue(overview.placements.filter { $0.parentID == root.id }.allSatisfy {
-            onScreen.contains($0.id)
-        })
-    }
-
-    func testInitialDisclosureDoesNotCollapseBranchesOfAnotherRoot() {
-        let nodes = [
-            MindMapNode(id: 0, depth: 0, title: "First root"),
-            MindMapNode(id: 1, depth: 1, title: "First branch")
-        ] + (2..<102).map { MindMapNode(id: $0, depth: 2, title: "First detail \\($0)") }
-        + [MindMapNode(id: 102, depth: 1, title: "Second branch")]
-        + (103..<203).map { MindMapNode(id: $0, depth: 2, title: "Second detail \\($0)") }
-        + [
-            MindMapNode(id: 203, depth: 0, title: "Other root"),
-            MindMapNode(id: 204, depth: 1, title: "Other root branch")
-        ]
-        let collapsed = MindMapSpatialLayout.initialCollapsedBranches(
-            nodes: nodes,
-            layout: MindMapSpatialLayout.layout(nodes),
-            viewport: CGSize(width: 1000, height: 680)
-        )
-        XCTAssertEqual(collapsed, Set([1, 102]))
-        XCTAssertFalse(collapsed.contains(204))
-    }
-
-    func testShortMapKeepsBranchesExpandedOnFirstOpen() {
-        let nodes = [
-            MindMapNode(id: 0, depth: 0, title: "Root"),
-            MindMapNode(id: 1, depth: 1, title: "First"),
-            MindMapNode(id: 2, depth: 2, title: "Detail")
-        ]
-        XCTAssertTrue(MindMapSpatialLayout.initialCollapsedBranches(
-            nodes: nodes, layout: MindMapSpatialLayout.layout(nodes),
-            viewport: CGSize(width: 1000, height: 680)
-        ).isEmpty)
     }
 
     func testPinchKeepsContentPointUnderAnchor() {
