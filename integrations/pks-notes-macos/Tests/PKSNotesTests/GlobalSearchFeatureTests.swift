@@ -150,6 +150,34 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertTrue(results.items.isEmpty)
     }
 
+    func testRecordedGlobalShortcutRoundTripsAndLegacyPresetsRemainValid() throws {
+        let commandShiftK = try XCTUnwrap(GlobalSearchKeyBinding.make(
+            keyCode: UInt32(kVK_ANSI_K),
+            modifiers: UInt32(cmdKey | shiftKey),
+            key: "k"
+        ))
+        XCTAssertEqual(commandShiftK.label, "⇧⌘K")
+        XCTAssertEqual(GlobalSearchKeyBinding.resolved(commandShiftK.storedValue), commandShiftK)
+        XCTAssertEqual(GlobalSearchKeyBinding.resolved("controlOptionP").label, "⌃⌥P")
+        XCTAssertEqual(GlobalSearchKeyBinding.resolved("optionSpace").label, "⌥Space")
+        XCTAssertEqual(GlobalSearchKeyBinding.resolved("invalid").label, "⌃⌥P")
+    }
+
+    func testRecordingRejectsUnmodifiedAndSingleModifierSystemShortcuts() {
+        XCTAssertNil(GlobalSearchKeyBinding.make(
+            keyCode: UInt32(kVK_ANSI_Q), modifiers: UInt32(cmdKey), key: "Q"
+        ))
+        XCTAssertNil(GlobalSearchKeyBinding.make(
+            keyCode: UInt32(kVK_Space), modifiers: 0, key: " "
+        ))
+        XCTAssertNil(GlobalSearchKeyBinding.make(
+            keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(cmdKey | shiftKey) | 1, key: "P"
+        ))
+        XCTAssertNotNil(GlobalSearchKeyBinding.make(
+            keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(controlKey | optionKey), key: "P"
+        ))
+    }
+
     func testUnifiedResultsDeduplicateAndPreferFilenames() {
         let path = URL(fileURLWithPath: "/Users/test/Documents/Budget Plan.pdf")
         let application = GlobalSearchItem.application(

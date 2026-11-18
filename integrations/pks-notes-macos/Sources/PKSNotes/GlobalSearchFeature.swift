@@ -40,6 +40,68 @@ enum GlobalSearchShortcut: String, CaseIterable, Identifiable {
     }
 }
 
+
+/// The stored shortcut is the single authority for the native Carbon hot key.
+/// Legacy preset values remain readable when an existing user upgrades.
+struct GlobalSearchKeyBinding: Equatable {
+    let keyCode: UInt32
+    let modifiers: UInt32
+    let key: String
+
+    private static let supportedModifiers = UInt32(cmdKey | controlKey | optionKey | shiftKey)
+
+    var label: String {
+        var result = ""
+        if modifiers & UInt32(controlKey) != 0 { result += "⌃" }
+        if modifiers & UInt32(optionKey) != 0 { result += "⌥" }
+        if modifiers & UInt32(shiftKey) != 0 { result += "⇧" }
+        if modifiers & UInt32(cmdKey) != 0 { result += "⌘" }
+        return result + (key == " " ? "Space" : key)
+    }
+
+    var storedValue: String { "custom:\(keyCode):\(modifiers):\(key)" }
+
+    static func resolved(_ stored: String?) -> Self {
+        if let preset = GlobalSearchShortcut(rawValue: stored ?? "") {
+            return .init(keyCode: preset.keyCode, modifiers: preset.modifiers,
+                         key: preset == .optionSpace ? " " : "P")
+        }
+        let parts = (stored ?? "").split(separator: ":", maxSplits: 3, omittingEmptySubsequences: false)
+        if parts.count == 4, parts[0] == "custom",
+           let code = UInt32(parts[1]), let flags = UInt32(parts[2]),
+           let binding = make(keyCode: code, modifiers: flags, key: String(parts[3])) {
+            return binding
+        }
+        let preset = GlobalSearchShortcut.defaultChoice
+        return .init(keyCode: preset.keyCode, modifiers: preset.modifiers, key: "P")
+    }
+
+    static func make(keyCode: UInt32, modifiers: UInt32, key: String) -> Self? {
+        guard keyCode <= 127, modifiers & ~supportedModifiers == 0,
+              key.count == 1,
+              key == " " || key.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
+            return nil
+        }
+        let count = [cmdKey, controlKey, optionKey, shiftKey].filter {
+            modifiers & UInt32($0) != 0
+        }.count
+        // Never capture typing, bare Cmd+Q/W or system single-modifier equivalents.
+        guard count >= 2 else { return nil }
+        return .init(keyCode: keyCode, modifiers: modifiers, key: key.uppercased())
+    }
+
+    static func captured(_ event: NSEvent) -> Self? {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        var modifiers: UInt32 = 0
+        if flags.contains(.command) { modifiers |= UInt32(cmdKey) }
+        if flags.contains(.control) { modifiers |= UInt32(controlKey) }
+        if flags.contains(.option) { modifiers |= UInt32(optionKey) }
+        if flags.contains(.shift) { modifiers |= UInt32(shiftKey) }
+        guard let key = event.charactersIgnoringModifiers else { return nil }
+        return make(keyCode: UInt32(event.keyCode), modifiers: modifiers, key: key)
+    }
+}
+
 struct GlobalSearchRanking: Sendable {
     let query: String
     let spotlightNameRank: Int
@@ -656,14 +718,33 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
                 return
             }
         }
-        let choice = GlobalSearchShortcut(rawValue: UserDefaults.standard.string(
-            forKey: GlobalSearchPreferences.shortcutKey) ?? "") ?? .defaultChoice
+        let binding = GlobalSearchKeyBinding.resolved(UserDefaults.standard.string(
+            forKey: GlobalSearchPreferences.shortcutKey))
         let identifier = EventHotKeyID(signature: OSType(0x4C465347), id: 1)
-        let status = RegisterEventHotKey(choice.keyCode, choice.modifiers,
+        let status = RegisterEventHotKey(binding.keyCode, binding.modifiers,
                                          identifier, GetApplicationEventTarget(), 0, &hotKey)
         shortcutStatus = status == noErr
-            ? "已启用 " + choice.label
+            ? "已启用 " + binding.label
             : "无法注册快捷键，请检查是否被其他应用占用"
+    }
+
+    /// A failed registration must not replace the last working global shortcut.
+    func applyRecordedShortcut(_ binding: GlobalSearchKeyBinding) -> Bool {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: GlobalSearchPreferences.shortcutKey)
+        defaults.set(binding.storedValue, forKey: GlobalSearchPreferences.shortcutKey)
+        configure()
+        guard hotKey != nil else {
+            if let previous {
+                defaults.set(previous, forKey: GlobalSearchPreferences.shortcutKey)
+            } else {
+                defaults.removeObject(forKey: GlobalSearchPreferences.shortcutKey)
+            }
+            configure()
+            shortcutStatus = "该快捷键不可用，请换一个组合"
+            return false
+        }
+        return true
     }
 
     func present() {
@@ -908,6 +989,9 @@ struct GlobalSearchSettingsView: View {
     @AppStorage(GlobalSearchPreferences.indexedFoldersEnabledKey) private var indexedFoldersEnabled = false
     @AppStorage(GlobalSearchPreferences.shortcutKey) private var shortcut = GlobalSearchShortcut.defaultChoice.rawValue
     @ObservedObject private var controller = GlobalSearchController.shared
+    @State private var recording = false
+    @State private var recordingMonitor: Any?
+    @State private var recordingHint: String?
 
     private var chinese: Bool { AppLanguage.current.resolved == .simplifiedChinese }
 
@@ -915,12 +999,28 @@ struct GlobalSearchSettingsView: View {
         Form {
             Toggle(chinese ? "搜索工作区与 PKS 索引内容" : "Search workspace and PKS indexed content", isOn: $indexedFoldersEnabled)
             Toggle(chinese ? "启用全局快捷键" : "Enable global shortcut", isOn: $enabled)
-            Picker(chinese ? "全局快捷键" : "Global shortcut", selection: $shortcut) {
-                ForEach(GlobalSearchShortcut.allCases) { choice in
-                    Text(choice.label).tag(choice.rawValue)
+            HStack {
+                Text(chinese ? "全局快捷键" : "Global shortcut")
+                Spacer()
+                Button(recording
+                       ? (chinese ? "按下快捷键…" : "Press shortcut…")
+                       : GlobalSearchKeyBinding.resolved(shortcut).label) {
+                    if recording { stopRecording() } else { beginRecording() }
                 }
+                .disabled(!enabled)
+                .accessibilityIdentifier("leafspan-global-search-record-shortcut")
             }
-            .disabled(!enabled)
+            if recording {
+                Text(chinese ? "同时按至少两个修饰键和一个键；Esc 取消"
+                             : "Press two modifiers and a key; Esc cancels")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let recordingHint {
+                Text(recordingHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if enabled {
                 Text(controller.shortcutStatus)
                     .font(.caption)
@@ -931,7 +1031,47 @@ struct GlobalSearchSettingsView: View {
         .formStyle(.grouped)
         .padding(.top, 12)
         .onAppear { controller.configure() }
-        .onChange(of: enabled) { _, _ in controller.configure() }
-        .onChange(of: shortcut) { _, _ in controller.configure() }
+        .onDisappear { stopRecording() }
+        .onChange(of: enabled) { _, newValue in
+            if !newValue { stopRecording() }
+            controller.configure()
+        }
+    }
+
+    private func beginRecording() {
+        stopRecording()
+        recordingHint = nil
+        recording = true
+        recordingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == UInt16(kVK_Escape) {
+                stopRecording()
+                return nil
+            }
+            guard let binding = GlobalSearchKeyBinding.captured(event) else {
+                recordingHint = chinese
+                    ? "请使用至少两个修饰键，避免与系统快捷键冲突"
+                    : "Use at least two modifiers to avoid system shortcuts"
+                return nil
+            }
+            let accepted = controller.applyRecordedShortcut(binding)
+            if accepted {
+                shortcut = binding.storedValue
+                recordingHint = nil
+            } else {
+                recordingHint = chinese
+                    ? "快捷键被占用，原快捷键已保留"
+                    : "Shortcut unavailable; previous shortcut retained"
+            }
+            stopRecording()
+            return nil
+        }
+    }
+
+    private func stopRecording() {
+        if let recordingMonitor {
+            NSEvent.removeMonitor(recordingMonitor)
+            self.recordingMonitor = nil
+        }
+        recording = false
     }
 }
