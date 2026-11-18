@@ -35,13 +35,24 @@ final class GlobalSpotlightLookup {
                 // Ranking and excerpt matching can invoke NaturalLanguage and scan
                 // long indexed bodies, so neither belongs on the UI executor.
                 var metadataByPath: [String: NSMetadataItem] = [:]
-                let hits: [GlobalSearchItem] = metadata.results.prefix(5000).compactMap { value in
+                var hits: [GlobalSearchItem] = []
+                let gathered = metadata.results.prefix(5000)
+                hits.reserveCapacity(gathered.count)
+                for (index, value) in gathered.enumerated() {
+                    // Metadata items belong to Spotlight's owning run loop. Keep
+                    // the projection on the main actor, but bound each burst so
+                    // Cancel/Escape and subsequent keystrokes can be processed.
+                    if index.isMultiple(of: 32) {
+                        await Task.yield()
+                        guard !Task.isCancelled,
+                              self.searchToken == token, self.query === metadata else { return }
+                    }
                     guard let result = value as? NSMetadataItem,
                           let url = Self.fileURL(
                               metadataURL: result.value(forAttribute: NSMetadataItemURLKey) as? URL,
                               metadataPath: result.value(forAttribute: NSMetadataItemPathKey) as? String
                           ),
-                          url.pathExtension.lowercased() != "app" else { return nil }
+                          url.pathExtension.lowercased() != "app" else { continue }
                     metadataByPath[url.path] = result
                     let name = result.value(forAttribute: NSMetadataItemFSNameKey) as? String
                         ?? url.lastPathComponent
@@ -49,9 +60,9 @@ final class GlobalSpotlightLookup {
                     let relevance = (result.value(
                         forAttribute: NSMetadataQueryResultContentRelevanceAttribute
                     ) as? NSNumber)?.doubleValue ?? 0
-                    return GlobalSearchItem.spotlight(url, title: name,
-                                                      isFolder: type == "public.folder",
-                                                      relevance: relevance)
+                    hits.append(GlobalSearchItem.spotlight(
+                        url, title: name, isFolder: type == "public.folder", relevance: relevance
+                    ))
                 }
 
                 let rankingTask = Task.detached(priority: .userInitiated) {
@@ -68,12 +79,19 @@ final class GlobalSpotlightLookup {
 
                     // Read indexed text only for top-N candidates on the main actor,
                     // then perform excerpt matching on a worker using value snapshots.
-                    let snippetInputs = ranked.map { item in
-                        (
+                    var snippetInputs: [(item: GlobalSearchItem, content: String?)] = []
+                    snippetInputs.reserveCapacity(ranked.count)
+                    for (index, item) in ranked.enumerated() {
+                        if index.isMultiple(of: 8) {
+                            await Task.yield()
+                            guard !Task.isCancelled,
+                                  self.searchToken == token, self.query === metadata else { return }
+                        }
+                        snippetInputs.append((
                             item: item,
                             content: metadataByPath[item.url.path]?
                                 .value(forAttribute: "kMDItemTextContent") as? String
-                        )
+                        ))
                     }
                     let snippetTask = Task.detached(priority: .userInitiated) {
                         snippetInputs.map { candidate in
