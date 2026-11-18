@@ -259,6 +259,7 @@ enum NotesGeometry {
     static let markdownFormattingToolbarHeight: CGFloat = 30
     static let markdownFormattingToolbarTarget: CGFloat = 30
     static let markdownFormattingSymbolSize: CGFloat = 15
+    static let splitPaneHeaderHeight: CGFloat = 32
     static let markdownSectionVerticalInset: CGFloat = 4
     static let markdownLineFragmentPadding: CGFloat = 0
     static let selectionCorner: CGFloat = 9
@@ -3828,10 +3829,22 @@ struct NotesWindow: View {
                     let secondaryMinimumWidth: CGFloat = showingMindMap ? 460 : 340
                     if geometry.size.width >= splitThreshold {
                         HSplitView {
-                            pdfReader(url)
-                                .frame(minWidth: 420, idealWidth: geometry.size.width * (showingMindMap ? 0.50 : 0.55))
+                            splitPane(
+                                title: url.lastPathComponent,
+                                symbol: "doc.richtext",
+                                identifier: "pks-pdf-pane"
+                            ) {
+                                pdfReader(url)
+                            }
+                            .frame(
+                                minWidth: 420,
+                                idealWidth: geometry.size.width * (showingMindMap ? 0.50 : 0.55)
+                            )
                             studyNotePane(note)
-                                .frame(minWidth: secondaryMinimumWidth, idealWidth: geometry.size.width * (showingMindMap ? 0.50 : 0.45))
+                                .frame(
+                                    minWidth: secondaryMinimumWidth,
+                                    idealWidth: geometry.size.width * (showingMindMap ? 0.50 : 0.45)
+                                )
                         }
                     } else {
                         VStack(spacing: 0) {
@@ -3872,14 +3885,26 @@ struct NotesWindow: View {
                     && ProAccess.allows(.mindMap, unlocked: purchases.unlocked)
                     && model.selected != nil && model.externalBody == nil {
             HSplitView {
-                mindMapCanvas
-                    .frame(
-                        minWidth: showingMindMapSourcePane ? 280 : 0,
-                        idealWidth: showingMindMapSourcePane ? 480 : 900
-                    )
+                splitPane(
+                    title: language.text("Mind Map"),
+                    symbol: "point.3.connected.trianglepath.dotted",
+                    identifier: "pks-mind-map-pane"
+                ) {
+                    mindMapCanvas
+                }
+                .frame(
+                    minWidth: showingMindMapSourcePane ? 280 : 0,
+                    idealWidth: showingMindMapSourcePane ? 480 : 900
+                )
                 if showingMindMapSourcePane {
-                    editor
-                        .frame(minWidth: 300, idealWidth: 420)
+                    splitPane(
+                        title: language.text("Edit"),
+                        symbol: "square.and.pencil",
+                        identifier: "pks-mind-map-source-pane"
+                    ) {
+                        editor
+                    }
+                    .frame(minWidth: 300, idealWidth: 420)
                 }
             }
             .accessibilityIdentifier(
@@ -3893,12 +3918,53 @@ struct NotesWindow: View {
             editor
         } else {
             HSplitView {
-                editor
-                    .frame(minWidth: 270)
-                renderedNote
-                    .frame(minWidth: 270)
+                splitPane(
+                    title: language.text("Edit"),
+                    symbol: "square.and.pencil",
+                    identifier: "pks-markdown-edit-pane"
+                ) {
+                    editor
+                }
+                .frame(minWidth: 270)
+
+                splitPane(
+                    title: language.text("Read"),
+                    symbol: "book",
+                    identifier: "pks-markdown-read-pane"
+                ) {
+                    renderedNote
+                }
+                .frame(minWidth: 270)
             }
         }
+    }
+
+    private func splitPane<Content: View>(
+        title: String,
+        symbol: String,
+        identifier: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 7) {
+                Image(systemName: symbol)
+                    .symbolRenderingMode(.hierarchical)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: NotesGeometry.splitPaneHeaderHeight)
+            .background(theme.canvas)
+            .accessibilityIdentifier(identifier + "-header")
+
+            content()
+        }
+        .background(theme.canvas)
+        .accessibilityIdentifier(identifier)
     }
 
     private var mindMapCanvas: some View {

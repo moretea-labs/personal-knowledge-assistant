@@ -17,6 +17,10 @@ final class WorkspaceChromeTests: XCTestCase {
         )
     }
 
+    func testSplitPaneChromeKeepsHeadersCompactAndDistinct() {
+        XCTAssertEqual(NotesGeometry.splitPaneHeaderHeight, 32)
+    }
+
     func testCompactWindowKeepsPDFAndNoteWidthInsteadOfForcingInlineInspector() {
         let splitWidth = NotesGeometry.studySplitThreshold(showingMindMap: false)
         XCTAssertEqual(splitWidth, 820)
