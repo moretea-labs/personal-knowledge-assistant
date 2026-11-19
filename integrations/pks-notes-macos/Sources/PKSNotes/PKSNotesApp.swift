@@ -4379,7 +4379,14 @@ struct NotesWindow: View {
                 compactStudyShowsStudyPane = true
             }
         } else if let line = mindMapSelectionLine {
-            revealMarkdownLineIndex(line)
+            if modeBeforeMindMap == .edit {
+                revealMarkdownLineIndex(line)
+            } else {
+                showingMindMap = false
+                showingMindMapSourcePane = false
+                mode = modeBeforeMindMap
+                model.requestMarkdownLineNavigation(line)
+            }
         } else {
             showingMindMap = false
             showingMindMapSourcePane = false

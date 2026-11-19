@@ -77,6 +77,19 @@ enum MarkdownOutline {
         return NSRange(location: location, length: (lines[lineIndex] as NSString).length)
     }
 
+    /// Map a canonical Markdown line to the lazy preview section that contains it.
+    /// Section IDs are the same projection consumed by MarkdownPreviewPane.
+    static func previewSectionID(containingLineIndex lineIndex: Int, in source: String) -> Int? {
+        guard lineIndex >= 0 else { return nil }
+        var firstLine = 0
+        for section in MarkdownSection.sections(in: source) {
+            let lineCount = section.markdown.components(separatedBy: "\n").count
+            if lineIndex < firstLine + lineCount { return section.id }
+            firstLine += lineCount
+        }
+        return nil
+    }
+
     static func heading(matchingFragment fragment: String, in source: String) -> MarkdownOutlineHeading? {
         let decoded = (fragment.removingPercentEncoding ?? fragment)
             .trimmingCharacters(in: .whitespacesAndNewlines)

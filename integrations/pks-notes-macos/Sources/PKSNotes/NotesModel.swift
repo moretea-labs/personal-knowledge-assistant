@@ -2909,7 +2909,7 @@ final class NotesModel: ObservableObject {
         sectionID: Int? = nil
     ) {
         let clean = fragment.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty else { return }
+        guard !clean.isEmpty || sectionID != nil else { return }
         markdownAnchorSequence &+= 1
         markdownAnchorRequest = MarkdownAnchorRequest(
             note: note.standardizedFileURL,
@@ -2926,6 +2926,14 @@ final class NotesModel: ObservableObject {
             note: selected,
             sectionID: heading.sectionID
         )
+    }
+
+    func requestMarkdownLineNavigation(_ lineIndex: Int) {
+        guard let selected,
+              let sectionID = MarkdownOutline.previewSectionID(
+                containingLineIndex: lineIndex, in: body
+              ) else { return }
+        requestMarkdownAnchor("", note: selected, sectionID: sectionID)
     }
 
     private func requestMarkdownAnchorIfNavigationStarted(_ fragment: String?, note: URL) {

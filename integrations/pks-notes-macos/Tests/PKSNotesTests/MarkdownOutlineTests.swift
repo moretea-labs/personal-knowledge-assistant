@@ -57,6 +57,19 @@ final class MarkdownOutlineTests: XCTestCase {
         XCTAssertNil(MarkdownOutline.lineRange(in: source, lineIndex: 99))
     }
 
+    func testMindMapLineNavigationResolvesContainingPreviewSection() {
+        let source = "Intro\n# First\nBody\n```\n# Not a section\n```\n## Nested\n- selected\n# Second\nEnd\n"
+
+        XCTAssertEqual(MarkdownOutline.previewSectionID(containingLineIndex: 0, in: source), 0)
+        XCTAssertEqual(MarkdownOutline.previewSectionID(containingLineIndex: 4, in: source), 1,
+                       "A heading-looking line inside a fence stays in the enclosing section.")
+        XCTAssertEqual(MarkdownOutline.previewSectionID(containingLineIndex: 7, in: source), 2)
+        XCTAssertEqual(MarkdownOutline.previewSectionID(containingLineIndex: 9, in: source), 3)
+        XCTAssertEqual(MarkdownOutline.previewSectionID(containingLineIndex: 10, in: source), 3)
+        XCTAssertNil(MarkdownOutline.previewSectionID(containingLineIndex: -1, in: source))
+        XCTAssertNil(MarkdownOutline.previewSectionID(containingLineIndex: 11, in: source))
+    }
+
     func testCachedHeadingOffsetRebasesAndRejectsStaleOutlineRows() {
         let original = MarkdownOutline.headings(in: "# First\n# Second")
         let second = original[1]
