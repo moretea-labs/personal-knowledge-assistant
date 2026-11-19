@@ -38,8 +38,12 @@ struct MarkdownPreviewSnapshot {
     let matchID: String?
     let sections: [ParsedMarkdownSection]
 
+    func canDisplay(identity: String, matchID: String?) -> Bool {
+        self.identity == identity && self.matchID == matchID
+    }
+
     func matches(identity: String, revision: UInt64, matchID: String?) -> Bool {
-        self.identity == identity && self.revision == revision && self.matchID == matchID
+        canDisplay(identity: identity, matchID: matchID) && self.revision == revision
     }
 }
 
@@ -90,9 +94,16 @@ struct MarkdownPreviewPane: View {
 
     private var rendered: [ParsedMarkdownSection] {
         guard let cache,
-              cache.matches(identity: identity, revision: revision, matchID: model.activeMatch?.id)
+              cache.canDisplay(identity: identity, matchID: model.activeMatch?.id)
         else { return [] }
         return cache.sections
+    }
+
+    private var isPreparingReplacement: Bool {
+        guard let cache,
+              cache.canDisplay(identity: identity, matchID: model.activeMatch?.id)
+        else { return false }
+        return cache.revision != revision
     }
 
     var body: some View {
@@ -103,6 +114,12 @@ struct MarkdownPreviewPane: View {
                         .frame(maxWidth: .infinity, minHeight: 180)
                 } else {
                     LazyVStack(alignment: .leading, spacing: 4) {
+                        if isPreparingReplacement {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .accessibilityIdentifier("pks-markdown-preview-updating")
+                        }
                         if !live, let selected = model.selected, model.root != nil {
                             Text(NoteTreePresentation.quickOpenFolder(for: selected, in: model.root))
                                 .font(.system(size: 12, weight: .medium))
