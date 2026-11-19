@@ -37,6 +37,20 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertEqual(results.map(\.title), ["Code", "Xcode", "Visual Studio Code"])
     }
 
+    func testGlobalSearchCopyNameUsesExactFilesystemLeafName() {
+        let file = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/论文/研究 #1?.md"),
+            title: "Different display title", isFolder: false
+        )
+        let folder = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Archive", isDirectory: true),
+            title: "Archive", isFolder: true
+        )
+
+        XCTAssertEqual(file.fileName, "研究 #1?.md")
+        XCTAssertEqual(folder.fileName, "Archive")
+    }
+
     func testSpotlightWorkspaceMarkdownAndPDFUseLeafspanOpenPath() {
         let root = URL(fileURLWithPath: "/Users/test/Notes", isDirectory: true)
         let note = GlobalSearchItem.spotlight(

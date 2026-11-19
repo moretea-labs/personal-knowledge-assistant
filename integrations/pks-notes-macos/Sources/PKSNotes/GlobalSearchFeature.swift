@@ -171,6 +171,8 @@ struct GlobalSearchItem: Identifiable, Sendable {
               spotlightRelevance: spotlightRelevance, searchRanking: ranking)
     }
 
+    var fileName: String { url.lastPathComponent }
+
     static func isLeafspanWorkspaceDocument(_ item: GlobalSearchItem, in root: URL?) -> Bool {
         guard case .file = item.kind,
               let root,
@@ -913,6 +915,11 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
         NSWorkspace.shared.activateFileViewerSelecting([item.url])
     }
 
+    func copyName(_ item: GlobalSearchItem) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(item.fileName, forType: .string)
+    }
+
     func copyPath(_ item: GlobalSearchItem) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(item.url.path, forType: .string)
@@ -1008,6 +1015,9 @@ private struct GlobalSearchPalette: View {
                                 }
                                 Button(chinese ? "复制路径" : "Copy Path") {
                                     GlobalSearchController.shared.copyPath(item)
+                                }
+                                Button(chinese ? "复制名称" : "Copy Name") {
+                                    GlobalSearchController.shared.copyName(item)
                                 }
                             }
                             .id(item.id)
