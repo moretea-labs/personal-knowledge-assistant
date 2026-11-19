@@ -2706,22 +2706,52 @@ final class NotesModel: ObservableObject {
         }
     }
 
+    /// A directory scope is valid only for a real, non-package directory inside
+    /// the selected workspace. The workspace root itself is always a valid scope.
+    func isSearchableWorkspaceDirectory(_ candidate: URL) -> Bool {
+        guard let workspaceRoot = root else { return false }
+        let directory = candidate.standardizedFileURL
+        let rootURL = workspaceRoot.standardizedFileURL
+        if directory == rootURL { return true }
+
+        let rootPath = rootURL.path
+        let canonicalRootPath = rootURL.resolvingSymlinksInPath().path
+        guard WorkspaceFiles.fileStampIfContained(
+            directory, inRootPath: rootPath, canonicalRootPath: canonicalRootPath
+        ) != nil, !WorkspaceFiles.isOpaqueDocumentPackage(directory) else { return false }
+        var info = Darwin.stat()
+        return directory.path.withCString({ Darwin.lstat($0, &info) }) == 0
+            && (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR)
+    }
+
     /// Search the active workspace with the existing bounded Markdown body reader.
-    /// Quick Open remains the file inventory; this does not create another index.
+    /// Quick Open remains the file inventory; a folder scope filters that same
+    /// projection and uses the folder as the containment root—never a second index.
     func searchWorkspace(
         _ query: String,
+        within directory: URL? = nil,
         onPartial: (@MainActor (WorkspaceSearch.Result) -> Void)? = nil
     ) async -> WorkspaceSearch.Result {
         guard let workspaceRoot = root else { return WorkspaceSearch.Result() }
+        let searchRoot = directory?.standardizedFileURL ?? workspaceRoot
+        if let directory, !isSearchableWorkspaceDirectory(directory) {
+            return WorkspaceSearch.Result()
+        }
+        let searchRootPath = searchRoot.standardizedFileURL.path
+        let searchPrefix = searchRootPath.hasSuffix("/") ? searchRootPath : searchRootPath + "/"
+        let isNestedScope = searchRoot.standardizedFileURL != workspaceRoot.standardizedFileURL
 
         if !globalFileIndexReady {
             let loadedFiles = files
             let currentNote = selected
             let partialEntries = await Task.detached(priority: .userInitiated) {
-                NoteTreePresentation.quickOpenEntries(
+                let entries = NoteTreePresentation.quickOpenEntries(
                     loadedFiles,
                     prioritizedFiles: currentNote.map { [$0] } ?? []
                 )
+                return isNestedScope
+                    ? entries.filter { $0.item.url.standardizedFileURL.path.hasPrefix(searchPrefix) }
+                    : entries
             }.value
             guard !Task.isCancelled, root == workspaceRoot else {
                 return WorkspaceSearch.Result()
@@ -2731,7 +2761,7 @@ final class NotesModel: ObservableObject {
                 let partialTask = Task.detached(priority: .userInitiated) {
                     WorkspaceSearch.search(
                         entries: partialEntries,
-                        root: workspaceRoot,
+                        root: searchRoot,
                         query: query,
                         searchBodies: false,
                         limits: .init(files: 0, bytesPerFile: 0, totalBytes: 0, results: 20)
@@ -2751,23 +2781,29 @@ final class NotesModel: ObservableObject {
             }
         }
 
-        return await localWorkspaceSearch(query, searchBodies: true)
+        return await localWorkspaceSearch(
+            query, workspaceRoot: workspaceRoot, searchRoot: searchRoot,
+            searchPrefix: searchPrefix, isNestedScope: isNestedScope, searchBodies: true
+        )
     }
 
     private func localWorkspaceSearch(
-        _ query: String, searchBodies: Bool
+        _ query: String, workspaceRoot: URL, searchRoot: URL,
+        searchPrefix: String, isNestedScope: Bool, searchBodies: Bool
     ) async -> WorkspaceSearch.Result {
-        guard let workspaceRoot = root,
+        guard root == workspaceRoot,
               await ensureGlobalFileIndex(), !Task.isCancelled else {
             return WorkspaceSearch.Result()
         }
         // Reuse the complete-vault Quick Open projection; do not create another index.
-        let entries = globalQuickOpenEntries
+        let entries = isNestedScope
+            ? globalQuickOpenEntries.filter { $0.item.url.standardizedFileURL.path.hasPrefix(searchPrefix) }
+            : globalQuickOpenEntries
         let currentNote = selected
         let currentDraft = draft
         let localTask = Task.detached(priority: .userInitiated) {
             WorkspaceSearch.search(
-                entries: entries, root: workspaceRoot, query: query,
+                entries: entries, root: searchRoot, query: query,
                 draftURL: currentNote, draft: currentDraft,
                 searchBodies: searchBodies
             )
@@ -2801,7 +2837,13 @@ final class NotesModel: ObservableObject {
         searchTask = Task { [weak self] in
             guard let self else { return }
             let workspaceRoot = self.root
-            let local = await self.localWorkspaceSearch(text, searchBodies: true)
+            let searchRoot = workspaceRoot ?? URL(fileURLWithPath: "/")
+            let rootPath = searchRoot.standardizedFileURL.path
+            let searchPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+            let local = await self.localWorkspaceSearch(
+                text, workspaceRoot: searchRoot, searchRoot: searchRoot,
+                searchPrefix: searchPrefix, isNestedScope: false, searchBodies: true
+            )
             guard !Task.isCancelled,
                   self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text,
                   self.root == workspaceRoot else { return }

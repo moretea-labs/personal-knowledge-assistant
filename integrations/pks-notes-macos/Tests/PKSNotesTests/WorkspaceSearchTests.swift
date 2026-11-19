@@ -204,6 +204,25 @@ final class WorkspaceSearchTests: XCTestCase {
         XCTAssertEqual(result.coverage.readFiles, 0)
     }
 
+    func testWorkspaceSearchCanBeScopedToNestedFolderWithoutSiblingMatches() throws {
+        let root = try fixture()
+        let scoped = root.appendingPathComponent("Research", isDirectory: true)
+        let sibling = root.appendingPathComponent("Research Archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: scoped, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+
+        let inside = scoped.appendingPathComponent("Study.md")
+        let outside = sibling.appendingPathComponent("Study.md")
+        let body = "A unique shared term belongs to this study note."
+        try body.write(to: inside, atomically: true, encoding: .utf8)
+        try body.write(to: outside, atomically: true, encoding: .utf8)
+
+        let result = WorkspaceSearch.search(entries: entries(root), root: scoped, query: "shared term")
+
+        XCTAssertEqual(result.hits.map(\.uri), [inside.path])
+        XCTAssertEqual(result.coverage.readFiles, 1)
+    }
+
     func testPinyinAndChineseQueriesFindEachOtherInFilenamesWithoutReadingBinary() throws {
         let root = try fixture()
         let folder = root.appendingPathComponent("吉他谱", isDirectory: true)

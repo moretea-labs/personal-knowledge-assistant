@@ -439,6 +439,7 @@ final class GlobalSearchResults: ObservableObject {
         didSet { scheduleSearch() }
     }
     @Published private(set) var items: [GlobalSearchItem] = []
+    @Published private(set) var directoryScope: URL?
     @Published private(set) var selectedIndex = 0
     @Published private(set) var statusMessage: String?
     @Published private(set) var loading = false
@@ -468,6 +469,7 @@ final class GlobalSearchResults: ObservableObject {
     func start() {
         isPresented = true
         cancelPendingSearch()
+        directoryScope = nil
         query = ""
         items = []
         selectedIndex = 0
@@ -508,9 +510,28 @@ final class GlobalSearchResults: ObservableObject {
             self.applications = loaded
             self.applicationCatalogTask = nil
             guard self.isPresented else { return }
-            self.appHits = GlobalApplicationCatalog.matches(loaded, query: self.query)
+            self.appHits = self.directoryScope == nil
+                ? GlobalApplicationCatalog.matches(loaded, query: self.query)
+                : []
             self.publish()
         }
+    }
+
+    func canSearch(in folder: URL) -> Bool {
+        (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel?
+            .isSearchableWorkspaceDirectory(folder) ?? false
+    }
+
+    func search(in folder: URL) {
+        guard canSearch(in: folder) else { return }
+        directoryScope = folder.standardizedFileURL
+        scheduleSearch()
+    }
+
+    func clearDirectoryScope() {
+        guard directoryScope != nil else { return }
+        directoryScope = nil
+        scheduleSearch()
     }
 
     static func makeStatusMessage(
@@ -550,7 +571,8 @@ final class GlobalSearchResults: ObservableObject {
             return GlobalSearchItem.file(hit, url: file)
         }
         let combined = GlobalSearchRanker.merge(
-            apps: appHits, documents: documents, spotlight: spotlightHits,
+            apps: directoryScope == nil ? appHits : [],
+            documents: documents, spotlight: spotlightHits,
             related: relatedHits, query: query
         )
         items = combined
@@ -566,11 +588,14 @@ final class GlobalSearchResults: ObservableObject {
         cancelPendingSearch()
         let generation = searchGeneration
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scopedDirectory = directoryScope
         selectedIndex = 0
         workspaceCoverage = WorkspaceSearch.Coverage()
         librarySearchUnavailable = false
         statusMessage = nil
-        appHits = GlobalApplicationCatalog.matches(applications ?? [], query: text)
+        appHits = scopedDirectory == nil
+            ? GlobalApplicationCatalog.matches(applications ?? [], query: text)
+            : []
         pksHits = []
         workspaceHits = []
         relatedHits = []
@@ -581,12 +606,12 @@ final class GlobalSearchResults: ObservableObject {
         let indexedFoldersEnabled = UserDefaults.standard.bool(
             forKey: GlobalSearchPreferences.indexedFoldersEnabledKey
         )
-        let notesModel = indexedFoldersEnabled
+        let notesModel = (indexedFoldersEnabled || scopedDirectory != nil)
             ? (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel
             : nil
-        spotlightSearchPending = true
+        spotlightSearchPending = scopedDirectory == nil
         workspaceSearchPending = notesModel != nil
-        librarySearchPending = indexedFoldersEnabled
+        librarySearchPending = indexedFoldersEnabled && scopedDirectory == nil
         updateLoadingState()
 
         searchTask = Task { [weak self] in
@@ -594,30 +619,30 @@ final class GlobalSearchResults: ObservableObject {
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard !Task.isCancelled, self.searchGeneration == generation else { return }
 
-            // Spotlight keeps app/file discovery available without a bundled search daemon.
-            // Local workspace Markdown uses the existing bounded reader; PKS adds indexed
-            // library chunks and semantic matches without becoming a prerequisite.
-            self.spotlight.start(text) { [weak self] hits in
-                guard let self, self.searchGeneration == generation,
-                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
-                self.spotlightHits = hits
-                self.spotlightSearchPending = false
-                self.updateLoadingState()
-                self.publish()
-            }
-            // A slow or unavailable metadata index must not leave the palette
-            // looking stuck. Late Spotlight results are still accepted.
-            Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                guard let self, self.searchGeneration == generation,
-                      self.spotlightSearchPending else { return }
-                self.spotlightSearchPending = false
-                self.updateLoadingState()
+            if scopedDirectory == nil {
+                // Global discovery remains unchanged outside an explicit folder scope.
+                self.spotlight.start(text) { [weak self] hits in
+                    guard let self, self.searchGeneration == generation,
+                          self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+                    self.spotlightHits = hits
+                    self.spotlightSearchPending = false
+                    self.updateLoadingState()
+                    self.publish()
+                }
+                // A slow or unavailable metadata index must not leave the palette
+                // looking stuck. Late Spotlight results are still accepted.
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    guard let self, self.searchGeneration == generation,
+                          self.spotlightSearchPending else { return }
+                    self.spotlightSearchPending = false
+                    self.updateLoadingState()
+                }
             }
 
             if let notesModel {
                 self.workspaceSearchTask = Task { [weak self] in
-                    let result = await notesModel.searchWorkspace(text) { [weak self] partial in
+                    let result = await notesModel.searchWorkspace(text, within: scopedDirectory) { [weak self] partial in
                         guard let self, !Task.isCancelled, self.searchGeneration == generation,
                               self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                         self.workspaceHits = partial.hits
@@ -636,7 +661,7 @@ final class GlobalSearchResults: ObservableObject {
                 }
             }
 
-            guard indexedFoldersEnabled else {
+            guard indexedFoldersEnabled, scopedDirectory == nil else {
                 self.searchTask = nil
                 self.updateLoadingState()
                 return
@@ -1004,6 +1029,27 @@ private struct GlobalSearchPalette: View {
             .padding(.horizontal, 23)
             .padding(.top, 32)
             .padding(.bottom, 18)
+            if let directory = results.directoryScope {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder")
+                    Text(AppLanguage.current.resolved == .simplifiedChinese
+                         ? "搜索范围：\(directory.lastPathComponent)"
+                         : "Searching in \(directory.lastPathComponent)")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    Button(AppLanguage.current.resolved == .simplifiedChinese ? "清除" : "Clear") {
+                        results.clearDirectoryScope()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .accessibilityIdentifier("leafspan-global-search-clear-folder-scope")
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+            }
             Divider()
             ScrollViewReader { proxy in
                 ScrollView {
@@ -1060,6 +1106,12 @@ private struct GlobalSearchPalette: View {
                             }
                             .contextMenu {
                                 let chinese = AppLanguage.current.resolved == .simplifiedChinese
+                                if case .folder = item.kind, results.canSearch(in: item.url) {
+                                    Button(chinese ? "在此文件夹中搜索" : "Search in This Folder") {
+                                        results.search(in: item.url)
+                                    }
+                                    .accessibilityIdentifier("leafspan-global-search-folder-scope")
+                                }
                                 Button(chinese ? "打开" : "Open") { GlobalSearchController.shared.open(item) }
                                 if item.supportsQuickLook {
                                     Button(chinese ? "快速查看" : "Quick Look") {
