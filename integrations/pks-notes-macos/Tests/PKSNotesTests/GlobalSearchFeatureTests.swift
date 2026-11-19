@@ -105,13 +105,19 @@ final class GlobalSearchFeatureTests: XCTestCase {
     func testGlobalSearchScopeAndTypeFiltersAreSelectable() {
         let results = GlobalSearchResults()
 
+        results.setTypeFilter(.applications)
         results.setScope(.workspace)
         XCTAssertEqual(results.scope, .workspace)
+        XCTAssertEqual(results.typeFilter, .all)
+        XCTAssertEqual(results.availableTypeFilters, [.all, .notes, .pdf, .otherFiles])
+        results.setTypeFilter(.applications)
+        XCTAssertEqual(results.typeFilter, .all)
         results.setTypeFilter(.pdf)
         XCTAssertEqual(results.typeFilter, .pdf)
 
         results.setScope(.global)
         XCTAssertEqual(results.scope, .global)
+        XCTAssertEqual(results.typeFilter, .pdf)
         XCTAssertNil(results.directoryScope)
     }
 

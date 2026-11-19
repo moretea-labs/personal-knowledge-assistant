@@ -530,6 +530,10 @@ final class GlobalSearchResults: ObservableObject {
         scope == .workspace || directoryScope != nil
     }
 
+    var availableTypeFilters: [GlobalSearchTypeFilter] {
+        isWorkspaceScoped ? [.all, .notes, .pdf, .otherFiles] : GlobalSearchTypeFilter.allCases
+    }
+
     private func updateLoadingState() {
         loading = spotlightSearchPending || workspaceSearchPending || librarySearchPending
     }
@@ -596,6 +600,7 @@ final class GlobalSearchResults: ObservableObject {
         guard canSearch(in: folder) else { return }
         scope = .workspace
         directoryScope = folder.standardizedFileURL
+        if !availableTypeFilters.contains(typeFilter) { typeFilter = .all }
         scheduleSearch()
     }
 
@@ -603,11 +608,12 @@ final class GlobalSearchResults: ObservableObject {
         guard self.scope != scope || directoryScope != nil else { return }
         self.scope = scope
         directoryScope = nil
+        if !availableTypeFilters.contains(typeFilter) { typeFilter = .all }
         scheduleSearch()
     }
 
     func setTypeFilter(_ filter: GlobalSearchTypeFilter) {
-        guard typeFilter != filter else { return }
+        guard availableTypeFilters.contains(filter), typeFilter != filter else { return }
         typeFilter = filter
         selectedIndex = 0
         publish(resetSelection: true)
@@ -1153,7 +1159,7 @@ private struct GlobalSearchPalette: View {
                 .accessibilityIdentifier("leafspan-global-search-scope-filter")
 
                 Menu {
-                    ForEach(GlobalSearchTypeFilter.allCases) { filter in
+                    ForEach(results.availableTypeFilters) { filter in
                         Button {
                             results.setTypeFilter(filter)
                         } label: {
