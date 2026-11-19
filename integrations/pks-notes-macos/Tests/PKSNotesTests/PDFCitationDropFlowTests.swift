@@ -165,6 +165,42 @@ final class PDFCitationDropFlowTests: XCTestCase {
         XCTAssertEqual(reopenedPDFController.selectedText(), selectedText)
     }
 
+    func testSelectedPDFTextExposesVoiceOverQuoteAndCitationActions() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let sourceText = NSTextView(frame: bounds)
+        sourceText.string = "A quotation available to VoiceOver"
+        let document = try XCTUnwrap(PDFDocument(data: sourceText.dataWithPDF(inside: bounds)))
+        let view = StudyPDFView(frame: bounds)
+        view.document = document
+        view.currentSelection = try XCTUnwrap(
+            document.findString("quotation available", withOptions: []).first
+        )
+
+        var quoteInvocations = 0
+        var copyInvocations = 0
+        view.quoteTitle = "Add to Study Note"
+        view.copyCitationTitle = "Copy Quote with Source"
+        view.onQuoteToCurrentNote = { quoteInvocations += 1 }
+        view.onCopySelectedCitation = { copyInvocations += 1 }
+
+        let actions = try XCTUnwrap(view.accessibilityCustomActions())
+        let quote = try XCTUnwrap(actions.first(where: { $0.name == "Add to Study Note" }))
+        let copy = try XCTUnwrap(actions.first(where: { $0.name == "Copy Quote with Source" }))
+        XCTAssertTrue(quote.handler?() ?? false)
+        XCTAssertTrue(copy.handler?() ?? false)
+        XCTAssertEqual(quoteInvocations, 1)
+        XCTAssertEqual(copyInvocations, 1)
+
+        view.currentSelection = nil
+        XCTAssertFalse(quote.handler?() ?? true)
+        XCTAssertFalse(copy.handler?() ?? true)
+        XCTAssertEqual(quoteInvocations, 1)
+        XCTAssertEqual(copyInvocations, 1)
+        let remainingNames = view.accessibilityCustomActions()?.map(\.name) ?? []
+        XCTAssertFalse(remainingNames.contains("Add to Study Note"))
+        XCTAssertFalse(remainingNames.contains("Copy Quote with Source"))
+    }
+
     func testPDFCitationDropRejectsScrollbarsButAcceptsBlankEditorViewport() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 560, height: 360),

@@ -1491,6 +1491,34 @@ final class StudyPDFView: PDFView {
     var onQuoteToCurrentNote: (() -> Void)?
     var onCopySelectedCitation: (() -> Void)?
 
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        var actions = super.accessibilityCustomActions() ?? []
+        guard hasNonEmptySelection else { return actions.isEmpty ? nil : actions }
+
+        if onQuoteToCurrentNote != nil {
+            actions.append(NSAccessibilityCustomAction(name: quoteTitle) { [weak self] in
+                guard let self, self.hasNonEmptySelection,
+                      let action = self.onQuoteToCurrentNote else { return false }
+                action()
+                return true
+            })
+        }
+        if onCopySelectedCitation != nil {
+            actions.append(NSAccessibilityCustomAction(name: copyCitationTitle) { [weak self] in
+                guard let self, self.hasNonEmptySelection,
+                      let action = self.onCopySelectedCitation else { return false }
+                action()
+                return true
+            })
+        }
+        return actions.isEmpty ? nil : actions
+    }
+
+    private var hasNonEmptySelection: Bool {
+        guard let selectedText = currentSelection?.string else { return false }
+        return !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let standard = super.menu(for: event)
         guard onQuoteToCurrentNote != nil || onCopySelectedCitation != nil,
