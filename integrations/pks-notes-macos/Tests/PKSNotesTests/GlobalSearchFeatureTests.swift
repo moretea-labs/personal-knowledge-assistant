@@ -37,6 +37,25 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertEqual(results.map(\.title), ["Code", "Xcode", "Visual Studio Code"])
     }
 
+    func testGlobalSearchAccessibilityDetailsDescribeResultTypeAndContext() {
+        let file = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Notes/Study.pdf"),
+            title: "Study", isFolder: false, contentMatch: true
+        ).withSnippet("Page 2: selected passage")
+        let folder = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Notes/Archive", isDirectory: true),
+            title: "Archive", isFolder: true
+        )
+        let app = GlobalSearchItem.application(
+            URL(fileURLWithPath: "/Applications/Notes.app"), title: "Notes"
+        )
+
+        XCTAssertEqual(file.accessibilityDetails(chinese: false), "File · /Users/test/Notes · Page 2: selected passage")
+        XCTAssertEqual(file.accessibilityDetails(chinese: true), "文件 · /Users/test/Notes · Page 2: selected passage")
+        XCTAssertEqual(folder.accessibilityDetails(chinese: false), "Folder · /Users/test/Notes")
+        XCTAssertEqual(app.accessibilityDetails(chinese: false), "Application · /Applications")
+    }
+
     func testGlobalSearchQuickLookIsLimitedToFileResults() {
         let file = GlobalSearchItem.spotlight(
             URL(fileURLWithPath: "/Users/test/Notes/Study.pdf"),

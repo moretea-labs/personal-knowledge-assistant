@@ -232,6 +232,23 @@ struct GlobalSearchItem: Identifiable, Sendable {
 
     var fileName: String { url.lastPathComponent }
 
+    func accessibilityDetails(chinese: Bool) -> String {
+        let kindTitle: String
+        switch kind {
+        case .application: kindTitle = chinese ? "应用" : "Application"
+        case .file: kindTitle = chinese ? "文件" : "File"
+        case .folder: kindTitle = chinese ? "文件夹" : "Folder"
+        }
+        var details = [kindTitle, subtitle]
+        if let snippet, !snippet.isEmpty, snippet != subtitle {
+            details.append(snippet)
+        } else if spotlightContentMatch {
+            details.append(chinese ? "正文匹配" : "Content match")
+        }
+        if isRelated { details.append(chinese ? "可能相关" : "Possibly related") }
+        return details.joined(separator: " · ")
+    }
+
     var supportsQuickLook: Bool {
         if case .file = kind { return true }
         return false
@@ -1139,6 +1156,7 @@ private struct GlobalSearchPalette: View {
                     .font(.system(size: 21))
                     .focused($searchFocused)
                     .onSubmit { if let item = results.selected { GlobalSearchController.shared.open(item) } }
+                    .accessibilityLabel(chinese ? "搜索应用、文件和文档内容" : "Search apps, files and document contents")
                     .accessibilityIdentifier("leafspan-global-search-input")
                 if results.loading { ProgressView().controlSize(.small) }
                 Button(AppLanguage.current.resolved == .simplifiedChinese ? "取消" : "Cancel") {
@@ -1147,6 +1165,7 @@ private struct GlobalSearchPalette: View {
                 .buttonStyle(.plain)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
+                .accessibilityLabel(chinese ? "取消" : "Cancel")
                 .accessibilityIdentifier("leafspan-global-search-cancel")
             }
             .padding(.horizontal, 23)
@@ -1183,6 +1202,8 @@ private struct GlobalSearchPalette: View {
                     }
                 }
                 .menuStyle(.borderlessButton)
+                .accessibilityLabel(chinese ? "搜索范围" : "Search scope")
+                .accessibilityValue(results.directoryScope?.lastPathComponent ?? results.scope.title(chinese: chinese))
                 .accessibilityIdentifier("leafspan-global-search-scope-filter")
 
                 Menu {
@@ -1205,6 +1226,8 @@ private struct GlobalSearchPalette: View {
                     }
                 }
                 .menuStyle(.borderlessButton)
+                .accessibilityLabel(chinese ? "结果类型" : "Result type")
+                .accessibilityValue(results.typeFilter.title(chinese: chinese))
                 .accessibilityIdentifier("leafspan-global-search-type-filter")
                 Spacer(minLength: 0)
                 if results.directoryScope != nil {
@@ -1214,6 +1237,7 @@ private struct GlobalSearchPalette: View {
                     .buttonStyle(.plain)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .accessibilityLabel(chinese ? "清除文件夹范围" : "Clear folder scope")
                     .accessibilityIdentifier("leafspan-global-search-clear-folder-scope")
                 }
             }
@@ -1238,6 +1262,7 @@ private struct GlobalSearchPalette: View {
                                     .foregroundStyle(.secondary)
                                     .padding(.horizontal, 14)
                                     .padding(.top, 11)
+                                    .accessibilityAddTraits(.isHeader)
                             }
                             Button {
                                 GlobalSearchController.shared.open(item)
@@ -1276,6 +1301,11 @@ private struct GlobalSearchPalette: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(item.title)
+                            .accessibilityValue(item.accessibilityDetails(chinese: chinese))
+                            .accessibilityHint(chinese ? "打开此结果" : "Opens this result")
+                            .accessibilityAddTraits(results.selectedIndex == index ? .isSelected : [])
                             .onHover { hovering in
                                 if hovering { results.select(item) }
                             }
