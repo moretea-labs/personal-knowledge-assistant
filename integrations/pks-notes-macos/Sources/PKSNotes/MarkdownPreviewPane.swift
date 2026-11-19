@@ -43,6 +43,16 @@ struct MarkdownPreviewSnapshot {
     }
 }
 
+/// The one Markdown preview renderer owns the visual soft-break policy shared by Read and Split.
+struct MarkdownPreviewContentView: View {
+    let content: MarkdownContent
+
+    var body: some View {
+        Markdown(content)
+            .markdownSoftBreakMode(.lineBreak)
+    }
+}
+
 /// Native preview uses a window-owned parsed snapshot, independent of view lifetime.
 struct MarkdownPreviewPane: View {
     @EnvironmentObject private var model: NotesModel
@@ -101,10 +111,9 @@ struct MarkdownPreviewPane: View {
                                 .padding(.bottom, 15)
                         }
                         ForEach(rendered) { part in
-                            Markdown(part.content)
+                            MarkdownPreviewContentView(content: part.content)
                                 .markdownTheme(.pksReading(theme, fontAdjustment: fontAdjustment,
                                                            lineAdjustment: lineAdjustment))
-                                .markdownSoftBreakMode(.lineBreak)
                                 .font(.system(size: theme.typography.bodySize + fontAdjustment,
                                               design: theme.typography.design))
                                 .markdownImageProvider(LocalMarkdownImageProvider(note: model.selected, root: model.root))
