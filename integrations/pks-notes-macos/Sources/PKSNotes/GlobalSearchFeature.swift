@@ -448,6 +448,14 @@ final class GlobalSearchResults: ObservableObject {
     private var workspaceSearchTask: Task<Void, Never>?
     private var workspaceCoverage = WorkspaceSearch.Coverage()
     private var librarySearchUnavailable = false
+    private var searchGeneration: UInt64 = 0
+    private var spotlightSearchPending = false
+    private var workspaceSearchPending = false
+    private var librarySearchPending = false
+
+    private func updateLoadingState() {
+        loading = spotlightSearchPending || workspaceSearchPending || librarySearchPending
+    }
 
     func start() {
         isPresented = true
@@ -468,11 +476,16 @@ final class GlobalSearchResults: ObservableObject {
     }
 
     private func cancelPendingSearch() {
+        searchGeneration &+= 1
         searchTask?.cancel()
         searchTask = nil
         workspaceSearchTask?.cancel()
         workspaceSearchTask = nil
         spotlight.cancel()
+        spotlightSearchPending = false
+        workspaceSearchPending = false
+        librarySearchPending = false
+        updateLoadingState()
     }
 
     // Bundle discovery touches the filesystem and can be slow on first use.
@@ -543,6 +556,7 @@ final class GlobalSearchResults: ObservableObject {
 
     private func scheduleSearch() {
         cancelPendingSearch()
+        let generation = searchGeneration
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         selectedIndex = 0
         workspaceCoverage = WorkspaceSearch.Coverage()
@@ -554,38 +568,72 @@ final class GlobalSearchResults: ObservableObject {
         relatedHits = []
         spotlightHits = []
         publish()
-        loading = false
         guard GlobalSearchRanker.shouldStartDocumentSearch(for: text) else { return }
-        loading = true
+
+        let indexedFoldersEnabled = UserDefaults.standard.bool(
+            forKey: GlobalSearchPreferences.indexedFoldersEnabledKey
+        )
+        let notesModel = indexedFoldersEnabled
+            ? (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel
+            : nil
+        spotlightSearchPending = true
+        workspaceSearchPending = notesModel != nil
+        librarySearchPending = indexedFoldersEnabled
+        updateLoadingState()
+
         searchTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: 150_000_000)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, self.searchGeneration == generation else { return }
+
             // Spotlight keeps app/file discovery available without a bundled search daemon.
             // Local workspace Markdown uses the existing bounded reader; PKS adds indexed
             // library chunks and semantic matches without becoming a prerequisite.
             self.spotlight.start(text) { [weak self] hits in
-                guard let self, self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+                guard let self, self.searchGeneration == generation,
+                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 self.spotlightHits = hits
+                self.spotlightSearchPending = false
+                self.updateLoadingState()
                 self.publish()
             }
-            // App/Spotlight results stay available independently of PKS.
-            guard UserDefaults.standard.bool(forKey: GlobalSearchPreferences.indexedFoldersEnabledKey) else {
-                self.loading = false
-                self.searchTask = nil
-                return
+            // A slow or unavailable metadata index must not leave the palette
+            // looking stuck. Late Spotlight results are still accepted.
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard let self, self.searchGeneration == generation,
+                      self.spotlightSearchPending else { return }
+                self.spotlightSearchPending = false
+                self.updateLoadingState()
             }
-            if let notesModel = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel {
+
+            if let notesModel {
                 self.workspaceSearchTask = Task { [weak self] in
-                    let result = await notesModel.searchWorkspace(text)
-                    guard let self, !Task.isCancelled,
+                    let result = await notesModel.searchWorkspace(text) { [weak self] partial in
+                        guard let self, !Task.isCancelled, self.searchGeneration == generation,
+                              self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+                        self.workspaceHits = partial.hits
+                        self.workspaceCoverage = partial.coverage
+                        self.publish()
+                    }
+                    guard let self, !Task.isCancelled, self.searchGeneration == generation,
                           self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                     self.workspaceHits = result.hits
                     self.workspaceCoverage = result.coverage
                     self.updateStatusMessage()
                     self.publish()
+                    self.workspaceSearchPending = false
+                    self.workspaceSearchTask = nil
+                    self.updateLoadingState()
                 }
             }
+
+            guard indexedFoldersEnabled else {
+                self.searchTask = nil
+                self.updateLoadingState()
+                return
+            }
+
             do {
                 var url = URLComponents(string: "http://127.0.0.1:3217/api/search")!
                 url.queryItems = [
@@ -596,11 +644,14 @@ final class GlobalSearchResults: ObservableObject {
                 var request = URLRequest(url: url.url!)
                 request.timeoutInterval = 3
                 let (data, response) = try await URLSession.shared.data(for: request)
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                    throw URLError(.badServerResponse)
+                guard !Task.isCancelled, self.searchGeneration == generation,
+                      (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    if !Task.isCancelled { throw URLError(.badServerResponse) }
+                    return
                 }
                 let hits = try JSONDecoder().decode([SearchHit].self, from: data)
-                guard !Task.isCancelled, self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+                guard !Task.isCancelled, self.searchGeneration == generation,
+                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 var seen = Set<String>()
                 self.pksHits = hits.filter { hit in
                     guard let file = hit.localFileURL else { return false }
@@ -609,12 +660,10 @@ final class GlobalSearchResults: ObservableObject {
                 self.librarySearchUnavailable = false
                 self.updateStatusMessage()
                 // Primary results are ready; optional related retrieval must not hold the main spinner.
-                self.loading = false
+                self.librarySearchPending = false
+                self.updateLoadingState()
                 self.publish()
 
-                // Only request additional evidence-based suggestions for
-                // substantive queries when literal/content results are sparse.
-                // PKS uses the same existing catalog, not a second index.
                 if GlobalSearchRanker.shouldFindRelated(text), self.pksHits.count < 15 {
                     var relatedURL = URLComponents(string: "http://127.0.0.1:3217/api/search")!
                     relatedURL.queryItems = [
@@ -626,11 +675,12 @@ final class GlobalSearchResults: ObservableObject {
                     relatedRequest.timeoutInterval = 3
                     do {
                         let (relatedData, relatedResponse) = try await URLSession.shared.data(for: relatedRequest)
-                        guard (relatedResponse as? HTTPURLResponse)?.statusCode == 200 else {
+                        guard !Task.isCancelled, self.searchGeneration == generation,
+                              (relatedResponse as? HTTPURLResponse)?.statusCode == 200 else {
                             throw URLError(.badServerResponse)
                         }
                         let relatedResults = try JSONDecoder().decode([SearchHit].self, from: relatedData)
-                        guard !Task.isCancelled,
+                        guard !Task.isCancelled, self.searchGeneration == generation,
                               self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                         var seen = Set<String>()
                         self.relatedHits = relatedResults.compactMap { hit in
@@ -644,12 +694,16 @@ final class GlobalSearchResults: ObservableObject {
                     }
                 }
             } catch {
-                guard !Task.isCancelled, self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
-                // Workspace and Spotlight results remain available without the PKS library.
+                guard !Task.isCancelled, self.searchGeneration == generation,
+                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 self.librarySearchUnavailable = true
                 self.updateStatusMessage()
+                self.librarySearchPending = false
+                self.updateLoadingState()
             }
-            self.loading = false
+            guard self.searchGeneration == generation else { return }
+            self.librarySearchPending = false
+            self.updateLoadingState()
             self.searchTask = nil
         }
     }

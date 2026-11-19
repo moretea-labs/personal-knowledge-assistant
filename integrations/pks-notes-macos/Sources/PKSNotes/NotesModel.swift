@@ -2708,8 +2708,50 @@ final class NotesModel: ObservableObject {
 
     /// Search the active workspace with the existing bounded Markdown body reader.
     /// Quick Open remains the file inventory; this does not create another index.
-    func searchWorkspace(_ query: String) async -> WorkspaceSearch.Result {
-        await localWorkspaceSearch(query, searchBodies: true)
+    func searchWorkspace(
+        _ query: String,
+        onPartial: (@MainActor (WorkspaceSearch.Result) -> Void)? = nil
+    ) async -> WorkspaceSearch.Result {
+        guard let workspaceRoot = root else { return WorkspaceSearch.Result() }
+
+        if !globalFileIndexReady {
+            let loadedFiles = files
+            let currentNote = selected
+            let partialEntries = await Task.detached(priority: .userInitiated) {
+                NoteTreePresentation.quickOpenEntries(
+                    loadedFiles,
+                    prioritizedFiles: currentNote.map { [$0] } ?? []
+                )
+            }.value
+            guard !Task.isCancelled, root == workspaceRoot else {
+                return WorkspaceSearch.Result()
+            }
+
+            if !partialEntries.isEmpty {
+                let partialTask = Task.detached(priority: .userInitiated) {
+                    WorkspaceSearch.search(
+                        entries: partialEntries,
+                        root: workspaceRoot,
+                        query: query,
+                        searchBodies: false,
+                        limits: .init(files: 0, bytesPerFile: 0, totalBytes: 0, results: 20)
+                    )
+                }
+                let partial = await withTaskCancellationHandler(operation: {
+                    await partialTask.value
+                }, onCancel: {
+                    partialTask.cancel()
+                })
+                guard !Task.isCancelled, root == workspaceRoot else {
+                    return WorkspaceSearch.Result()
+                }
+                if !partial.hits.isEmpty {
+                    onPartial?(partial)
+                }
+            }
+        }
+
+        return await localWorkspaceSearch(query, searchBodies: true)
     }
 
     private func localWorkspaceSearch(

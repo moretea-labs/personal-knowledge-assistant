@@ -166,3 +166,32 @@ final class SearchConcurrencyTests: XCTestCase {
         XCTAssertFalse(model.searchFailed)
     }
 }
+
+extension SearchConcurrencyTests {
+    @MainActor
+    func testGlobalSearchPublishesLoadedWorkspaceMatchesBeforeColdIndexCompletes() async throws {
+        let (model, root) = try workspace()
+        let note = root.appendingPathComponent("Immediate study.md")
+        try "# Immediate study\nA local result should appear before the complete vault scan.".write(
+            to: note, atomically: true, encoding: .utf8
+        )
+        model.refresh()
+        for _ in 0..<200 where model.loadingFiles {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertFalse(model.loadingFiles)
+        XCTAssertFalse(model.globalFileIndexReady)
+        var partialPaths: [String] = []
+        var deliveredBeforeFullIndex = false
+        let complete = await model.searchWorkspace("Immediate") { partial in
+            partialPaths = partial.hits.map(\.uri)
+            deliveredBeforeFullIndex = !model.globalFileIndexReady
+        }
+
+        XCTAssertTrue(deliveredBeforeFullIndex)
+        XCTAssertEqual(partialPaths, [note.path])
+        XCTAssertEqual(complete.hits.map(\.uri), [note.path])
+        XCTAssertTrue(model.globalFileIndexReady)
+    }
+}
