@@ -744,7 +744,8 @@ final class GlobalSearchResults: ObservableObject {
 final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate {
     static let shared = GlobalSearchController()
 
-    private var quickLookURLs: [URL] = []
+    private var quickLookWindow: NSPanel?
+    private var quickLookView: QLPreviewView?
 
     @Published private(set) var shortcutStatus = ""
     private var hotKey: EventHotKeyRef?
@@ -864,8 +865,14 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
     }
 
     func windowWillClose(_ notification: Notification) {
-        guard let closingPanel = notification.object as? NSPanel,
-              closingPanel === panel else { return }
+        guard let closingPanel = notification.object as? NSPanel else { return }
+        if closingPanel === quickLookWindow {
+            quickLookView?.close()
+            quickLookView = nil
+            quickLookWindow = nil
+            return
+        }
+        guard closingPanel === panel else { return }
         results.cancel()
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
@@ -925,13 +932,37 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
 
     func preview(_ item: GlobalSearchItem) {
         guard item.supportsQuickLook,
-              FileManager.default.fileExists(atPath: item.url.path),
-              let previewPanel = QLPreviewPanel.shared() else { return }
+              FileManager.default.fileExists(atPath: item.url.path) else { return }
         dismiss()
-        quickLookURLs = [item.url]
-        previewPanel.dataSource = self
-        previewPanel.reloadData()
-        previewPanel.makeKeyAndOrderFront(nil)
+        if let quickLookWindow, let quickLookView {
+            quickLookView.previewItem = item.url as NSURL
+            quickLookWindow.title = item.fileName
+            NSApp.activate(ignoringOtherApps: true)
+            quickLookWindow.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let previewFrame = NSRect(x: 0, y: 0, width: 760, height: 560)
+        guard let previewView = QLPreviewView(frame: previewFrame, style: .normal) else { return }
+        previewView.shouldCloseWithWindow = false
+        previewView.autoresizingMask = [.width, .height]
+        previewView.previewItem = item.url as NSURL
+
+        let window = NSPanel(
+            contentRect: previewFrame,
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered, defer: false
+        )
+        window.title = item.fileName
+        window.isFloatingPanel = true
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.contentView = previewView
+        quickLookView = previewView
+        quickLookWindow = window
+        window.center()
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 
     func copyName(_ item: GlobalSearchItem) {
@@ -945,16 +976,6 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
     }
 }
 
-extension GlobalSearchController: @MainActor QLPreviewPanelDataSource {
-    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
-        quickLookURLs.count
-    }
-
-    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
-        guard quickLookURLs.indices.contains(index) else { return nil }
-        return quickLookURLs[index] as NSURL
-    }
-}
 
 private struct GlobalSearchPalette: View {
     @ObservedObject var results: GlobalSearchResults
