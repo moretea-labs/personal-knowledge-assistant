@@ -1239,6 +1239,7 @@ struct NotesWindow: View {
         .onChange(of: model.root) { _, _ in
             expandedFolderPaths.removeAll()
             treeCursorPath = nil
+            treeRevealRequest = nil
             previewCache = nil
         }
         .onChange(of: model.previewPDF) { _, pdf in
@@ -2930,9 +2931,14 @@ struct NotesWindow: View {
                 }
                 .onChange(of: treeRevealRequest) { _, path in
                     guard let path else { return }
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
-                        proxy.scrollTo(path, anchor: .center)
-                    }
+                    revealTreeRowIfAvailable(path, using: proxy)
+                }
+                .onChange(of: visibleTreeRows.map(\.id)) { _, _ in
+                    guard let path = treeRevealRequest else { return }
+                    revealTreeRowIfAvailable(path, using: proxy)
+                }
+                .onChange(of: treeCursorPath) { _, path in
+                    guard let pending = treeRevealRequest, pending != path else { return }
                     treeRevealRequest = nil
                 }
                 .focusable(sidebarTab == .notes)
@@ -3022,6 +3028,14 @@ struct NotesWindow: View {
         .help(title)
         .accessibilityLabel(title)
         .accessibilityIdentifier("pks-sidebar-\(tab.rawValue.lowercased())")
+    }
+
+    private func revealTreeRowIfAvailable(_ path: String, using proxy: ScrollViewProxy) {
+        guard visibleTreeRows.contains(where: { $0.id == path }) else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
+            proxy.scrollTo(path, anchor: .center)
+        }
+        treeRevealRequest = nil
     }
 
     private func toggleFolder(_ url: URL) {
