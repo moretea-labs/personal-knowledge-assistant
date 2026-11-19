@@ -880,6 +880,15 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
     private var keyMonitor: Any?
     private let results = GlobalSearchResults()
 
+    static func shouldHandleUnmodifiedPaletteKey(_ modifiers: NSEvent.ModifierFlags) -> Bool {
+        // VoiceOver uses Control+Option or Caps Lock for navigation. Keep those
+        // commands, and other modified system shortcuts, in the responder chain.
+        let reservedModifiers: NSEvent.ModifierFlags = [
+            .command, .control, .option, .shift, .capsLock, .function
+        ]
+        return modifiers.intersection(reservedModifiers).isEmpty
+    }
+
     func install() {
         configure()
     }
@@ -968,7 +977,8 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
         }
         panel = window
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.panel === NSApp.keyWindow else { return event }
+            guard let self, self.panel === NSApp.keyWindow,
+                  Self.shouldHandleUnmodifiedPaletteKey(event.modifierFlags) else { return event }
             switch event.keyCode {
             case 53: self.dismiss(); return nil
             case 125: self.results.moveSelection(1); return nil

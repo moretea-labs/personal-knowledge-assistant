@@ -256,6 +256,16 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertTrue(results.items.isEmpty)
     }
 
+    @MainActor
+    func testGlobalSearchKeyboardRoutingPreservesVoiceOverAndSystemModifiers() {
+        XCTAssertTrue(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([]))
+        XCTAssertFalse(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([.control, .option]))
+        XCTAssertFalse(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([.capsLock]))
+        XCTAssertFalse(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([.command]))
+        XCTAssertFalse(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([.shift]))
+        XCTAssertFalse(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([.function]))
+    }
+
     func testRecordedGlobalShortcutRoundTripsAndLegacyPresetsRemainValid() throws {
         let commandShiftK = try XCTUnwrap(GlobalSearchKeyBinding.make(
             keyCode: UInt32(kVK_ANSI_K),
