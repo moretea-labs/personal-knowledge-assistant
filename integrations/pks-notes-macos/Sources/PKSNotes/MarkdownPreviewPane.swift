@@ -104,6 +104,7 @@ struct MarkdownPreviewPane: View {
                             Markdown(part.content)
                                 .markdownTheme(.pksReading(theme, fontAdjustment: fontAdjustment,
                                                            lineAdjustment: lineAdjustment))
+                                .markdownSoftBreakMode(.lineBreak)
                                 .font(.system(size: theme.typography.bodySize + fontAdjustment,
                                               design: theme.typography.design))
                                 .markdownImageProvider(LocalMarkdownImageProvider(note: model.selected, root: model.root))
