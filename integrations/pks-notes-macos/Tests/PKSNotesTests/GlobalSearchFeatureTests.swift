@@ -69,6 +69,52 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertEqual(folder.fileName, "Archive")
     }
 
+    func testGlobalSearchTypeFiltersClassifyAppsFoldersAndFileExtensions() {
+        let note = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Notes/Study.md"), title: "Study.md", isFolder: false
+        )
+        let legacyNote = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Notes/Archive.markdown"), title: "Archive.markdown", isFolder: false
+        )
+        let pdf = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Notes/Source.pdf"), title: "Source.pdf", isFolder: false
+        )
+        let image = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Notes/Diagram.png"), title: "Diagram.png", isFolder: false
+        )
+        let folder = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Notes/Archive", isDirectory: true), title: "Archive", isFolder: true
+        )
+        let app = GlobalSearchItem.application(
+            URL(fileURLWithPath: "/Applications/Notes.app"), title: "Notes"
+        )
+
+        XCTAssertTrue(GlobalSearchTypeFilter.all.includes(note))
+        XCTAssertTrue(GlobalSearchTypeFilter.notes.includes(note))
+        XCTAssertTrue(GlobalSearchTypeFilter.notes.includes(legacyNote))
+        XCTAssertFalse(GlobalSearchTypeFilter.notes.includes(pdf))
+        XCTAssertTrue(GlobalSearchTypeFilter.pdf.includes(pdf))
+        XCTAssertTrue(GlobalSearchTypeFilter.folders.includes(folder))
+        XCTAssertTrue(GlobalSearchTypeFilter.applications.includes(app))
+        XCTAssertTrue(GlobalSearchTypeFilter.otherFiles.includes(image))
+        XCTAssertFalse(GlobalSearchTypeFilter.otherFiles.includes(note))
+        XCTAssertFalse(GlobalSearchTypeFilter.otherFiles.includes(pdf))
+    }
+
+    @MainActor
+    func testGlobalSearchScopeAndTypeFiltersAreSelectable() {
+        let results = GlobalSearchResults()
+
+        results.setScope(.workspace)
+        XCTAssertEqual(results.scope, .workspace)
+        results.setTypeFilter(.pdf)
+        XCTAssertEqual(results.typeFilter, .pdf)
+
+        results.setScope(.global)
+        XCTAssertEqual(results.scope, .global)
+        XCTAssertNil(results.directoryScope)
+    }
+
     func testSpotlightWorkspaceMarkdownAndPDFUseLeafspanOpenPath() {
         let root = URL(fileURLWithPath: "/Users/test/Notes", isDirectory: true)
         let note = GlobalSearchItem.spotlight(

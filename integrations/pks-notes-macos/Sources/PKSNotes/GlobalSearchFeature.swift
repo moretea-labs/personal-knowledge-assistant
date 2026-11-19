@@ -12,6 +12,64 @@ enum GlobalSearchPreferences {
     static let shortcutKey = "LeafspanGlobalSearchShortcut"
 }
 
+enum GlobalSearchScope: String, CaseIterable, Identifiable, Equatable, Sendable {
+    case global
+    case workspace
+
+    var id: String { rawValue }
+
+    func title(chinese: Bool) -> String {
+        switch self {
+        case .global: chinese ? "全局" : "Global"
+        case .workspace: chinese ? "当前工作区" : "This Workspace"
+        }
+    }
+}
+
+enum GlobalSearchTypeFilter: String, CaseIterable, Identifiable, Equatable, Sendable {
+    case all
+    case notes
+    case pdf
+    case folders
+    case applications
+    case otherFiles
+
+    var id: String { rawValue }
+
+    func title(chinese: Bool) -> String {
+        switch self {
+        case .all: chinese ? "全部类型" : "All Types"
+        case .notes: chinese ? "笔记" : "Notes"
+        case .pdf: "PDF"
+        case .folders: chinese ? "文件夹" : "Folders"
+        case .applications: chinese ? "应用" : "Applications"
+        case .otherFiles: chinese ? "其他文件" : "Other Files"
+        }
+    }
+
+    func includes(_ item: GlobalSearchItem) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .folders:
+            if case .folder = item.kind { return true }
+            return false
+        case .applications:
+            if case .application = item.kind { return true }
+            return false
+        case .notes:
+            guard case .file = item.kind else { return false }
+            return ["md", "markdown"].contains(item.url.pathExtension.lowercased())
+        case .pdf:
+            guard case .file = item.kind else { return false }
+            return item.url.pathExtension.lowercased() == "pdf"
+        case .otherFiles:
+            guard case .file = item.kind else { return false }
+            return !["md", "markdown", "pdf"].contains(item.url.pathExtension.lowercased())
+        }
+    }
+}
+
 enum GlobalSearchShortcut: String, CaseIterable, Identifiable {
     case controlOptionP
     case optionSpace
@@ -439,7 +497,9 @@ final class GlobalSearchResults: ObservableObject {
         didSet { scheduleSearch() }
     }
     @Published private(set) var items: [GlobalSearchItem] = []
+    @Published private(set) var scope: GlobalSearchScope = .global
     @Published private(set) var directoryScope: URL?
+    @Published private(set) var typeFilter: GlobalSearchTypeFilter = .all
     @Published private(set) var selectedIndex = 0
     @Published private(set) var statusMessage: String?
     @Published private(set) var loading = false
@@ -462,6 +522,14 @@ final class GlobalSearchResults: ObservableObject {
     private var workspaceSearchPending = false
     private var librarySearchPending = false
 
+    var hasActiveWorkspace: Bool {
+        (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel?.root != nil
+    }
+
+    private var isWorkspaceScoped: Bool {
+        scope == .workspace || directoryScope != nil
+    }
+
     private func updateLoadingState() {
         loading = spotlightSearchPending || workspaceSearchPending || librarySearchPending
     }
@@ -469,7 +537,9 @@ final class GlobalSearchResults: ObservableObject {
     func start() {
         isPresented = true
         cancelPendingSearch()
+        scope = .global
         directoryScope = nil
+        typeFilter = .all
         query = ""
         items = []
         selectedIndex = 0
@@ -510,9 +580,9 @@ final class GlobalSearchResults: ObservableObject {
             self.applications = loaded
             self.applicationCatalogTask = nil
             guard self.isPresented else { return }
-            self.appHits = self.directoryScope == nil
-                ? GlobalApplicationCatalog.matches(loaded, query: self.query)
-                : []
+            self.appHits = self.isWorkspaceScoped
+                ? []
+                : GlobalApplicationCatalog.matches(loaded, query: self.query)
             self.publish()
         }
     }
@@ -524,8 +594,23 @@ final class GlobalSearchResults: ObservableObject {
 
     func search(in folder: URL) {
         guard canSearch(in: folder) else { return }
+        scope = .workspace
         directoryScope = folder.standardizedFileURL
         scheduleSearch()
+    }
+
+    func setScope(_ scope: GlobalSearchScope) {
+        guard self.scope != scope || directoryScope != nil else { return }
+        self.scope = scope
+        directoryScope = nil
+        scheduleSearch()
+    }
+
+    func setTypeFilter(_ filter: GlobalSearchTypeFilter) {
+        guard typeFilter != filter else { return }
+        typeFilter = filter
+        selectedIndex = 0
+        publish(resetSelection: true)
     }
 
     func clearDirectoryScope() {
@@ -563,17 +648,20 @@ final class GlobalSearchResults: ObservableObject {
         )
     }
 
-    private func publish() {
-        let selectedID = selected?.id
+    private func publish(resetSelection: Bool = false) {
+        let selectedID = resetSelection ? nil : selected?.id
         let documentHits = WorkspaceSearch.merging(local: workspaceHits, remote: pksHits)
         let documents = documentHits.compactMap { hit -> GlobalSearchItem? in
             guard let file = hit.localFileURL else { return nil }
             return GlobalSearchItem.file(hit, url: file)
         }
+        let workspaceOnly = isWorkspaceScoped
         let combined = GlobalSearchRanker.merge(
-            apps: directoryScope == nil ? appHits : [],
-            documents: documents, spotlight: spotlightHits,
-            related: relatedHits, query: query
+            apps: workspaceOnly ? [] : appHits.filter(typeFilter.includes),
+            documents: documents.filter(typeFilter.includes),
+            spotlight: workspaceOnly ? [] : spotlightHits.filter(typeFilter.includes),
+            related: workspaceOnly ? [] : relatedHits.filter(typeFilter.includes),
+            query: query
         )
         items = combined
         if let selectedID, let index = combined.firstIndex(where: { $0.id == selectedID }) {
@@ -589,13 +677,14 @@ final class GlobalSearchResults: ObservableObject {
         let generation = searchGeneration
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let scopedDirectory = directoryScope
+        let workspaceOnly = isWorkspaceScoped
         selectedIndex = 0
         workspaceCoverage = WorkspaceSearch.Coverage()
         librarySearchUnavailable = false
         statusMessage = nil
-        appHits = scopedDirectory == nil
-            ? GlobalApplicationCatalog.matches(applications ?? [], query: text)
-            : []
+        appHits = workspaceOnly
+            ? []
+            : GlobalApplicationCatalog.matches(applications ?? [], query: text)
         pksHits = []
         workspaceHits = []
         relatedHits = []
@@ -606,12 +695,12 @@ final class GlobalSearchResults: ObservableObject {
         let indexedFoldersEnabled = UserDefaults.standard.bool(
             forKey: GlobalSearchPreferences.indexedFoldersEnabledKey
         )
-        let notesModel = (indexedFoldersEnabled || scopedDirectory != nil)
+        let notesModel = (indexedFoldersEnabled || workspaceOnly)
             ? (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel
             : nil
-        spotlightSearchPending = scopedDirectory == nil
+        spotlightSearchPending = !workspaceOnly
         workspaceSearchPending = notesModel != nil
-        librarySearchPending = indexedFoldersEnabled && scopedDirectory == nil
+        librarySearchPending = indexedFoldersEnabled && !workspaceOnly
         updateLoadingState()
 
         searchTask = Task { [weak self] in
@@ -619,8 +708,8 @@ final class GlobalSearchResults: ObservableObject {
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard !Task.isCancelled, self.searchGeneration == generation else { return }
 
-            if scopedDirectory == nil {
-                // Global discovery remains unchanged outside an explicit folder scope.
+            if !workspaceOnly {
+                // Global discovery remains unchanged outside an explicit workspace or folder scope.
                 self.spotlight.start(text) { [weak self] hits in
                     guard let self, self.searchGeneration == generation,
                           self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
@@ -661,7 +750,7 @@ final class GlobalSearchResults: ObservableObject {
                 }
             }
 
-            guard indexedFoldersEnabled, scopedDirectory == nil else {
+            guard indexedFoldersEnabled, !workspaceOnly else {
                 self.searchTask = nil
                 self.updateLoadingState()
                 return
@@ -1007,6 +1096,7 @@ private struct GlobalSearchPalette: View {
     @FocusState private var searchFocused: Bool
 
     var body: some View {
+        let chinese = AppLanguage.current.resolved == .simplifiedChinese
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -1029,27 +1119,75 @@ private struct GlobalSearchPalette: View {
             .padding(.horizontal, 23)
             .padding(.top, 32)
             .padding(.bottom, 18)
-            if let directory = results.directoryScope {
-                HStack(spacing: 8) {
-                    Image(systemName: "folder")
-                    Text(AppLanguage.current.resolved == .simplifiedChinese
-                         ? "搜索范围：\(directory.lastPathComponent)"
-                         : "Searching in \(directory.lastPathComponent)")
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 4)
-                    Button(AppLanguage.current.resolved == .simplifiedChinese ? "清除" : "Clear") {
+            HStack(spacing: 14) {
+                Menu {
+                    Button {
+                        results.setScope(.global)
+                    } label: {
+                        if results.scope == .global && results.directoryScope == nil {
+                            Label(chinese ? "全局" : "Global", systemImage: "checkmark")
+                        } else {
+                            Text(chinese ? "全局" : "Global")
+                        }
+                    }
+                    Button {
+                        results.setScope(.workspace)
+                    } label: {
+                        if results.scope == .workspace {
+                            Label(chinese ? "当前工作区" : "This Workspace", systemImage: "checkmark")
+                        } else {
+                            Text(chinese ? "当前工作区" : "This Workspace")
+                        }
+                    }
+                    .disabled(!results.hasActiveWorkspace)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: results.directoryScope == nil ? "scope" : "folder")
+                        Text(results.directoryScope?.lastPathComponent ?? results.scope.title(chinese: chinese))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .accessibilityIdentifier("leafspan-global-search-scope-filter")
+
+                Menu {
+                    ForEach(GlobalSearchTypeFilter.allCases) { filter in
+                        Button {
+                            results.setTypeFilter(filter)
+                        } label: {
+                            if results.typeFilter == filter {
+                                Label(filter.title(chinese: chinese), systemImage: "checkmark")
+                            } else {
+                                Text(filter.title(chinese: chinese))
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "line.3.horizontal.decrease")
+                        Text(results.typeFilter.title(chinese: chinese))
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .accessibilityIdentifier("leafspan-global-search-type-filter")
+                Spacer(minLength: 0)
+                if results.directoryScope != nil {
+                    Button(chinese ? "清除目录" : "Clear Folder") {
                         results.clearDirectoryScope()
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
                     .accessibilityIdentifier("leafspan-global-search-clear-folder-scope")
                 }
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
             }
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
             Divider()
             ScrollViewReader { proxy in
                 ScrollView {
