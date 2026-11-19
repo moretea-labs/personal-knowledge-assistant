@@ -638,6 +638,12 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(AppLanguage.allCases.map(\.rawValue), ["system", "zh-Hans", "en"])
         XCTAssertEqual(AppLanguage.restored("unknown"), .system)
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Search"), "搜索")
+        let pageOnlyWarning = "This PDF selection cannot be highlighted precisely. Only a link to its first page will be saved; the selected quote will not be included. Select a smaller passage on one page to enable precise highlighting."
+        XCTAssertEqual(
+            AppLanguage.simplifiedChinese.text(pageOnlyWarning),
+            "此 PDF 选区无法精确高亮。只会保存指向所选内容起始页的链接，不会包含所选引文。请在单页中选择更短的内容，以启用精确高亮。"
+        )
+        XCTAssertEqual(AppLanguage.english.text(pageOnlyWarning), pageOnlyWarning)
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Insert PDF Citation at Cursor"), "在光标处插入 PDF 引用")
         XCTAssertEqual(AppLanguage.english.text("Search"), "Search")
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Markdown"), "Markdown")
@@ -3423,7 +3429,7 @@ extension PKSNotesTests {
         )
         XCTAssertEqual(PDFPageReference.noteSnippet(
             for: pdf, page: 2, root: root, selectedText: "Quoted fact"
-        ), "[Book.pdf · p. 2](/Book.pdf#page=2)\n\n> Quoted fact")
+        ), "[Book.pdf · p. 2](/Book.pdf#page=2)")
         let staleFingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Different fact"))
         let staleAnchor = try XCTUnwrap(PDFSourceAnchor(
             page: 2,
@@ -3432,6 +3438,14 @@ extension PKSNotesTests {
         ))
         XCTAssertNil(PDFPageReference.noteSnippet(
             for: pdf, page: 2, root: root, selectedText: "Quoted fact", anchor: staleAnchor
+        ))
+        let wrongPageAnchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 1,
+            normalizedRects: quoteAnchor.normalizedRects,
+            fingerprint: quoteFingerprint
+        ))
+        XCTAssertNil(PDFPageReference.noteSnippet(
+            for: pdf, page: 2, root: root, selectedText: "Quoted fact", anchor: wrongPageAnchor
         ))
     }
 

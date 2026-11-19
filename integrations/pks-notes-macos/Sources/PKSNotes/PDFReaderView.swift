@@ -301,12 +301,20 @@ enum PDFPageReference {
     ) -> String? {
         let trimmedSelection = selectedText?.trimmingCharacters(in: .whitespacesAndNewlines)
         let validAnchor: PDFSourceAnchor?
-        if let trimmedSelection, !trimmedSelection.isEmpty,
-           let anchor, anchor.page == page, anchor.matches(text: trimmedSelection) {
-            validAnchor = anchor
+        if let trimmedSelection, !trimmedSelection.isEmpty {
+            if let anchor {
+                // A supplied anchor must be verified; never silently downgrade a stale
+                // or wrong-page anchor into a citation for different source evidence.
+                guard anchor.page == page, anchor.matches(text: trimmedSelection) else { return nil }
+                validAnchor = anchor
+            } else {
+                // An unanchorable selection can still point to its source page, but
+                // its text must not be persisted as a quote without a precise return target.
+                validAnchor = nil
+            }
         } else {
-            // Keep the selected evidence even when its geometry cannot be trusted.
-            // Only the return link degrades to a page reference; never invent a highlight.
+            // An anchor without its selected text cannot be fingerprint-verified.
+            guard anchor == nil else { return nil }
             validAnchor = nil
         }
         guard let reference = markdown(
@@ -320,7 +328,7 @@ enum PDFPageReference {
         }
         sections.append(reference)
 
-        if let trimmedSelection, !trimmedSelection.isEmpty {
+        if validAnchor != nil, let trimmedSelection, !trimmedSelection.isEmpty {
             let quote = trimmedSelection
                 .components(separatedBy: .newlines)
                 .map { "> \(MindMapOutline.escapeInlineText($0))" }
@@ -1060,7 +1068,7 @@ struct NativePDFPreview: View {
                     } else if root != nil && controller.selectionNeedsPageOnlyReference {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle")
-                            Text(language.text("This PDF selection cannot be highlighted precisely. The selected quote and a link to its first page will still be saved. Select a smaller passage on one page to enable precise highlighting."))
+                            Text(language.text("This PDF selection cannot be highlighted precisely. Only a link to its first page will be saved; the selected quote will not be included. Select a smaller passage on one page to enable precise highlighting."))
                             Spacer()
                         }
                         .font(.caption)
