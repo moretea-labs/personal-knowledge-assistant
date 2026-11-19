@@ -478,6 +478,7 @@ final class PDFReaderController: ObservableObject {
     // PDFView has one current selection for both search hits and user source text.
     // Retain only the active search selection so invalidation cannot clear newer user intent.
     private var activeSearchSelection: PDFSelection?
+    private var fitsWidthOnResize = false
 
     func attach(
         view: PDFView,
@@ -751,6 +752,7 @@ final class PDFReaderController: ObservableObject {
     }
 
     func actualSize() {
+        fitsWidthOnResize = false
         guard let view = pdfView else { return }
         view.autoScales = false
         view.scaleFactor = 1
@@ -758,6 +760,7 @@ final class PDFReaderController: ObservableObject {
     }
 
     func fitWidth() {
+        fitsWidthOnResize = true
         guard let view = pdfView,
               let page = view.currentPage ?? document?.page(at: currentPageIndex)
         else { return }
@@ -767,6 +770,11 @@ final class PDFReaderController: ObservableObject {
         let target = (view.bounds.width - 28) / pageBounds.width
         view.scaleFactor = min(max(0.1, target), 8)
         syncFromView()
+    }
+
+    private func refitWidthIfNeeded() {
+        guard fitsWidthOnResize else { return }
+        fitWidth()
     }
 
     func invalidateSearchIfQueryChanged(_ query: String) {
@@ -830,6 +838,7 @@ final class PDFReaderController: ObservableObject {
     }
 
     private func adjustScale(multiplier: CGFloat) {
+        fitsWidthOnResize = false
         guard let view = pdfView else { return }
         view.autoScales = false
         view.scaleFactor = min(max(0.1, view.scaleFactor * multiplier), 8)
@@ -880,7 +889,11 @@ final class PDFReaderController: ObservableObject {
 
     private func installViewObservers(for view: PDFView) {
         let center = NotificationCenter.default
+        view.postsFrameChangedNotifications = true
         viewObservers = [
+            center.addObserver(forName: NSView.frameDidChangeNotification, object: view, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.refitWidthIfNeeded() }
+            },
             center.addObserver(forName: .PDFViewPageChanged, object: view, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.syncPageFromView() }
             },

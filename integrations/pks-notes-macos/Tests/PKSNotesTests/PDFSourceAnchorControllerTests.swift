@@ -496,6 +496,53 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testFitWidthTracksPDFPaneResizeUntilManualZoom() async throws {
+        let pageBounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let textView = NSTextView(frame: pageBounds)
+        textView.string = "PDF fit-width resize fixture"
+        let document = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: pageBounds)))
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Fit-Width-\(UUID().uuidString).pdf")
+        let view = PDFView(frame: NSRect(x: 0, y: 0, width: 700, height: 792))
+        let controller = PDFReaderController()
+        defer {
+            controller.detach(view: view)
+            removeStoredReadingPosition(for: url)
+        }
+
+        controller.attach(view: view, document: document, url: url,
+                          requestedPage: nil, requestedAnchor: nil)
+        let initialFit = CGFloat(700 - 28) / 612
+        for _ in 0..<50 where abs(view.scaleFactor - initialFit) > 0.01 {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertEqual(view.scaleFactor, initialFit, accuracy: 0.01)
+
+        view.setFrameSize(NSSize(width: 400, height: 792))
+        let resizedFit = CGFloat(400 - 28) / 612
+        for _ in 0..<50 where abs(view.scaleFactor - resizedFit) > 0.01 {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertEqual(view.scaleFactor, resizedFit, accuracy: 0.01,
+                       "Fit Width must track the PDF pane as the split divider moves.")
+
+        controller.zoomIn()
+        let manualScale = view.scaleFactor
+        view.setFrameSize(NSSize(width: 500, height: 792))
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(view.scaleFactor, manualScale, accuracy: 0.001,
+                       "Manual zoom must opt out of automatic Fit Width resizing.")
+
+        controller.fitWidth()
+        view.setFrameSize(NSSize(width: 350, height: 792))
+        let finalFit = CGFloat(350 - 28) / 612
+        for _ in 0..<50 where abs(view.scaleFactor - finalFit) > 0.01 {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertEqual(view.scaleFactor, finalFit, accuracy: 0.01)
+    }
+
+    @MainActor
     func testPDFReaderDetachPersistsLastPageBeforeDeferredPageChangeSync() throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let document = PDFDocument()
