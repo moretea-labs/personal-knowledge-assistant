@@ -243,6 +243,12 @@ struct GlobalSearchItem: Identifiable, Sendable {
               WorkspaceFiles.contains(item.url, in: root) else { return false }
         return ["md", "markdown", "pdf"].contains(item.url.pathExtension.lowercased())
     }
+
+    static func isLeafspanWorkspaceItem(_ item: GlobalSearchItem, in root: URL?) -> Bool {
+        guard let root else { return false }
+        if case .application = item.kind { return false }
+        return WorkspaceFiles.contains(item.url, in: root)
+    }
 }
 
 // Only regular application bundles in conventional installation locations.
@@ -1050,6 +1056,17 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
         NSWorkspace.shared.activateFileViewerSelecting([item.url])
     }
 
+    func locateInLeafspan(_ item: GlobalSearchItem) {
+        guard let model = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel,
+              let root = model.root,
+              GlobalSearchItem.isLeafspanWorkspaceItem(item, in: root),
+              FileManager.default.fileExists(atPath: item.url.path) else { return }
+        dismiss()
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) })?.makeKeyAndOrderFront(nil)
+        NotificationCenter.default.post(name: NotesMenuEvent.revealCurrentFile, object: item.url)
+    }
+
     func preview(_ item: GlobalSearchItem) {
         guard item.supportsQuickLook,
               FileManager.default.fileExists(atPath: item.url.path) else { return }
@@ -1199,6 +1216,10 @@ private struct GlobalSearchPalette: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         ForEach(Array(results.items.enumerated()), id: \.element.id) { index, item in
+                            let workspaceRoot = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel?.root
+                            let canLocateInLeafspan = GlobalSearchItem.isLeafspanWorkspaceItem(
+                                item, in: workspaceRoot
+                            )
                             if item.isRelated &&
                                 (index == 0 || !results.items[index - 1].isRelated) {
                                 Text(AppLanguage.current.resolved == .simplifiedChinese
@@ -1255,6 +1276,12 @@ private struct GlobalSearchPalette: View {
                                         results.search(in: item.url)
                                     }
                                     .accessibilityIdentifier("leafspan-global-search-folder-scope")
+                                }
+                                if canLocateInLeafspan {
+                                    Button(chinese ? "在 Leafspan 文件树中定位" : "Reveal in Leafspan") {
+                                        GlobalSearchController.shared.locateInLeafspan(item)
+                                    }
+                                    .accessibilityIdentifier("leafspan-global-search-locate-in-tree")
                                 }
                                 Button(chinese ? "打开" : "Open") { GlobalSearchController.shared.open(item) }
                                 if item.supportsQuickLook {

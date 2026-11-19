@@ -1104,8 +1104,8 @@ struct NotesWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.newNote)) { _ in
             beginNewNote()
         }
-        .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.revealCurrentFile)) { _ in
-            revealCurrentFile()
+        .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.revealCurrentFile)) { notification in
+            revealCurrentFile(notification.object as? URL)
         }
         .onReceive(NotificationCenter.default.publisher(for: NotesMenuEvent.findCurrentFile)) { _ in
             findInCurrentFile()
@@ -1484,21 +1484,24 @@ struct NotesWindow: View {
             .first { WorkspaceFiles.contains($0, in: root) }
     }
 
-    private func revealCurrentFile() {
-        guard let file = currentWorkspaceFile, let root = model.root else { return }
+    private func revealCurrentFile(_ requestedFile: URL? = nil) {
+        guard let file = requestedFile ?? currentWorkspaceFile,
+              let root = model.root,
+              WorkspaceFiles.contains(file, in: root) else { return }
+        let target = file.standardizedFileURL
         columnVisibility = .all
         sidebarTab = .notes
-        let ancestors = NoteTreePresentation.ancestorPaths(for: file, in: root)
+        let ancestors = NoteTreePresentation.ancestorPaths(for: target, in: root)
         expandedFolderPaths.formUnion(ancestors)
         model.prioritizeExpandedPath(
             ancestors,
-            toward: file.deletingLastPathComponent()
+            toward: target.deletingLastPathComponent()
         )
-        treeCursorPath = file.path
+        treeCursorPath = target.path
         treeFocused = true
         Task { @MainActor in
             await Task.yield()
-            treeRevealRequest = file.path
+            treeRevealRequest = target.path
         }
     }
 

@@ -147,6 +147,28 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertFalse(GlobalSearchItem.isLeafspanWorkspaceDocument(note, in: nil))
     }
 
+    func testGlobalSearchLeafspanTreeLocateIncludesWorkspaceFilesAndFoldersOnly() {
+        let root = URL(fileURLWithPath: "/Users/test/Notes", isDirectory: true)
+        let note = GlobalSearchItem.spotlight(
+            root.appendingPathComponent("Research.md"), title: "Research.md", isFolder: false
+        )
+        let folder = GlobalSearchItem.spotlight(
+            root.appendingPathComponent("Archive", isDirectory: true), title: "Archive", isFolder: true
+        )
+        let outside = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Desktop/Other.md"), title: "Other.md", isFolder: false
+        )
+        let app = GlobalSearchItem.application(
+            URL(fileURLWithPath: "/Applications/Notes.app"), title: "Notes"
+        )
+
+        XCTAssertTrue(GlobalSearchItem.isLeafspanWorkspaceItem(note, in: root))
+        XCTAssertTrue(GlobalSearchItem.isLeafspanWorkspaceItem(folder, in: root))
+        XCTAssertFalse(GlobalSearchItem.isLeafspanWorkspaceItem(outside, in: root))
+        XCTAssertFalse(GlobalSearchItem.isLeafspanWorkspaceItem(app, in: root))
+        XCTAssertFalse(GlobalSearchItem.isLeafspanWorkspaceItem(note, in: nil))
+    }
+
     func testGlobalSearchAllowsSingleHanCharacterDocumentQueries() {
         XCTAssertTrue(GlobalSearchRanker.shouldStartDocumentSearch(for: "肾"))
         XCTAssertTrue(GlobalSearchRanker.shouldStartDocumentSearch(for: "AB"))
