@@ -8,6 +8,22 @@ enum NoteTreePresentation {
         let tokenStarts: Set<Int>
     }
 
+    /// Reuses pure token-to-Latin conversions for one transient index build.
+    final class TransliterationTokenCache {
+        private var values: [String: String] = [:]
+
+        init(reservingCapacity: Int = 0) {
+            values.reserveCapacity(reservingCapacity)
+        }
+
+        func resolve(_ token: String) -> String? {
+            if let cached = values[token] { return cached }
+            guard let normalized = NoteTreePresentation.transliterationToken(token) else { return nil }
+            values[token] = normalized
+            return normalized
+        }
+    }
+
     struct Row: Identifiable {
         let item: NoteItem
         let depth: Int
@@ -50,14 +66,37 @@ enum NoteTreePresentation {
         var id: String { item.id }
 
         init(item: NoteItem, insertionOrder: Int) {
+            self.init(
+                item: item,
+                insertionOrder: insertionOrder,
+                transliteration: NoteTreePresentation.transliterationKeys(
+                    path: item.url.standardizedFileURL.path,
+                    filename: item.name,
+                    useASCIIIndexFastPath: true
+                )
+            )
+        }
+
+        init(item: NoteItem, insertionOrder: Int, tokenCache: TransliterationTokenCache) {
+            self.init(
+                item: item,
+                insertionOrder: insertionOrder,
+                transliteration: NoteTreePresentation.transliterationKeys(
+                    path: item.url.standardizedFileURL.path,
+                    filename: item.name,
+                    useASCIIIndexFastPath: true,
+                    tokenCache: tokenCache
+                )
+            )
+        }
+
+        private init(
+            item: NoteItem, insertionOrder: Int,
+            transliteration: (path: TransliterationKey, name: TransliterationKey)
+        ) {
             self.item = item
             self.foldedName = NoteTreePresentation.fold(item.name)
             self.foldedFolder = NoteTreePresentation.fold(item.url.deletingLastPathComponent().path)
-            let transliteration = NoteTreePresentation.transliterationKeys(
-                path: item.url.standardizedFileURL.path,
-                filename: item.name,
-                useASCIIIndexFastPath: true
-            )
             self.pathTransliterationKey = transliteration.path
             self.nameTransliterationKey = transliteration.name
             self.insertionOrder = insertionOrder
@@ -76,11 +115,14 @@ enum NoteTreePresentation {
         entries.reserveCapacity(items.count + prioritizedFiles.count)
         var seenPaths: Set<String> = []
         seenPaths.reserveCapacity(items.count + prioritizedFiles.count)
+        let tokenCache = TransliterationTokenCache(reservingCapacity: 512)
 
         func appendFile(_ item: NoteItem) {
             let path = item.url.standardizedFileURL.path
             guard seenPaths.insert(path).inserted else { return }
-            entries.append(QuickOpenEntry(item: item, insertionOrder: entries.count))
+            entries.append(QuickOpenEntry(
+                item: item, insertionOrder: entries.count, tokenCache: tokenCache
+            ))
         }
 
         // Current/recent/favorite notes are already-known navigation targets.
@@ -184,9 +226,17 @@ enum NoteTreePresentation {
         return normalized.isEmpty ? nil : normalized
     }
 
+    private static func normalizedToken(
+        _ token: String, cache: TransliterationTokenCache?
+    ) -> String? {
+        guard let cache else { return transliterationToken(token) }
+        return cache.resolve(token)
+    }
+
     static func transliterationKey(
         _ value: String,
-        useASCIIIndexFastPath: Bool = false
+        useASCIIIndexFastPath: Bool = false,
+        tokenCache: TransliterationTokenCache? = nil
     ) -> TransliterationKey {
         if useASCIIIndexFastPath {
             // Most workspace paths are Latin. Keep index construction cheap;
@@ -227,7 +277,7 @@ enum NoteTreePresentation {
         var tokenStarts = Set<Int>()
         for range in tokenizer.tokens(for: value.startIndex..<value.endIndex) {
             let token = String(value[range])
-            guard let normalized = transliterationToken(token) else { continue }
+            guard let normalized = normalizedToken(token, cache: tokenCache) else { continue }
             tokenStarts.insert(key.count)
             key.append(normalized)
         }
@@ -238,15 +288,16 @@ enum NoteTreePresentation {
     /// filename is the path suffix, so its tokens can be collected while the
     /// full path key is built instead of tokenizing the same CJK name twice.
     static func transliterationKeys(
-        path: String, filename: String, useASCIIIndexFastPath: Bool = false
+        path: String, filename: String, useASCIIIndexFastPath: Bool = false,
+        tokenCache: TransliterationTokenCache? = nil
     ) -> (path: TransliterationKey, name: TransliterationKey) {
         guard path.hasSuffix(filename),
               let filenameStart = path.index(
                 path.endIndex, offsetBy: -filename.count, limitedBy: path.startIndex
               ) else {
             return (
-                transliterationKey(path, useASCIIIndexFastPath: useASCIIIndexFastPath),
-                transliterationKey(filename, useASCIIIndexFastPath: useASCIIIndexFastPath)
+                transliterationKey(path, useASCIIIndexFastPath: useASCIIIndexFastPath, tokenCache: tokenCache),
+                transliterationKey(filename, useASCIIIndexFastPath: useASCIIIndexFastPath, tokenCache: tokenCache)
             )
         }
         if useASCIIIndexFastPath,
@@ -255,8 +306,8 @@ enum NoteTreePresentation {
                    options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current
                ).utf8.allSatisfy({ $0 < 0x80 }) {
             return (
-                transliterationKey(path, useASCIIIndexFastPath: true),
-                transliterationKey(filename, useASCIIIndexFastPath: true)
+                transliterationKey(path, useASCIIIndexFastPath: true, tokenCache: tokenCache),
+                transliterationKey(filename, useASCIIIndexFastPath: true, tokenCache: tokenCache)
             )
         }
 
@@ -272,7 +323,7 @@ enum NoteTreePresentation {
         var nameValue = ""
         var nameStarts: Set<Int> = []
         for range in tokenizer.tokens(for: path.startIndex..<path.endIndex) {
-            guard let normalized = transliterationToken(String(path[range])) else { continue }
+            guard let normalized = normalizedToken(String(path[range]), cache: tokenCache) else { continue }
             pathStarts.insert(pathValue.count)
             pathValue.append(normalized)
             if !filenameIsASCII, range.lowerBound >= filenameStart {
@@ -282,7 +333,7 @@ enum NoteTreePresentation {
         }
         let pathKey = TransliterationKey(value: pathValue, tokenStarts: pathStarts)
         let nameKey = filenameIsASCII
-            ? transliterationKey(filename, useASCIIIndexFastPath: true)
+            ? transliterationKey(filename, useASCIIIndexFastPath: true, tokenCache: tokenCache)
             : TransliterationKey(value: nameValue, tokenStarts: nameStarts)
         return (pathKey, nameKey)
     }

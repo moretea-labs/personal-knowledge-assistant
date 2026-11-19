@@ -1743,10 +1743,13 @@ final class NotesModel: ObservableObject {
                 var quickOpenEntries: [NoteTreePresentation.QuickOpenEntry] = []
                 var markdownFiles: [URL] = []
                 var insertionOrder = 0
+                let tokenCache = NoteTreePresentation.TransliterationTokenCache(reservingCapacity: 1_024)
 
                 WorkspaceFiles.visitFlatFiles(in: root) { url in
                     let item = NoteItem(url: url, children: nil)
-                    quickOpenEntries.append(.init(item: item, insertionOrder: insertionOrder))
+                    quickOpenEntries.append(.init(
+                        item: item, insertionOrder: insertionOrder, tokenCache: tokenCache
+                    ))
                     insertionOrder += 1
                     if item.isMarkdown {
                         markdownFiles.append(url)
