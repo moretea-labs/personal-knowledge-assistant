@@ -118,6 +118,11 @@ final class WorkspaceSearchTests: XCTestCase {
         let result = WorkspaceSearch.search(entries: entries, root: root, query: "Secret")
         XCTAssertTrue(result.hits.isEmpty)
         XCTAssertEqual(result.coverage.readFiles, 0)
+        for query in ["Direct", "LinkedFolder"] {
+            XCTAssertTrue(WorkspaceSearch.search(
+                entries: entries, root: root, query: query, searchBodies: false
+            ).hits.isEmpty)
+        }
     }
 
     func testSearchAllowsSymlinkedWorkspaceRootButRejectsChildSymlinks() throws {
@@ -571,5 +576,63 @@ extension WorkspaceSearchTests {
             }
         }
         print("PKS_PERF cjk_quick_open_1000 two_pass=\(twoPassSamples) single_pass=\(singlePassSamples)")
+    }
+
+    func testIsolatedWorkspaceSearchP50P95AcrossVaultSizes() throws {
+        guard ProcessInfo.processInfo.environment["PKS_RUN_PERF"] == "1" else {
+            throw XCTSkip("Set PKS_RUN_PERF=1 to run isolated 1k/10k/50k search benchmarks.")
+        }
+        let fm = FileManager.default
+        let clock = ContinuousClock()
+        let percentile: ([Duration], Double) -> Duration = { samples, quantile in
+            let sorted = samples.sorted()
+            let rank = Int(ceil(Double(sorted.count) * quantile))
+            return sorted[min(sorted.count - 1, max(0, rank - 1))]
+        }
+        for count in [1_000, 10_000, 50_000] {
+            let root = try fixture()
+            for index in 0..<count {
+                let name = index == count - 1 ? "Study-target.md" : String(format: "Note-%05d.md", index)
+                XCTAssertTrue(fm.createFile(atPath: root.appendingPathComponent(name).path, contents: Data("# Study\n".utf8)))
+            }
+            let indexStart = clock.now
+            let indexed = entries(root)
+            let indexElapsed = indexStart.duration(to: clock.now)
+            XCTAssertEqual(indexed.count, count)
+            let runSearch = { WorkspaceSearch.search(entries: indexed, root: root, query: "Study-target", searchBodies: false) }
+            _ = runSearch()
+            var samples: [Duration] = []
+            for _ in 0..<9 {
+                let started = clock.now
+                let result = runSearch()
+                samples.append(started.duration(to: clock.now))
+                XCTAssertEqual(result.hits.map(\.uri), [root.appendingPathComponent("Study-target.md").path])
+                XCTAssertEqual(result.coverage.readFiles, 0)
+            }
+            print("PKS_PERF isolated_filename_search files=\(count) index=\(indexElapsed) p50=\(percentile(samples, 0.50)) p95=\(percentile(samples, 0.95))")
+            try? fm.removeItem(at: root)
+        }
+        let root = try fixture()
+        for index in 0..<1_000 {
+            let file = root.appendingPathComponent(String(format: "Note-%05d.md", index))
+            let body = index == 999 ? "# Study\nThe rare needle is here.\n" : "# Study\nUnrelated content.\n"
+            XCTAssertTrue(fm.createFile(atPath: file.path, contents: Data(body.utf8)))
+        }
+        let indexStart = clock.now
+        let indexed = entries(root)
+        let indexElapsed = indexStart.duration(to: clock.now)
+        XCTAssertEqual(indexed.count, 1_000)
+        let runBodySearch = { WorkspaceSearch.search(entries: indexed, root: root, query: "rare needle", searchBodies: true) }
+        _ = runBodySearch()
+        var bodySamples: [Duration] = []
+        for _ in 0..<9 {
+            let started = clock.now
+            let result = runBodySearch()
+            bodySamples.append(started.duration(to: clock.now))
+            XCTAssertEqual(result.hits.map(\.uri), [root.appendingPathComponent("Note-00999.md").path])
+            XCTAssertEqual(result.coverage.readFiles, 1_000)
+            XCTAssertFalse(result.coverage.limited)
+        }
+        print("PKS_PERF isolated_markdown_body_search files=1000 index=\(indexElapsed) p50=\(percentile(bodySamples, 0.50)) p95=\(percentile(bodySamples, 0.95))")
     }
 }

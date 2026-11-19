@@ -55,9 +55,7 @@ enum WorkspaceSearch {
             if Task.isCancelled { break }
             let item = entry.item
             let itemPath = item.url.standardizedFileURL.path
-            guard WorkspaceFiles.fileStampIfContained(
-                item.url, inRootPath: rootPath, canonicalRootPath: canonicalRootPath
-            ) != nil else { continue }
+            guard itemPath.hasPrefix(rootPathPrefix) else { continue }
             let path = String(itemPath.dropFirst(rootPathPrefixLength))
             // Quick Open already owns normalized folder/name keys for this exact
             // workspace snapshot. Reuse them rather than case/diacritic-folding
@@ -91,7 +89,12 @@ enum WorkspaceSearch {
                 )
             let nameMatch = fuzzyPathTerms || pathPinyinMatch
             var content: String?
+            var containmentValidated = false
             if searchBodies, !nameMatch, item.isMarkdown {
+                guard WorkspaceFiles.fileStampIfContained(
+                    item.url, inRootPath: rootPath, canonicalRootPath: canonicalRootPath
+                ) != nil else { continue }
+                containmentValidated = true
                 if item.url == draftURL, let draft {
                     content = draft
                 } else if WorkspaceFiles.isDataless(item.url) {
@@ -123,6 +126,12 @@ enum WorkspaceSearch {
                 return contentTransliterationMatch != nil
             } ?? false
             guard nameMatch || contentMatch else { continue }
+            if !containmentValidated,
+               WorkspaceFiles.fileStampIfContained(
+                   item.url, inRootPath: rootPath, canonicalRootPath: canonicalRootPath
+               ) == nil {
+                continue
+            }
             let exactNameMatch = entry.foldedName.contains(foldedQuery)
             let rawNameTerms = foldedTerms.allSatisfy { entry.foldedName.contains($0) }
             var nameFuzzyTokens: [[Character]]?
