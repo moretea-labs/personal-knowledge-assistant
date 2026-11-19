@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import Foundation
+import QuickLookUI
 import SwiftUI
 
 // Optional native search launcher. PKS owns file/full-text indexing; this component
@@ -172,6 +173,11 @@ struct GlobalSearchItem: Identifiable, Sendable {
     }
 
     var fileName: String { url.lastPathComponent }
+
+    var supportsQuickLook: Bool {
+        if case .file = kind { return true }
+        return false
+    }
 
     static func isLeafspanWorkspaceDocument(_ item: GlobalSearchItem, in root: URL?) -> Bool {
         guard case .file = item.kind,
@@ -738,6 +744,8 @@ final class GlobalSearchResults: ObservableObject {
 final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate {
     static let shared = GlobalSearchController()
 
+    private var quickLookURLs: [URL] = []
+
     @Published private(set) var shortcutStatus = ""
     private var hotKey: EventHotKeyRef?
     private var handler: EventHandlerRef?
@@ -915,6 +923,17 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
         NSWorkspace.shared.activateFileViewerSelecting([item.url])
     }
 
+    func preview(_ item: GlobalSearchItem) {
+        guard item.supportsQuickLook,
+              FileManager.default.fileExists(atPath: item.url.path),
+              let previewPanel = QLPreviewPanel.shared() else { return }
+        dismiss()
+        quickLookURLs = [item.url]
+        previewPanel.dataSource = self
+        previewPanel.reloadData()
+        previewPanel.makeKeyAndOrderFront(nil)
+    }
+
     func copyName(_ item: GlobalSearchItem) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(item.fileName, forType: .string)
@@ -923,6 +942,17 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
     func copyPath(_ item: GlobalSearchItem) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(item.url.path, forType: .string)
+    }
+}
+
+extension GlobalSearchController: @MainActor QLPreviewPanelDataSource {
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        quickLookURLs.count
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
+        guard quickLookURLs.indices.contains(index) else { return nil }
+        return quickLookURLs[index] as NSURL
     }
 }
 
@@ -1010,6 +1040,12 @@ private struct GlobalSearchPalette: View {
                             .contextMenu {
                                 let chinese = AppLanguage.current.resolved == .simplifiedChinese
                                 Button(chinese ? "打开" : "Open") { GlobalSearchController.shared.open(item) }
+                                if item.supportsQuickLook {
+                                    Button(chinese ? "快速查看" : "Quick Look") {
+                                        GlobalSearchController.shared.preview(item)
+                                    }
+                                    .accessibilityIdentifier("leafspan-global-search-preview")
+                                }
                                 Button(chinese ? "在 Finder 中显示" : "Show in Finder") {
                                     GlobalSearchController.shared.reveal(item)
                                 }

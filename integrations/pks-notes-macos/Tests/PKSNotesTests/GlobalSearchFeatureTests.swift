@@ -37,6 +37,24 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertEqual(results.map(\.title), ["Code", "Xcode", "Visual Studio Code"])
     }
 
+    func testGlobalSearchQuickLookIsLimitedToFileResults() {
+        let file = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Notes/Study.pdf"),
+            title: "Study", isFolder: false
+        )
+        let folder = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Notes/Archive", isDirectory: true),
+            title: "Archive", isFolder: true
+        )
+        let app = GlobalSearchItem.application(
+            URL(fileURLWithPath: "/Applications/Notes.app"), title: "Notes"
+        )
+
+        XCTAssertTrue(file.supportsQuickLook)
+        XCTAssertFalse(folder.supportsQuickLook)
+        XCTAssertFalse(app.supportsQuickLook)
+    }
+
     func testGlobalSearchCopyNameUsesExactFilesystemLeafName() {
         let file = GlobalSearchItem.spotlight(
             URL(fileURLWithPath: "/Users/test/论文/研究 #1?.md"),
