@@ -76,3 +76,14 @@ final class MindMapVisualStyleTests: XCTestCase {
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Minimal"), "极简")
     }
 }
+
+
+extension MindMapVisualStyleTests {
+    func testAppearanceSelectionExposesNativeAccessibilityTrait() {
+        let selected = MindMapAppearanceAccessibility.selectionTraits(isSelected: true)
+        let unselected = MindMapAppearanceAccessibility.selectionTraits(isSelected: false)
+
+        XCTAssertTrue(selected.contains(.isSelected))
+        XCTAssertFalse(unselected.contains(.isSelected))
+    }
+}

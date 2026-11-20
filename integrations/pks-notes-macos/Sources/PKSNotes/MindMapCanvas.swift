@@ -318,6 +318,12 @@ struct MindMapNodeDragPayload: Codable, Transferable, Equatable, Sendable {
     }
 }
 
+enum MindMapAppearanceAccessibility {
+    static func selectionTraits(isSelected: Bool) -> AccessibilityTraits {
+        isSelected ? .isSelected : []
+    }
+}
+
 /// An editable Markdown-backed mind-map canvas. Markdown remains the only document authority.
 struct MindMapCanvas: View {
     @Environment(\.notesLanguage) private var language
@@ -1068,6 +1074,7 @@ struct MindMapCanvas: View {
                             }
                         }
                         .accessibilityIdentifier("pks-mind-map-style-\(style.rawValue)")
+                        .accessibilityAddTraits(MindMapAppearanceAccessibility.selectionTraits(isSelected: mapStyle == style))
                     }
                     Divider()
                     Text(language.text("Layout Density"))
@@ -1082,6 +1089,7 @@ struct MindMapCanvas: View {
                             }
                         }
                         .accessibilityIdentifier("pks-mind-map-density-\(density.rawValue)")
+                        .accessibilityAddTraits(MindMapAppearanceAccessibility.selectionTraits(isSelected: layoutDensity == density))
                     }
                     Divider()
                     Text(language.text("Appearance applies to all mind maps."))
