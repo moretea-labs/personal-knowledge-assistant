@@ -277,7 +277,7 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testMultiPagePDFSelectionKeepsQuoteWithFirstPageOnlyLink() throws {
+    func testMultiPagePDFSelectionKeepsOnlyCommentaryWithFirstPageLink() throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let firstText = NSTextView(frame: bounds)
         firstText.string = "First page evidence"
@@ -332,11 +332,11 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         XCTAssertTrue(snippet.contains("My observation"))
         XCTAssertTrue(snippet.contains("#page=1"))
         XCTAssertFalse(snippet.contains("&rects="))
-        XCTAssertTrue(snippet.contains("> First page evidence"))
-        XCTAssertTrue(snippet.contains("> Second page evidence"))
+        XCTAssertFalse(snippet.contains("> First page evidence"))
+        XCTAssertFalse(snippet.contains("> Second page evidence"))
     }
 
-    func testPDFPageReferenceFallsBackToPageOnlyLinkButKeepsSelectedQuote() throws {
+    func testPDFPageReferenceRejectsUnverifiedSelectedQuoteAnchors() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -355,14 +355,10 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         ))
 
         for anchor in [wrongPage, mismatchedText] {
-            let snippet = try XCTUnwrap(PDFPageReference.noteSnippet(
+            XCTAssertNil(PDFPageReference.noteSnippet(
                 for: pdf, page: 2, root: root, commentary: "My observation",
                 selectedText: selectedText, anchor: anchor
             ))
-            XCTAssertTrue(snippet.contains("My observation"))
-            XCTAssertTrue(snippet.contains("#page=2"))
-            XCTAssertFalse(snippet.contains("&rects="))
-            XCTAssertTrue(snippet.contains("> Selected source evidence"))
         }
     }
 
@@ -750,6 +746,32 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
         XCTAssertFalse(controller.invalidRequestedSelection)
         XCTAssertNil(controller.invalidRequestedPage)
         XCTAssertEqual(controller.currentPageIndex, 0)
+    }
+
+    @MainActor
+    func testOutOfRangeSourceAnchorClearsPreviousSelection() throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let textView = NSTextView(frame: bounds)
+        textView.string = "Previous PDF selection"
+        let document = try XCTUnwrap(PDFDocument(data: textView.dataWithPDF(inside: bounds)))
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PDF-invalid-anchor-\(UUID().uuidString).pdf")
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        defer {
+            controller.detach(view: view)
+            removeStoredReadingPosition(for: url)
+        }
+        controller.attach(view: view, document: document, url: url, requestedPage: nil, requestedAnchor: nil)
+        view.currentSelection = try XCTUnwrap(document.findString("Previous PDF selection", withOptions: []).first)
+        XCTAssertEqual(controller.selectedText(), "Previous PDF selection")
+        let anchor = try XCTUnwrap(PDFSourceAnchor(
+            page: 99, normalizedRects: [CGRect(x: 0.1, y: 0.1, width: 0.5, height: 0.1)],
+            fingerprint: "0000000000000000"
+        ))
+        controller.attach(view: view, document: document, url: url, requestedPage: nil, requestedAnchor: anchor)
+        XCTAssertEqual(controller.invalidRequestedPage, 99)
+        XCTAssertNil(controller.selectedText(), "A previous highlight must not masquerade as the requested source.")
     }
 
     @MainActor

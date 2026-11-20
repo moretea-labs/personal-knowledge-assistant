@@ -585,6 +585,8 @@ final class PDFReaderController: ObservableObject {
               let view = pdfView
         else {
             invalidRequestedSelection = false
+            pdfView?.currentSelection = nil
+            syncSelectionStatus()
             applyRequestedPage(anchor.page)
             return
         }
