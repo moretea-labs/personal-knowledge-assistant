@@ -299,10 +299,13 @@ enum MindMapOutline {
         _ lines: [String], from start: Int, to end: Int, baseIndent: Int
     ) -> Bool {
         guard start >= 0, start <= end, end <= lines.count else { return false }
+        let continuationIndent = start > 0
+            ? (listContinuationIndent(in: lines[start - 1]) ?? (baseIndent + 2))
+            : baseIndent + 2
         for line in lines[start..<end] {
             if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
             let indent = leadingIndentColumns(in: line)
-            guard indent >= baseIndent + 2 else { return false }
+            guard indent >= continuationIndent else { return false }
         }
         return true
     }
@@ -326,12 +329,16 @@ enum MindMapOutline {
             ) else { return false }
 
             if deeper {
-                guard context.position > 0 else { return false }
-                let previousStructural = context.parsed[..<context.position].reversed()
-                    .first(where: { $0.depth <= context.node.depth })
-                return previousStructural?.depth == context.node.depth
+                guard context.position > 0,
+                      let previousStructural = context.parsed[..<context.position].reversed()
+                        .first(where: { $0.depth <= context.node.depth }) else { return false }
+                return previousStructural.depth == context.node.depth
+                    && isListLine(context.lines[previousStructural.id])
             }
-            return indent >= 2
+            guard indent >= 2,
+                  let parent = context.parsed[..<context.position].reversed()
+                    .first(where: { $0.depth < context.node.depth }) else { return false }
+            return isListLine(context.lines[parent.id])
         }
 
         guard let level = headingLevel(in: context.lines[nodeID]) else { return false }
@@ -667,6 +674,16 @@ extension MindMapOutline {
 
     private static func leadingIndentColumns(in line: String) -> Int {
         indentationColumns(in: String(line.prefix(while: { $0 == " " || $0 == "\t" })))
+    }
+
+    /// Rebase one Markdown line by display columns and normalize its indentation
+    /// to spaces so ordered marker widths and tab stops remain CommonMark-safe.
+    private static func shiftingIndentation(in line: String, by delta: Int) -> String? {
+        let leading = line.prefix(while: { $0 == " " || $0 == "\t" })
+        let currentIndent = indentationColumns(in: String(leading))
+        let nextIndent = currentIndent + delta
+        guard nextIndent >= 0 else { return nil }
+        return String(repeating: " ", count: nextIndent) + line.dropFirst(leading.count)
     }
 
     /// Markdown list continuation starts after the full marker and its original
@@ -1053,7 +1070,9 @@ extension MindMapOutline {
             return nil
         }
 
-        let childIndent = isList ? indent + 2 : 0
+        let childIndent = isList
+            ? (listContinuationIndent(in: parentLine) ?? (indent + 2))
+            : 0
         let childPrefix = parentMarker?.newItemPrefix ?? "- "
         lines.insert(
             String(repeating: " ", count: childIndent) + childPrefix + title,
@@ -1630,12 +1649,26 @@ extension MindMapOutline {
         let endLine = shiftSubtreeEndLine(context)
 
         if isListLine(lines[nodeID]) {
-            let delta = deeper ? 2 : -2
+            let currentIndent = leadingIndentColumns(in: lines[nodeID])
+            let delta: Int
+            if deeper {
+                guard context.position > 0,
+                      let parent = context.parsed[..<context.position].reversed()
+                        .first(where: { $0.depth <= context.node.depth }),
+                      parent.depth == context.node.depth,
+                      isListLine(lines[parent.id]) else { return nil }
+                let parentIndent = leadingIndentColumns(in: lines[parent.id])
+                let childIndent = listContinuationIndent(in: lines[parent.id]) ?? (parentIndent + 2)
+                delta = childIndent - currentIndent
+            } else {
+                guard let parent = context.parsed[..<context.position].reversed()
+                    .first(where: { $0.depth < context.node.depth }),
+                    isListLine(lines[parent.id]) else { return nil }
+                delta = leadingIndentColumns(in: lines[parent.id]) - currentIndent
+            }
             for index in nodeID..<endLine where !lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
-                let currentIndent = lines[index].prefix(while: { $0 == " " }).count
-                let nextIndent = currentIndent + delta
-                guard nextIndent >= 0 else { return nil }
-                lines[index] = String(repeating: " ", count: nextIndent) + lines[index].dropFirst(currentIndent)
+                guard let shifted = shiftingIndentation(in: lines[index], by: delta) else { return nil }
+                lines[index] = shifted
             }
             return lines.joined(separator: "\n")
         }
@@ -1749,7 +1782,7 @@ extension MindMapOutline {
                 guard hasSafelyIndentedListContent(
                     lines, from: targetID + 1, to: targetFirstChild, baseIndent: targetIndent
                 ) else { return nil }
-                desiredIndent = targetIndent + 2
+                desiredIndent = listContinuationIndent(in: targetLine) ?? (targetIndent + 2)
             } else {
                 desiredIndent = 0
             }
@@ -1772,10 +1805,8 @@ extension MindMapOutline {
         let delta = desiredIndent - sourceIndent
         var moved = Array(lines[nodeID..<sourceEnd])
         for index in moved.indices where !moved[index].trimmingCharacters(in: .whitespaces).isEmpty {
-            let currentIndent = moved[index].prefix(while: { $0 == " " }).count
-            let nextIndent = currentIndent + delta
-            guard nextIndent >= 0 else { return nil }
-            moved[index] = String(repeating: " ", count: nextIndent) + moved[index].dropFirst(currentIndent)
+            guard let shifted = shiftingIndentation(in: moved[index], by: delta) else { return nil }
+            moved[index] = shifted
         }
         if let targetMarker {
             guard let prefix = targetMarker.insertionPrefix(for: sourceMarker, placement: placement),

@@ -735,8 +735,8 @@ extension MindMapDragTargetSafetyTests {
         let source = """
         # Plan
         1. First
-          1) Nested
-            [Textbook · p. 4](\(citation))
+           1) Nested
+              [Textbook · p. 4](\(citation))
         2. Second
         ~~~markdown
         3. Hidden
@@ -757,7 +757,7 @@ extension MindMapDragTargetSafetyTests {
     }
 
     func testOrderedListRenameSiblingChildAndLeafDeletePreserveMarkers() throws {
-        let source = "# Plan\n1) First\n  1) Existing child\n2) Second\n"
+        let source = "# Plan\n1) First\n   1) Existing child\n2) Second\n"
         let first = try XCTUnwrap(MindMapOutline.nodes(in: source).first { $0.title == "First" })
 
         let renamed = try XCTUnwrap(MindMapOutline.rename(in: source, nodeID: first.id, to: "Renamed"))
@@ -766,13 +766,13 @@ extension MindMapDragTargetSafetyTests {
         let child = try XCTUnwrap(MindMapOutline.addChildWithOutcome(in: source, parentID: first.id))
         XCTAssertEqual(
             child.source,
-            "# Plan\n1) First\n  1) New idea\n  1) Existing child\n2) Second\n"
+            "# Plan\n1) First\n   1) New idea\n   1) Existing child\n2) Second\n"
         )
 
         let sibling = try XCTUnwrap(MindMapOutline.addSiblingWithOutcome(in: source, nodeID: first.id))
         XCTAssertEqual(
             sibling.source,
-            "# Plan\n1) First\n  1) Existing child\n1) New idea\n2) Second\n"
+            "# Plan\n1) First\n   1) Existing child\n1) New idea\n2) Second\n"
         )
 
         let existingChild = try XCTUnwrap(
@@ -785,7 +785,7 @@ extension MindMapDragTargetSafetyTests {
     }
 
     func testOrderedListReparentingKeepsNumberedSemanticsAndRejectsMixedFamilies() throws {
-        let source = "# Plan\n1. A\n  1. A1\n2. B\n3. C\n"
+        let source = "# Plan\n1. A\n   1. A1\n2. B\n3. C\n"
         let nodes = MindMapOutline.nodes(in: source)
         let a = try XCTUnwrap(nodes.first { $0.title == "A" })
         let a1 = try XCTUnwrap(nodes.first { $0.title == "A1" })
@@ -795,12 +795,12 @@ extension MindMapDragTargetSafetyTests {
         let reordered = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source, nodeID: c.id, relativeTo: a.id, placement: .before
         ))
-        XCTAssertEqual(reordered.source, "# Plan\n1. C\n1. A\n  1. A1\n2. B\n")
+        XCTAssertEqual(reordered.source, "# Plan\n1. C\n1. A\n   1. A1\n2. B\n")
 
         let reparented = try XCTUnwrap(MindMapOutline.moveNodeSubtreeWithOutcome(
             in: source, nodeID: a1.id, relativeTo: b.id, placement: .child
         ))
-        XCTAssertEqual(reparented.source, "# Plan\n1. A\n2. B\n  1. A1\n3. C\n")
+        XCTAssertEqual(reparented.source, "# Plan\n1. A\n2. B\n   1. A1\n3. C\n")
 
         let mixed = "# Plan\n- Bullet\n1. Ordered\n"
         let mixedNodes = MindMapOutline.nodes(in: mixed)

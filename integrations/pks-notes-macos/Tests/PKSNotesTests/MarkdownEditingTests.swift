@@ -265,13 +265,28 @@ final class MarkdownEditingTests: XCTestCase {
 
 extension MarkdownEditingTests {
     func testOrderedListCommandNumbersSiblingsAndNestedItemsAndTogglesOff() {
-        let source = "first\n  nested\nsecond\n"
+        let source = "first\n   nested\nsecond\n"
         let selection = NSRange(location: 0, length: (source as NSString).length)
         let numbered = MarkdownEditing.apply(.ordered, to: source, selection: selection)
-        XCTAssertEqual(numbered.text, "1. first\n  1. nested\n2. second\n")
+        XCTAssertEqual(numbered.text, "1. first\n   1. nested\n2. second\n")
         XCTAssertEqual(
             MarkdownEditing.apply(.ordered, to: numbered.text, selection: numbered.selection).text,
             source
+        )
+    }
+
+    func testOrderedListCommandNormalizesNestedIndentationToCommonMarkContentColumns() {
+        let source = "- first\n  - nested\n    - deeply nested\n- second\n"
+        let selection = NSRange(location: 0, length: (source as NSString).length)
+        let numbered = MarkdownEditing.apply(.ordered, to: source, selection: selection)
+
+        XCTAssertEqual(
+            numbered.text,
+            "1. first\n   1. nested\n      1. deeply nested\n2. second\n"
+        )
+        XCTAssertEqual(
+            MindMapOutline.nodes(in: numbered.text).map(\.depth),
+            [0, 1, 2, 0]
         )
     }
 

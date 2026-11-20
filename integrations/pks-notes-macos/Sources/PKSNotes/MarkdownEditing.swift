@@ -273,9 +273,10 @@ enum MarkdownEditing {
                 }
                 return indentation + "- [ ] " + content
             case .ordered:
-                let number = orderedIndexByIndentation[indentation, default: 1]
-                orderedIndexByIndentation[indentation] = number + 1
-                return indentation + "\(number). " + content
+                let orderedIndentation = commonMarkOrderedIndentation(from: indentation)
+                let number = orderedIndexByIndentation[orderedIndentation, default: 1]
+                orderedIndexByIndentation[orderedIndentation] = number + 1
+                return orderedIndentation + "\(number). " + content
             }
         }
 
@@ -289,6 +290,18 @@ enum MarkdownEditing {
                 length: (replacement as NSString).length
             )
         )
+    }
+
+    /// Ordered markers consume three columns ("1. " / "1) "). Convert the
+    /// editor's two-space visual nesting into the content-column indentation
+    /// CommonMark requires for nested ordered lists.
+    private static func commonMarkOrderedIndentation(from indentation: String) -> String {
+        var columns = 0
+        for character in indentation {
+            columns += character == "\t" ? 4 - columns % 4 : 1
+        }
+        let depth = columns / 2
+        return String(repeating: " ", count: depth * 3)
     }
 
     private static func parseListLine(_ line: String) -> ParsedListLine? {
