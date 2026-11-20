@@ -447,7 +447,8 @@ enum MindMapOutline {
         guard !Task.isCancelled else { return [] }
         var result: [MindMapNode] = []
         var headingDepth = 0
-        var listIndentStack: [(indent: Int, depth: Int)] = []
+        var listIndentStack: [(contentIndent: Int, depth: Int)] = []
+        var blankLineSinceListItem = false
         var activeFence: MarkdownFence?
         let lines = markdown.components(separatedBy: "\n")
         for (index, line) in lines.enumerated() {
@@ -461,8 +462,21 @@ enum MindMapOutline {
                 activeFence = opening
                 continue
             }
-            if trimmed.isEmpty
-                || isIndentedCodeLine(line, after: result.last, in: lines, baseIndent: baseIndent) {
+            if trimmed.isEmpty {
+                if !listIndentStack.isEmpty { blankLineSinceListItem = true }
+                continue
+            }
+            if blankLineSinceListItem, listMarker(in: trimmed) == nil {
+                // After a blank line, a block indented before the current
+                // item's content column is outside that item. Pop only the
+                // list levels it cannot continue, preserving parent content.
+                let blockIndent = leadingIndentColumns(in: line)
+                while let parent = listIndentStack.last, blockIndent < parent.contentIndent {
+                    listIndentStack.removeLast()
+                }
+            }
+            blankLineSinceListItem = false
+            if isIndentedCodeLine(line, after: result.last, in: lines, baseIndent: baseIndent) {
                 continue
             }
             let hashes = trimmed.prefix(while: { $0 == "#" }).count
@@ -478,16 +492,16 @@ enum MindMapOutline {
                 let title = String(trimmed.dropFirst(marker.markdownPrefix.count))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if !title.isEmpty {
-                    // A list item's depth is relative to the nearest preceding
-                    // item with less indentation, not the absolute column count.
-                    // CommonMark permits extra padding (including tabs), so a
-                    // four-column jump still represents one actual child node.
-                    while let parent = listIndentStack.last, indent <= parent.indent {
+                    // A nested list must begin at the preceding item's content
+                    // column, not merely one column after its marker. This also
+                    // handles wide ordered markers and extra marker padding.
+                    while let parent = listIndentStack.last, indent < parent.contentIndent {
                         listIndentStack.removeLast()
                     }
                     let depth = listIndentStack.last.map { $0.depth + 1 } ?? headingDepth
                     result.append(.init(id: index, depth: depth, title: title))
-                    listIndentStack.append((indent: indent, depth: depth))
+                    let contentIndent = listContinuationIndent(in: line) ?? (indent + 2)
+                    listIndentStack.append((contentIndent: contentIndent, depth: depth))
                 }
             }
         }

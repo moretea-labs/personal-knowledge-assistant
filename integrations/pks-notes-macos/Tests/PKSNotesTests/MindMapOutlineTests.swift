@@ -1276,3 +1276,30 @@ extension MindMapOutlineTests {
         XCTAssertEqual(nodes.map(\.depth), [0, 1, 2, 3, 1])
     }
 }
+
+
+extension MindMapOutlineTests {
+    func testListNestingRequiresParentContentIndent() {
+        let bulletMarkdown = "# Root\n- Parent\n - Misaligned\n- Next"
+        let bulletNodes = MindMapOutline.nodes(in: bulletMarkdown)
+        XCTAssertEqual(bulletNodes.map(\.title), ["Root", "Parent", "Misaligned", "Next"])
+        XCTAssertEqual(bulletNodes.map(\.depth), [0, 1, 1, 1])
+
+        let orderedMarkdown = "# Root\n10. Parent\n  - Misaligned\n    - Child\n- Next"
+        let orderedNodes = MindMapOutline.nodes(in: orderedMarkdown)
+        XCTAssertEqual(orderedNodes.map(\.title), ["Root", "Parent", "Misaligned", "Child", "Next"])
+        XCTAssertEqual(orderedNodes.map(\.depth), [0, 1, 1, 2, 1])
+    }
+
+    func testBlankLineEndsListForUnindentedParagraphButKeepsIndentedContinuation() {
+        let separateBlock = "# Root\n- Parent\n\nOutside paragraph\n  - Independent"
+        let separateNodes = MindMapOutline.nodes(in: separateBlock)
+        XCTAssertEqual(separateNodes.map(\.title), ["Root", "Parent", "Independent"])
+        XCTAssertEqual(separateNodes.map(\.depth), [0, 1, 1])
+
+        let continuedItem = "# Root\n- Parent\n\n  Supporting prose\n  - Child"
+        let continuedNodes = MindMapOutline.nodes(in: continuedItem)
+        XCTAssertEqual(continuedNodes.map(\.title), ["Root", "Parent", "Child"])
+        XCTAssertEqual(continuedNodes.map(\.depth), [0, 1, 2])
+    }
+}
