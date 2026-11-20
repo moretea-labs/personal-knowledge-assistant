@@ -369,6 +369,51 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         XCTAssertEqual(rebased, expected)
     }
 
+    func testRemovingOneDuplicateBranchPreservesOnlyTheSurvivorCollapsedState() throws {
+        let source = """
+        # Plan
+        - Parent
+          - Duplicate
+            - Alpha
+          - Duplicate
+            - Beta
+        - Keep
+        """
+        let originalNodes = MindMapOutline.nodes(in: source)
+        let parent = try XCTUnwrap(originalNodes.first { $0.title == "Parent" })
+        let duplicates = originalNodes.filter { $0.title == "Duplicate" }
+        let keep = try XCTUnwrap(originalNodes.first { $0.title == "Keep" })
+        XCTAssertEqual(duplicates.count, 2)
+
+        let updatedSources = [
+            "# Plan\n- Parent\n  - Duplicate\n    - Beta\n- Keep\n",
+            "# Plan\n- Parent\n  - Duplicate\n    - Alpha\n- Keep\n"
+        ]
+        for deletedIndex in duplicates.indices {
+            let deleted = duplicates[deletedIndex]
+            let survivor = duplicates[1 - deletedIndex]
+            let updated = updatedSources[deletedIndex]
+            let updatedNodes = MindMapOutline.nodes(in: updated)
+            let updatedParent = try XCTUnwrap(updatedNodes.first { $0.title == "Parent" })
+            let updatedDuplicate = try XCTUnwrap(updatedNodes.first { $0.title == "Duplicate" })
+            let updatedKeep = try XCTUnwrap(updatedNodes.first { $0.title == "Keep" })
+
+            XCTAssertEqual(
+                rebaseCollapsed([survivor.id], from: source, to: updated),
+                [updatedDuplicate.id],
+                "The surviving duplicate must retain its collapsed state when either sibling is removed."
+            )
+            XCTAssertTrue(
+                rebaseCollapsed([deleted.id], from: source, to: updated).isEmpty,
+                "A removed duplicate must not transfer its collapsed state to the survivor."
+            )
+            XCTAssertEqual(
+                rebaseCollapsed([parent.id, keep.id], from: source, to: updated),
+                [updatedParent.id, updatedKeep.id]
+            )
+        }
+    }
+
     func testUnsafeUnindentedTextStillRejectsChildInsertionAndReparenting() throws {
         let source = "# Plan\n- Move me\n- Target\nUnindented text outside the list.\n- Existing child\n"
         let nodes = MindMapOutline.nodes(in: source)
