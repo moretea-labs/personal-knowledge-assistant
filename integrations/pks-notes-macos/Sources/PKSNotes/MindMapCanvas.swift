@@ -93,7 +93,7 @@ enum MindMapPendingCreation {
 }
 
 /// Visual-only preference: node hierarchy/links still come from Markdown.
-enum MindMapVisualStyle: String, CaseIterable, Identifiable {
+enum MindMapVisualStyle: String, CaseIterable, Identifiable, Equatable {
     case classic, colorful, minimal
     static let defaultsKey = "PKSNotesMindMapStyle"
     var id: String { rawValue }
@@ -135,7 +135,7 @@ enum MindMapVisualStyle: String, CaseIterable, Identifiable {
     }
     var connectorOpacity: Double {
         switch self {
-        case .classic: 0.22
+        case .classic: 0.30
         case .colorful: 0.50
         case .minimal: 0.34
         }
@@ -150,7 +150,17 @@ enum MindMapVisualStyle: String, CaseIterable, Identifiable {
     }
 
     var unselectedOutlineWidth: CGFloat {
-        self == .classic ? 0.55 : (self == .minimal ? 0.8 : 0.85)
+        self == .classic ? 0.8 : (self == .minimal ? 0.8 : 0.85)
+    }
+
+    /// Keep the work surface distinct from the system control fill used by node cards.
+    /// The restrained change is intentionally limited to the Classic default style.
+    var canvasBackgroundOpacity: Double {
+        switch self {
+        case .classic: 0.035
+        case .colorful: 0.012
+        case .minimal: 0.005
+        }
     }
 
     // Reuse the palette across nodes and connectors; large maps must not
@@ -188,7 +198,7 @@ enum MindMapVisualStyle: String, CaseIterable, Identifiable {
 
     func outlineOpacity(depth: Int) -> Double {
         switch self {
-        case .classic: 0.025
+        case .classic: 0.10
         case .colorful: depth == 0 ? 0.68 : 0.44
         case .minimal: depth == 0 ? 0.14 : 0.09
         }
@@ -342,6 +352,7 @@ struct MindMapCanvas: View {
     @State private var nodes: [MindMapNode] = []
     @State private var lineStartOffsets: [Int] = [0]
     @State private var nodePresentations: [Int: MindMapNodePresentation] = [:]
+    @State private var nodeParentIDs: Set<Int> = []
     @State private var visible: [MindMapNode] = []
     @State private var mapLayout = MindMapSpatialLayout.layout([])
     @State private var projectionReady = false
@@ -393,6 +404,57 @@ struct MindMapCanvas: View {
         }
     }
 
+    /// Connector geometry is stable while the canvas is translated. Reuse the
+    /// rendered Canvas until the visible edge set or map geometry actually changes.
+    private struct MapConnectorSnapshot: View, Equatable {
+        let size: CGSize
+        let connectors: [MindMapConnector]
+        let style: MindMapVisualStyle
+        let layoutVersion: Int
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.size == rhs.size
+                && lhs.connectors == rhs.connectors
+                && lhs.style == rhs.style
+                && lhs.layoutVersion == rhs.layoutVersion
+        }
+
+        var body: some View {
+            Canvas { context, _ in
+                for connector in connectors {
+                    var path = Path()
+                    path.move(to: connector.start)
+                    if connector.angular {
+                        path.addLine(to: connector.control1)
+                        path.addLine(to: connector.control2)
+                        path.addLine(to: connector.end)
+                    } else {
+                        path.addCurve(
+                            to: connector.end,
+                            control1: connector.control1,
+                            control2: connector.control2
+                        )
+                    }
+                    let color = style.usesBranchColors
+                        ? style.branchColor(connector.branch).opacity(style.connectorOpacity)
+                        : Color.secondary.opacity(style.connectorOpacity)
+                    context.stroke(
+                        path,
+                        with: .color(color),
+                        style: StrokeStyle(
+                            lineWidth: connector.lineWidth,
+                            lineCap: .round,
+                            lineJoin: .round
+                        )
+                    )
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+
     private var visibleNodeIDs: Set<Int> {
         let pinned = Set([selectedID, editingNodeID, dropTargetID].compactMap { $0 })
         return MindMapViewportGeometry.visibleNodeIDs(
@@ -437,7 +499,7 @@ struct MindMapCanvas: View {
             HStack(spacing: 0) {
                 GeometryReader { viewport in
                     ZStack {
-                        Color.primary.opacity(mapStyle == .minimal ? 0.005 : 0.012)
+                        Color.primary.opacity(mapStyle.canvasBackgroundOpacity)
                             .contentShape(Rectangle())
                             .gesture(
                                 DragGesture(minimumDistance: 3)
@@ -475,14 +537,18 @@ struct MindMapCanvas: View {
                                 .accessibilityIdentifier("pks-mind-map-create")
                             }
                         } else {
-                            interactiveCanvas(mapLayout)
-                                .allowsHitTesting(projectionIsCurrent)
-                                .accessibilityHidden(!projectionIsCurrent)
-                                .scaleEffect(zoom)
-                                .position(
-                                    x: viewport.size.width / 2 + viewportOffset.width + canvasDrag.width,
-                                    y: viewport.size.height / 2 + viewportOffset.height + canvasDrag.height
-                                )
+                            ZStack(alignment: .topLeading) {
+                                connectorViewportCanvas(mapLayout, viewport: viewport.size)
+                                interactiveCanvas(mapLayout)
+                                    .allowsHitTesting(projectionIsCurrent)
+                                    .accessibilityHidden(!projectionIsCurrent)
+                                    .scaleEffect(zoom)
+                                    .position(
+                                        x: viewport.size.width / 2 + viewportOffset.width + canvasDrag.width,
+                                        y: viewport.size.height / 2 + viewportOffset.height + canvasDrag.height
+                                    )
+                            }
+                            .frame(width: viewport.size.width, height: viewport.size.height)
                         }
                     }
                     .frame(width: viewport.size.width, height: viewport.size.height)
@@ -532,7 +598,7 @@ struct MindMapCanvas: View {
                         if let root = mapLayout.placements.first(where: { $0.parentID == nil }) {
                             shouldRefocus = MindMapViewportGeometry.isAtInitialRootViewport(
                                 root: root,
-                                visiblePlacements: mapLayout.placements,
+                                visiblePlacements: [root],
                                 mapSize: mapLayout.size,
                                 viewport: oldSize,
                                 zoom: zoom,
@@ -643,13 +709,15 @@ struct MindMapCanvas: View {
 
             let parser = Task.detached(priority: .userInitiated) {
                 () -> (nodes: [MindMapNode], lineStartOffsets: [Int],
-                       presentations: [Int: MindMapNodePresentation],
+                       presentations: [Int: MindMapNodePresentation], parentIDs: Set<Int>,
                        lineIndexMap: [Int: Int], createdNodeLineIndexMap: [Int: Int])? in
                 let nodes = MindMapOutline.nodes(in: input)
                 guard !Task.isCancelled else { return nil }
                 let lineStartOffsets = MindMapOutline.lineStartOffsets(in: input)
                 guard !Task.isCancelled else { return nil }
                 let presentations = MindMapOutline.presentations(in: input, nodes: nodes)
+                guard !Task.isCancelled else { return nil }
+                let parentIDs = MindMapOutline.parentIDs(in: nodes)
                 guard !Task.isCancelled else { return nil }
                 let lineIndexMap = MindMapOutline.lineIndexMap(from: previousNodes, to: nodes)
                 guard !Task.isCancelled else { return nil }
@@ -661,6 +729,7 @@ struct MindMapCanvas: View {
                     nodes: nodes,
                     lineStartOffsets: lineStartOffsets,
                     presentations: presentations,
+                    parentIDs: parentIDs,
                     lineIndexMap: lineIndexMap,
                     createdNodeLineIndexMap: createdNodeLineIndexMap
                 )
@@ -693,6 +762,7 @@ struct MindMapCanvas: View {
             nodes = projection.nodes
             lineStartOffsets = projection.lineStartOffsets
             nodePresentations = projection.presentations
+            nodeParentIDs = projection.parentIDs
             projectedRevision = sourceRevision
             projectionReady = true
             selectedID = rebasedSelectedID
@@ -1426,18 +1496,47 @@ struct MindMapCanvas: View {
         return true
     }
 
-    /// The connector viewport changes on every pan/zoom update. Keep this
-    /// Canvas outside the equatable node-card snapshot so unchanged card sets
-    /// cannot leave connector clipping tied to an older viewport.
+    /// Node cards retain their map-sized coordinate space and native hit testing.
+    /// Live connectors are rendered separately in viewport coordinates below.
     @ViewBuilder
     private func interactiveCanvas(_ layout: MindMapLayoutSnapshot) -> some View {
         ZStack(alignment: .topLeading) {
-            connectorCanvas(layout)
             MapNodeCardsSnapshot(owner: self, layout: layout, key: mapContentKey)
                 .equatable()
             mapCenterAnchor(layout)
         }
         .frame(width: layout.size.width, height: layout.size.height, alignment: .topLeading)
+    }
+
+    /// Draw only the connectors intersecting the current map-space viewport into
+    /// a bounded screen-space Canvas. This surface must stay outside the
+    /// map-sized scale/position transform applied to node cards.
+    private func connectorViewportCanvas(
+        _ layout: MindMapLayoutSnapshot,
+        viewport: CGSize
+    ) -> some View {
+        let offset = CGSize(
+            width: viewportOffset.width + canvasDrag.width,
+            height: viewportOffset.height + canvasDrag.height
+        )
+        let connectorViewport = MindMapViewportGeometry.visibleRect(
+            mapSize: layout.size,
+            viewport: viewport,
+            offset: offset,
+            zoom: zoom,
+            overscan: 320
+        )
+        let visibleConnectors = layout.visibleConnectors(in: connectorViewport)
+        return MindMapViewportConnectorSnapshot(
+            size: viewport,
+            connectors: visibleConnectors,
+            style: mapStyle,
+            mapSize: layout.size,
+            viewportOffset: offset,
+            zoom: zoom,
+            layoutVersion: mapContentVersion
+        )
+        .equatable()
     }
 
     @ViewBuilder
@@ -1454,8 +1553,9 @@ struct MindMapCanvas: View {
         .frame(width: layout.size.width, height: layout.size.height, alignment: .topLeading)
     }
 
-    /// One Canvas replaces one SwiftUI Shape view per edge. It reads the live
-    /// viewport transform while node-card identity remains independently cached.
+    /// Full-map connector Canvas retained for PNG/PDF export, where the
+    /// complete map coordinate surface is intentional. Interactive rendering
+    /// uses connectorViewportCanvas above to keep its backing surface bounded.
     private func connectorCanvas(
         _ layout: MindMapLayoutSnapshot,
         exporting: Bool = false
@@ -1473,38 +1573,13 @@ struct MindMapCanvas: View {
             )
             : nil
         let visibleConnectors = layout.visibleConnectors(in: connectorViewport)
-        return Canvas { context, _ in
-            for connector in visibleConnectors {
-                var path = Path()
-                path.move(to: connector.start)
-                if connector.angular {
-                    path.addLine(to: connector.control1)
-                    path.addLine(to: connector.control2)
-                    path.addLine(to: connector.end)
-                } else {
-                    path.addCurve(
-                        to: connector.end,
-                        control1: connector.control1,
-                        control2: connector.control2
-                    )
-                }
-                let color = mapStyle.usesBranchColors
-                    ? mapStyle.branchColor(connector.branch).opacity(mapStyle.connectorOpacity)
-                    : Color.secondary.opacity(mapStyle.connectorOpacity)
-                context.stroke(
-                    path,
-                    with: .color(color),
-                    style: StrokeStyle(
-                        lineWidth: connector.lineWidth,
-                        lineCap: .round,
-                        lineJoin: .round
-                    )
-                )
-            }
-        }
-        .frame(width: layout.size.width, height: layout.size.height)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        return MapConnectorSnapshot(
+            size: layout.size,
+            connectors: visibleConnectors,
+            style: mapStyle,
+            layoutVersion: mapContentVersion
+        )
+        .equatable()
     }
 
     @ViewBuilder
@@ -1517,7 +1592,7 @@ struct MindMapCanvas: View {
         // Branch colors come from the layout snapshot; disclosure ownership comes from the complete
         // Markdown projection so collapsed descendants never erase their own expand affordance.
         let branchByID = layout.branchByID
-        let parentIDs = MindMapOutline.parentIDs(in: nodes)
+        let parentIDs = nodeParentIDs
         // Keep node positions in the exact same fixed-size coordinate space
         // as connectorCanvas. A bare ForEach can be measured independently by
         // the equatable card snapshot and shift card origins away from paths.
@@ -1983,8 +2058,10 @@ struct MindMapCanvas: View {
             return false
         }
         collapsed.remove(id)
+        startEditingNode(
+            outcome.nodeID, title: "New idea", pendingCreationSource: outcome.source
+        )
         source = outcome.source
-        startEditingNode(outcome.nodeID, title: "New idea", created: true)
         return true
     }
 
@@ -1998,8 +2075,10 @@ struct MindMapCanvas: View {
             )
             return false
         }
+        startEditingNode(
+            outcome.nodeID, title: "New idea", pendingCreationSource: outcome.source
+        )
         source = outcome.source
-        startEditingNode(outcome.nodeID, title: "New idea", created: true)
         return true
     }
 
@@ -2226,23 +2305,13 @@ struct MindMapCanvas: View {
         mapContentVersion &+= 1
     }
 
-    /// Opening a large map should show the topic and the first nearby
-    /// branches, not a tiny overview. Fit-to-window remains an explicit action.
+    /// Keep every node expanded on open and anchor the initial viewport on the root.
+    /// Off-screen descendants remain in the full Markdown-backed layout and are reachable by pan/zoom.
     private func focusOnRoot(viewport: CGSize) -> Bool {
-        guard mapLayout.placements.contains(where: { $0.parentID == nil }),
+        guard let visibleRoot = mapLayout.placements.first(where: { $0.parentID == nil }),
               viewport.width > 0, viewport.height > 0 else { return false }
-        if collapsed.isEmpty {
-            let initial = MindMapSpatialLayout.initialCollapsedBranches(
-                nodes: nodes, layout: mapLayout, viewport: viewport
-            )
-            if !initial.isEmpty {
-                collapsed = initial
-                rebuildVisibleLayout()
-            }
-        }
-        guard let visibleRoot = mapLayout.placements.first(where: { $0.parentID == nil }) else { return false }
         let initial = MindMapViewportGeometry.initialRootViewport(
-            root: visibleRoot, visiblePlacements: mapLayout.placements,
+            root: visibleRoot, visiblePlacements: [visibleRoot],
             mapSize: mapLayout.size, viewport: viewport
         )
         zoom = initial.zoom
@@ -2269,12 +2338,14 @@ struct MindMapCanvas: View {
         ))
     }
 
-    private func startEditingNode(_ id: Int, title: String, created: Bool = false) {
+    private func startEditingNode(
+        _ id: Int, title: String, pendingCreationSource: String? = nil
+    ) {
         selectedID = id
         renameTitle = title
         editingNodeID = id
-        editingCreatedNodeID = created ? id : nil
-        createdNodeDraftSnapshot = created ? source : nil
+        editingCreatedNodeID = pendingCreationSource == nil ? nil : id
+        createdNodeDraftSnapshot = pendingCreationSource
         canvasFocused = false
         titleEditorFocused = false
     }

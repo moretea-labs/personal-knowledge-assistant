@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Geometry only: the Markdown layout is never rewritten for viewport moves.
 enum MindMapViewportGeometry {
-    // Used by initial disclosure; exact viewport fitting may zoom below this preferred floor.
+    // Preferred floor for overview fitting. Large maps open at the root without auto-disclosure.
     static let minimumInitialZoom: CGFloat = 0.68
 
     static func initialInset(for dimension: CGFloat) -> CGFloat {
@@ -128,9 +128,8 @@ enum MindMapViewportGeometry {
         )
     }
 
-    /// Fit the root and every currently visible node on first open.
-    /// Tall subtrees are collapsed before this calculation, so short branches
-    /// and their visible children stay inside the opening viewport.
+    /// Fit the root and the supplied focus placements on first open.
+    /// Large maps stay fully expanded; off-screen descendants remain reachable by pan and zoom.
     static func initialRootViewport(
         root: MindMapPlacement,
         visiblePlacements: [MindMapPlacement],
