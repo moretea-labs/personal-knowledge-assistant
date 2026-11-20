@@ -435,6 +435,10 @@ extension MarkdownEditingTests {
         let selectedSource = "First\r\nSecond"
         let fullSelection = NSRange(location: 0, length: (selectedSource as NSString).length)
         let selectedCode = MarkdownEditing.apply(.codeBlock, to: selectedSource, selection: fullSelection)
+        XCTAssertEqual(
+            (selectedCode.text as NSString).substring(with: selectedCode.selection),
+            selectedSource
+        )
         XCTAssertEqual(selectedCode.text, "```\r\nFirst\r\nSecond\r\n```")
 
         let selectedTable = MarkdownEditing.apply(.table, to: selectedSource, selection: fullSelection)

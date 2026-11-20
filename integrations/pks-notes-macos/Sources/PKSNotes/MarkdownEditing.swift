@@ -154,7 +154,7 @@ enum MarkdownEditing {
         let insertion = leading + block + trailing
         let updated = ns.replacingCharacters(in: range, with: insertion)
         let contentStart = range.location + (leading as NSString).length
-            + (delimiter as NSString).length + 1
+            + (delimiter as NSString).length + (lineEnding as NSString).length
         return .init(
             text: updated,
             selection: NSRange(location: contentStart, length: (selected as NSString).length)
