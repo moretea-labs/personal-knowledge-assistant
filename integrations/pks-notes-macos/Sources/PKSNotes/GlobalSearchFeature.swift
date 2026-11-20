@@ -711,6 +711,18 @@ final class GlobalSearchResults: ObservableObject {
         workspaceCoverage = WorkspaceSearch.Coverage()
         librarySearchUnavailable = false
         statusMessage = nil
+        let shouldSearch = GlobalSearchRanker.shouldStartDocumentSearch(for: text)
+        let indexedFoldersEnabled = shouldSearch && UserDefaults.standard.bool(
+            forKey: GlobalSearchPreferences.indexedFoldersEnabledKey
+        )
+        let notesModel = shouldSearch && (indexedFoldersEnabled || workspaceOnly)
+            ? (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel
+            : nil
+        spotlightSearchPending = shouldSearch && !workspaceOnly
+        workspaceSearchPending = shouldSearch && notesModel != nil
+        librarySearchPending = shouldSearch && indexedFoldersEnabled && !workspaceOnly
+        updateLoadingState()
+
         appHits = workspaceOnly
             ? []
             : GlobalApplicationCatalog.matches(applications ?? [], query: text)
@@ -719,18 +731,7 @@ final class GlobalSearchResults: ObservableObject {
         relatedHits = []
         spotlightHits = []
         publish()
-        guard GlobalSearchRanker.shouldStartDocumentSearch(for: text) else { return }
-
-        let indexedFoldersEnabled = UserDefaults.standard.bool(
-            forKey: GlobalSearchPreferences.indexedFoldersEnabledKey
-        )
-        let notesModel = (indexedFoldersEnabled || workspaceOnly)
-            ? (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel
-            : nil
-        spotlightSearchPending = !workspaceOnly
-        workspaceSearchPending = notesModel != nil
-        librarySearchPending = indexedFoldersEnabled && !workspaceOnly
-        updateLoadingState()
+        guard shouldSearch else { return }
 
         searchTask = Task { [weak self] in
             guard let self else { return }

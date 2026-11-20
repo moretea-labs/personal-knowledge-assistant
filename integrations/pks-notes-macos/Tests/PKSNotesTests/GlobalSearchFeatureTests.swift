@@ -4,6 +4,16 @@ import XCTest
 
 final class GlobalSearchFeatureTests: XCTestCase {
     @MainActor
+    func testSearchLoadingFeedbackIsImmediateAndIgnoresShortQueries() {
+        let results = GlobalSearchResults()
+        results.query = "Leafspan"
+        XCTAssertTrue(results.loading)
+        results.cancel()
+        results.query = "L"
+        XCTAssertFalse(results.loading)
+    }
+
+    @MainActor
     func testGlobalSearchStatusDisclosesIncompleteWorkspaceCoverage() {
         var coverage = WorkspaceSearch.Coverage()
         coverage.limited = true
