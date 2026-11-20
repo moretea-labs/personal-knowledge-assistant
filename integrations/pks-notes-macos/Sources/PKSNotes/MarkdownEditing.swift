@@ -308,7 +308,9 @@ enum MarkdownEditing {
         let indentation = String(line.prefix { $0 == " " || $0 == "\t" })
         let value = String(line.dropFirst(indentation.count))
 
-        if let marker = value.first, "-*+".contains(marker), value.dropFirst().hasPrefix(" ") {
+        let markerSeparator = value.dropFirst().first
+        if let marker = value.first, "-*+".contains(marker),
+           markerSeparator == " " || markerSeparator == "\t" {
             let body = String(value.dropFirst(2))
             if body == "[ ]" || body.hasPrefix("[ ] ") {
                 return ParsedListLine(
@@ -328,9 +330,15 @@ enum MarkdownEditing {
             return ParsedListLine(indentation: indentation, kind: .bullet, content: body)
         }
 
-        let digits = value.prefix { $0.isNumber }
+        // CommonMark ordered markers use one to nine ASCII digits followed
+        // by a period or closing parenthesis and a space or tab separator.
+        let digits = value.prefix { $0 >= "0" && $0 <= "9" }
         let suffix = value.dropFirst(digits.count)
-        if !digits.isEmpty && (suffix.hasPrefix(". ") || suffix.hasPrefix(") ")) {
+        let delimiter = suffix.first
+        let separator = suffix.dropFirst().first
+        if (1...9).contains(digits.count),
+           delimiter == "." || delimiter == ")",
+           separator == " " || separator == "\t" {
             return ParsedListLine(
                 indentation: indentation,
                 kind: .ordered,

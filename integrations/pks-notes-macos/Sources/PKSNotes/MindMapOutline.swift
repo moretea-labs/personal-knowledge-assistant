@@ -241,17 +241,19 @@ enum MindMapOutline {
     private static func listMarker(in line: String) -> ListMarker? {
         let content = line.drop(while: { $0 == " " || $0 == "\t" })
         guard let first = content.first else { return nil }
+        let bulletSeparator = content.dropFirst().first
         if ["-", "*", "+"].contains(first),
-           content.dropFirst().first?.isWhitespace == true {
+           bulletSeparator == " " || bulletSeparator == "\t" {
             return .bullet(first)
         }
 
         let digits = content.prefix { $0 >= "0" && $0 <= "9" }
+        let orderedSeparator = content.dropFirst(digits.count + 1).first
         guard (1...9).contains(digits.count),
               let number = Int(String(digits)),
               let delimiter = content.dropFirst(digits.count).first,
               delimiter == "." || delimiter == ")",
-              content.dropFirst(digits.count + 1).first?.isWhitespace == true
+              orderedSeparator == " " || orderedSeparator == "\t"
         else { return nil }
         return .ordered(number: number, delimiter: delimiter)
     }

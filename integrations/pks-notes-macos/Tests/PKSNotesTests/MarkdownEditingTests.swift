@@ -508,3 +508,35 @@ extension MarkdownEditingTests {
         XCTAssertEqual(textView.string, source)
     }
 }
+
+
+extension MarkdownEditingTests {
+    func testBulletListCommandRecognizesTabSeparatedCommonMarkMarkers() {
+        let source = "-\tfirst\n\t+\tsecond\n"
+        let result = MarkdownEditing.apply(
+            .bullet, to: source, selection: NSRange(location: 0, length: (source as NSString).length)
+        )
+        XCTAssertEqual(result.text, "first\n\tsecond\n")
+    }
+
+    func testOrderedListCommandRecognizesTabSeparatedCommonMarkMarkers() {
+        let source = "1)\tfirst\n\t2.\tsecond\n"
+        let result = MarkdownEditing.apply(
+            .ordered, to: source, selection: NSRange(location: 0, length: (source as NSString).length)
+        )
+        XCTAssertEqual(result.text, "first\n\tsecond\n")
+    }
+
+    func testOrderedListCommandRejectsNonASCIIOrOverlongCommonMarkMarkers() {
+        let invalidMarkers = [
+            "١. not an ordered marker\n",
+            "1234567890. too many digits\n"
+        ]
+        for source in invalidMarkers {
+            let result = MarkdownEditing.apply(
+                .ordered, to: source, selection: NSRange(location: 0, length: (source as NSString).length)
+            )
+            XCTAssertEqual(result.text, "1. \(source)")
+        }
+    }
+}

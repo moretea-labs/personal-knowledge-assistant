@@ -1303,3 +1303,14 @@ extension MindMapOutlineTests {
         XCTAssertEqual(continuedNodes.map(\.depth), [0, 1, 2])
     }
 }
+
+
+extension MindMapOutlineTests {
+    func testListMarkersRequireASCIICommonMarkWhitespace() {
+        let markdown = "# Root\n-\u{3000}Full-width space\n-\u{00A0}Non-breaking space\n-\tTab bullet\n1.\u{3000}Unicode ordered separator\n2.\tTab ordered item\n1234567890. Too many digits"
+        let nodes = MindMapOutline.nodes(in: markdown)
+
+        XCTAssertEqual(nodes.map(\.title), ["Root", "Tab bullet", "Tab ordered item"])
+        XCTAssertEqual(nodes.map(\.depth), [0, 1, 1])
+    }
+}
