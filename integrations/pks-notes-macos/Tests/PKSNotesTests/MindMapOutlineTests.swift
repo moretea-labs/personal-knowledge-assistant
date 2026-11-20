@@ -1257,3 +1257,22 @@ extension MindMapOutlineTests {
         XCTAssertFalse(fullParentIDs.contains(visibleChild.id))
     }
 }
+
+
+extension MindMapOutlineTests {
+    func testFourSpaceNestedListsUseOneDepthPerListItem() {
+        let markdown = "# Root\n- Parent\n    - Child\n        - Grandchild\n  - Sibling\n- Next"
+        let nodes = MindMapOutline.nodes(in: markdown)
+
+        XCTAssertEqual(nodes.map(\.title), ["Root", "Parent", "Child", "Grandchild", "Sibling", "Next"])
+        XCTAssertEqual(nodes.map(\.depth), [0, 1, 2, 3, 2, 1])
+    }
+
+    func testTabIndentedNestedListsUseOneDepthPerListItem() {
+        let markdown = "# Root\n- Parent\n\t- Child\n\t\t- Grandchild\n- Next"
+        let nodes = MindMapOutline.nodes(in: markdown)
+
+        XCTAssertEqual(nodes.map(\.title), ["Root", "Parent", "Child", "Grandchild", "Next"])
+        XCTAssertEqual(nodes.map(\.depth), [0, 1, 2, 3, 1])
+    }
+}

@@ -447,6 +447,7 @@ enum MindMapOutline {
         guard !Task.isCancelled else { return [] }
         var result: [MindMapNode] = []
         var headingDepth = 0
+        var listIndentStack: [(indent: Int, depth: Int)] = []
         var activeFence: MarkdownFence?
         let lines = markdown.components(separatedBy: "\n")
         for (index, line) in lines.enumerated() {
@@ -467,6 +468,7 @@ enum MindMapOutline {
             let hashes = trimmed.prefix(while: { $0 == "#" }).count
             if (1...6).contains(hashes), trimmed.dropFirst(hashes).first == " " {
                 headingDepth = hashes
+                listIndentStack.removeAll(keepingCapacity: true)
                 let title = String(trimmed.dropFirst(hashes)).trimmingCharacters(in: .whitespacesAndNewlines)
                 if !title.isEmpty { result.append(.init(id: index, depth: hashes - 1, title: title)) }
                 continue
@@ -476,7 +478,16 @@ enum MindMapOutline {
                 let title = String(trimmed.dropFirst(marker.markdownPrefix.count))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if !title.isEmpty {
-                    result.append(.init(id: index, depth: headingDepth + indent / 2, title: title))
+                    // A list item's depth is relative to the nearest preceding
+                    // item with less indentation, not the absolute column count.
+                    // CommonMark permits extra padding (including tabs), so a
+                    // four-column jump still represents one actual child node.
+                    while let parent = listIndentStack.last, indent <= parent.indent {
+                        listIndentStack.removeLast()
+                    }
+                    let depth = listIndentStack.last.map { $0.depth + 1 } ?? headingDepth
+                    result.append(.init(id: index, depth: depth, title: title))
+                    listIndentStack.append((indent: indent, depth: depth))
                 }
             }
         }
