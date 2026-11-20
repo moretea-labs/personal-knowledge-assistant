@@ -814,3 +814,30 @@ extension MindMapDragTargetSafetyTests {
         ))
     }
 }
+
+extension MindMapDragTargetSafetyTests {
+    func testBranchDeleteCandidateRequiresExactSourceRevisionAndExistingNode() throws {
+        let source = "# Plan\n- Keep\n- Delete me\n"
+        let nodes = MindMapOutline.nodes(in: source)
+        let target = try XCTUnwrap(nodes.first { $0.title == "Delete me" })
+        let candidate = MindMapBranchDeleteCandidate(
+            nodeID: target.id,
+            source: source,
+            revision: 41
+        )
+
+        XCTAssertTrue(candidate.matches(source: source, revision: 41, nodeExists: true))
+        XCTAssertFalse(
+            candidate.matches(source: source, revision: 42, nodeExists: true),
+            "A confirmation must not survive a newer note revision."
+        )
+        XCTAssertFalse(
+            candidate.matches(source: "# Plan\n- Keep\n- Another branch\n", revision: 42, nodeExists: true),
+            "A changed note must not retarget the destructive confirmation."
+        )
+        XCTAssertFalse(
+            candidate.matches(source: source, revision: 41, nodeExists: false),
+            "The original node must still exist in the exact confirmed projection."
+        )
+    }
+}

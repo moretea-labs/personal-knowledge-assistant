@@ -286,6 +286,16 @@ enum MindMapExportBudget {
     }
 }
 
+struct MindMapBranchDeleteCandidate: Equatable {
+    let nodeID: Int
+    let source: String
+    let revision: UInt64
+
+    func matches(source: String, revision: UInt64, nodeExists: Bool) -> Bool {
+        self.source == source && self.revision == revision && nodeExists
+    }
+}
+
 struct MindMapNodeDragPayload: Codable, Transferable, Equatable, Sendable {
     let canvasSessionID: UUID
     let revision: UInt64
@@ -336,7 +346,7 @@ struct MindMapCanvas: View {
     @State private var createdNodeDraftSnapshot: String?
     @State private var interchangeError: String?
     @State private var showingShortcuts = false
-    @State private var branchDeleteCandidateID: Int?
+    @State private var branchDeleteCandidate: MindMapBranchDeleteCandidate?
     @State private var collapsed: Set<Int> = []
     @State private var zoom: CGFloat = 1.0
     @State private var viewportOffset: CGSize = .zero
@@ -367,6 +377,17 @@ struct MindMapCanvas: View {
 
     private var mapStyle: MindMapVisualStyle {
         MindMapVisualStyle(rawValue: mapStyleID) ?? .classic
+    }
+
+    private var branchDeleteCandidateIsCurrent: Bool {
+        guard let candidate = branchDeleteCandidate,
+              projectionIsCurrent,
+              candidate.matches(
+                  source: source,
+                  revision: revision,
+                  nodeExists: nodes.contains(where: { $0.id == candidate.nodeID })
+              ) else { return false }
+        return validateSource(candidate.revision, candidate.source)
     }
 
     private var layoutDensity: MindMapLayoutDensity {
@@ -661,24 +682,30 @@ struct MindMapCanvas: View {
         .confirmationDialog(
             language.text("Delete selected branch?"),
             isPresented: Binding(
-                get: { branchDeleteCandidateID != nil },
-                set: { if !$0 { branchDeleteCandidateID = nil } }
+                get: { branchDeleteCandidate != nil },
+                set: { if !$0 { branchDeleteCandidate = nil } }
             ),
             titleVisibility: .visible
         ) {
             Button(language.text("Delete Branch"), role: .destructive) {
-                if projectionIsCurrent,
-                   let id = branchDeleteCandidateID,
-                   let updated = MindMapOutline.deleteNodeSubtree(in: source, nodeID: id) {
+                if branchDeleteCandidateIsCurrent,
+                   let candidate = branchDeleteCandidate,
+                   let updated = MindMapOutline.deleteNodeSubtree(
+                       in: source, nodeID: candidate.nodeID
+                   ) {
                     source = updated
                     selectedID = nil
+                } else if branchDeleteCandidate != nil {
+                    interchangeError = language.text(
+                        "The note changed before the branch was deleted. Select the branch again."
+                    )
                 }
-                branchDeleteCandidateID = nil
+                branchDeleteCandidate = nil
                 restoreCanvasFocusAfterMenu()
             }
-            .disabled(!projectionIsCurrent)
+            .disabled(!branchDeleteCandidateIsCurrent)
             Button(language.text("Cancel"), role: .cancel) {
-                branchDeleteCandidateID = nil
+                branchDeleteCandidate = nil
                 restoreCanvasFocusAfterMenu()
             }
         } message: {
@@ -756,7 +783,13 @@ struct MindMapCanvas: View {
                 ? rebasedCreatedNodeID : rebaseNodeID(selectedID)
             let rebasedEditingNodeID = isEditingCreatedNode && editingNodeID == editingCreatedNodeID
                 ? rebasedCreatedNodeID : rebaseNodeID(editingNodeID)
-            let rebasedDeleteCandidateID = rebaseNodeID(branchDeleteCandidateID)
+            let currentDeleteCandidate = branchDeleteCandidate.flatMap { candidate in
+                candidate.matches(
+                    source: input,
+                    revision: sourceRevision,
+                    nodeExists: projection.nodes.contains(where: { $0.id == candidate.nodeID })
+                ) ? candidate : nil
+            }
             let rebasedDropTargetID = rebaseNodeID(dropTargetID)
 
             nodes = projection.nodes
@@ -768,7 +801,7 @@ struct MindMapCanvas: View {
             selectedID = rebasedSelectedID
             editingNodeID = rebasedEditingNodeID
             editingCreatedNodeID = rebasedCreatedNodeID
-            branchDeleteCandidateID = rebasedDeleteCandidateID
+            branchDeleteCandidate = currentDeleteCandidate
             dropTargetID = rebasedDropTargetID
             if editingNodeID == nil && editingCreatedNodeID == nil {
                 renameTitle = ""
@@ -875,7 +908,7 @@ struct MindMapCanvas: View {
         .onChange(of: showingShortcuts) { _, visible in
             if !visible { requestCanvasFocus() }
         }
-        .onChange(of: branchDeleteCandidateID) { _, candidate in
+        .onChange(of: branchDeleteCandidate) { _, candidate in
             if candidate == nil { requestCanvasFocus() }
         }
     }
@@ -1403,7 +1436,7 @@ struct MindMapCanvas: View {
         Task { @MainActor in
             canvasFocused = false
             try? await Task.sleep(for: .milliseconds(80))
-            if editingNodeID == nil, branchDeleteCandidateID == nil {
+            if editingNodeID == nil, branchDeleteCandidate == nil {
                 canvasFocused = true
             }
         }
@@ -1485,7 +1518,9 @@ struct MindMapCanvas: View {
         case .deleteBranch:
             guard let selectedID, MindMapOutline.deleteNodeSubtree(in: source, nodeID: selectedID) != nil
             else { return false }
-            branchDeleteCandidateID = selectedID
+            branchDeleteCandidate = MindMapBranchDeleteCandidate(
+                nodeID: selectedID, source: source, revision: revision
+            )
         case .fit:
             NotificationCenter.default.post(name: .pksMindMapFit, object: nil)
         case .zoomIn: zoomAboutCenter(to: clampedZoom(zoom * 1.15))
@@ -2012,7 +2047,9 @@ struct MindMapCanvas: View {
             .accessibilityIdentifier("pks-mind-map-context-delete-leaf")
             Button(language.text("Delete Branch"), systemImage: "trash.slash", role: .destructive) {
                 selectedID = node.id
-                branchDeleteCandidateID = node.id
+                branchDeleteCandidate = MindMapBranchDeleteCandidate(
+                    nodeID: node.id, source: source, revision: revision
+                )
             }
             .disabled(editingNodeID != nil ||
                       MindMapOutline.deleteNodeSubtree(in: source, nodeID: node.id) == nil)
