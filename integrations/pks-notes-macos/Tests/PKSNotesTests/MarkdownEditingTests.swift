@@ -579,3 +579,31 @@ extension MarkdownEditingTests {
         XCTAssertEqual(tasks.text, "- [ ] Read the paper\n- [x] Complete the outline\n- [ ] Plain line\n")
     }
 }
+
+
+extension MarkdownEditingTests {
+    func testOrderedListConversionRestartsNumberingWithinEachParent() {
+        let source = "- First\n  - Child A\n- Second\n  - Child B\n"
+        let selection = NSRange(location: 0, length: (source as NSString).length)
+        let result = MarkdownEditing.apply(.ordered, to: source, selection: selection)
+
+        XCTAssertEqual(result.text, "1. First\n   1. Child A\n2. Second\n   1. Child B\n")
+        XCTAssertEqual(MindMapOutline.nodes(in: result.text).map(\.depth), [0, 1, 0, 1])
+    }
+
+    func testOrderedListConversionAccountsForDoubleDigitParentMarkerWidths() {
+        let sourceLines = (1...10).map { "- Topic \($0)" }
+            + ["  - Child A", "    - Grandchild", "  - Child B", "- Topic 11", "  - Child C"]
+        let source = sourceLines.joined(separator: "\n") + "\n"
+        let selection = NSRange(location: 0, length: (source as NSString).length)
+        let result = MarkdownEditing.apply(.ordered, to: source, selection: selection)
+        let expectedLines = (1...10).map { "\($0). Topic \($0)" }
+            + ["    1. Child A", "       1. Grandchild", "    2. Child B", "11. Topic 11", "    1. Child C"]
+
+        XCTAssertEqual(result.text, expectedLines.joined(separator: "\n") + "\n")
+        XCTAssertEqual(
+            MindMapOutline.nodes(in: result.text).map(\.depth),
+            Array(repeating: 0, count: 10) + [1, 2, 1, 0, 1]
+        )
+    }
+}

@@ -210,6 +210,12 @@ enum MarkdownEditing {
         let content: String
     }
 
+    private struct OrderedListLevel {
+        let sourceColumns: Int
+        let outputColumns: Int
+        var nextNumber: Int
+    }
+
     private static func toggleListLines(
         _ text: String,
         range: NSRange,
@@ -246,7 +252,7 @@ enum MarkdownEditing {
             return false
         }
 
-        var orderedIndexByIndentation: [String: Int] = [:]
+        var orderedLevels: [OrderedListLevel] = []
         let formattedLines = lines.enumerated().map { offset, line -> String in
             let absoluteLine = firstLine + offset
             if codeLines[absoluteLine] {
@@ -283,10 +289,30 @@ enum MarkdownEditing {
                 }
                 return indentation + "- [ ] " + content
             case .ordered:
-                let orderedIndentation = commonMarkOrderedIndentation(from: indentation)
-                let number = orderedIndexByIndentation[orderedIndentation, default: 1]
-                orderedIndexByIndentation[orderedIndentation] = number + 1
-                return orderedIndentation + "\(number). " + content
+                let sourceColumns = indentationColumns(from: indentation)
+                while let last = orderedLevels.last, last.sourceColumns > sourceColumns {
+                    orderedLevels.removeLast()
+                }
+                if orderedLevels.last?.sourceColumns != sourceColumns {
+                    let outputColumns: Int
+                    if let parent = orderedLevels.last {
+                        // A child begins at the actual content column of its
+                        // parent, including the wider "10. " marker.
+                        outputColumns = parent.outputColumns + String(parent.nextNumber - 1).count + 2
+                    } else {
+                        // Preserve the previous fallback for a selected
+                        // indented item without its parent in the selection.
+                        outputColumns = (sourceColumns / 2) * 3
+                    }
+                    orderedLevels.append(.init(
+                        sourceColumns: sourceColumns, outputColumns: outputColumns, nextNumber: 1
+                    ))
+                }
+                let lastIndex = orderedLevels.count - 1
+                let number = orderedLevels[lastIndex].nextNumber
+                orderedLevels[lastIndex].nextNumber += 1
+                return String(repeating: " ", count: orderedLevels[lastIndex].outputColumns)
+                    + "\(number). " + content
             }
         }
 
@@ -302,16 +328,12 @@ enum MarkdownEditing {
         )
     }
 
-    /// Ordered markers consume three columns ("1. " / "1) "). Convert the
-    /// editor's two-space visual nesting into the content-column indentation
-    /// CommonMark requires for nested ordered lists.
-    private static func commonMarkOrderedIndentation(from indentation: String) -> String {
+    private static func indentationColumns(from indentation: String) -> Int {
         var columns = 0
         for character in indentation {
             columns += character == "\t" ? 4 - columns % 4 : 1
         }
-        let depth = columns / 2
-        return String(repeating: " ", count: depth * 3)
+        return columns
     }
 
     private static func parseTaskListBody(_ body: String) -> (checked: String, content: String)? {
