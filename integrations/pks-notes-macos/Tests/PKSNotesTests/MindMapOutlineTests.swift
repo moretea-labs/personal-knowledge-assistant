@@ -1330,3 +1330,36 @@ extension MindMapOutlineTests {
         XCTAssertEqual(nodes.map(\.depth), [0, 1, 1])
     }
 }
+
+extension MindMapOutlineTests {
+    func testEvenBackslashesBeforeInlineCodeKeepExamplePDFLinksOutOfKnowledgeGraph() throws {
+        let markdown = #"""
+        # Plan
+        - Evidence
+          See \\`[Example](/Fake.pdf)` and [Real](/Real.pdf).
+        """#
+        let occurrences = MindMapOutline.linkOccurrences(in: markdown)
+        XCTAssertEqual(occurrences.map(\.link.target), ["/Real.pdf"])
+        let codeOffset = (markdown as NSString).range(of: "[Example]").location + 2
+        XCTAssertTrue(MindMapOutline.isInsideCode(in: markdown, at: codeOffset))
+        let nodes = MindMapOutline.nodes(in: markdown)
+        let evidence = try XCTUnwrap(nodes.first(where: { $0.title == "Evidence" }))
+        XCTAssertEqual(
+            MindMapOutline.presentations(in: markdown, nodes: nodes)[evidence.id]?.links.map(\.target),
+            ["/Real.pdf"]
+        )
+    }
+
+    func testOddVersusEvenBackslashesBeforeMarkdownAndWikiLinks() {
+        let markdown = #"""
+        # Plan
+        - Evidence
+          Escaped \[Literal](/Ignored.pdf), real \\[Real](/Real.pdf).
+          Escaped \[[Ignored]], real \\[[Research|Study]].
+        """#
+        XCTAssertEqual(
+            MindMapOutline.linkOccurrences(in: markdown).map(\.link.target),
+            ["/Real.pdf", "Research"]
+        )
+    }
+}

@@ -1154,13 +1154,21 @@ extension MindMapOutline {
         let link: MindMapLink
     }
 
+    /// CommonMark escapes punctuation only after an odd-length backslash run.
+    /// Two backslashes leave the following delimiter or link opener active.
+    private static func isEscaped(at offset: Int, in units: [UInt16]) -> Bool {
+        var cursor = offset
+        while cursor > 0 && units[cursor - 1] == 92 { cursor -= 1 }
+        return !(offset - cursor).isMultiple(of: 2)
+    }
+
     private static func inlineCodeRanges(in text: String) -> [NSRange] {
         let units = Array(text.utf16)
         var ranges: [NSRange] = []
         var opening: (start: Int, width: Int)?
         var i = 0
         while i < units.count {
-            guard units[i] == 96, i == 0 || units[i - 1] != 92 else { i += 1; continue }
+            guard units[i] == 96, !isEscaped(at: i, in: units) else { i += 1; continue }
             let start = i
             while i < units.count && units[i] == 96 { i += 1 }
             let width = i - start
@@ -1181,12 +1189,13 @@ extension MindMapOutline {
         var parsed: [ParsedLink] = []
         let fullRange = NSRange(title.startIndex..<title.endIndex, in: title)
         let nsTitle = title as NSString
+        let units = Array(title.utf16)
         let codeRanges = inlineCodeRanges(in: title)
 
         for match in wikiLinkRegex.matches(in: title, range: fullRange) {
             let start = match.range.location
-            guard (start == 0 || (nsTitle.character(at: start - 1) != 92
-                                   && (includeImages || nsTitle.character(at: start - 1) != 33))),
+            guard !isEscaped(at: start, in: units),
+                  (start == 0 || includeImages || nsTitle.character(at: start - 1) != 33),
                   !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }),
                   let labelRange = Range(match.range(at: 1), in: title) else { continue }
             let raw = String(title[labelRange])
@@ -1209,8 +1218,8 @@ extension MindMapOutline {
 
         for match in markdownLinkRegex.matches(in: title, range: fullRange) {
             let start = match.range.location
-            guard (start == 0 || (nsTitle.character(at: start - 1) != 92
-                                   && (includeImages || nsTitle.character(at: start - 1) != 33))),
+            guard !isEscaped(at: start, in: units),
+                  (start == 0 || includeImages || nsTitle.character(at: start - 1) != 33),
                   !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 })
             else { continue }
             guard let labelRange = Range(match.range(at: 1), in: title),
