@@ -437,7 +437,7 @@ enum MindMapOutline {
             if index.isMultiple(of: 128), Task.isCancelled { return nil }
             let line = lines[index]
             guard !isBlank(line) else { continue }
-            let indent = line.prefix(while: { $0 == " " }).count
+            let indent = leadingIndentColumns(in: line)
             commonIndent = min(commonIndent ?? indent, indent)
         }
 
@@ -446,8 +446,10 @@ enum MindMapOutline {
         for index in lower..<upper {
             if (index - lower).isMultiple(of: 128), Task.isCancelled { return nil }
             let line = lines[index]
-            let indent = line.prefix(while: { $0 == " " }).count
-            hasher.combine(String(line.dropFirst(min(indent, commonIndent ?? 0))))
+            let normalized = isBlank(line)
+                ? ""
+                : droppingIndentationColumns(from: line, count: commonIndent ?? 0)
+            hasher.combine(normalized)
         }
         return hasher.finalize()
     }
@@ -674,6 +676,32 @@ extension MindMapOutline {
         return column
     }
 
+    /// Remove a visual indentation prefix without splitting a tab into a
+    /// different column. Any tab columns beyond the removed prefix become spaces.
+    private static func droppingIndentationColumns(from line: String, count: Int) -> String {
+        guard count > 0 else { return line }
+        var remaining = count
+        var column = 0
+        var cursor = line.startIndex
+        var residualSpaces = 0
+
+        while cursor < line.endIndex, remaining > 0 {
+            let character = line[cursor]
+            guard character == " " || character == "\t" else { break }
+            let width = character == "\t" ? 4 - column % 4 : 1
+            column += width
+            cursor = line.index(after: cursor)
+            if width > remaining {
+                residualSpaces = width - remaining
+                remaining = 0
+            } else {
+                remaining -= width
+            }
+        }
+
+        return String(repeating: " ", count: residualSpaces) + line[cursor...]
+    }
+
     private static func leadingIndentColumns(in line: String) -> Int {
         indentationColumns(in: String(line.prefix(while: { $0 == " " || $0 == "\t" })))
     }
@@ -731,7 +759,7 @@ extension MindMapOutline {
         let insertion = subtreeEndLine(at: position, nodes: parsed, lineCount: contentLineCount)
 
         if let marker = listMarker(in: line) {
-            let indent = line.prefix(while: { $0 == " " }).count
+            let indent = leadingIndentColumns(in: line)
             lines.insert(
                 String(repeating: " ", count: indent) + marker.newItemPrefix + title,
                 at: insertion
@@ -753,8 +781,9 @@ extension MindMapOutline {
         var lines = source.components(separatedBy: "\n")
         guard nodes(in: source).contains(where: { $0.id == nodeID }), lines.indices.contains(nodeID) else { return nil }
         let line = lines[nodeID]
-        let leading = line.prefix(while: { $0 == " " }).count
-        let trimmed = String(line.dropFirst(leading))
+        let leadingWhitespace = line.prefix(while: { $0 == " " || $0 == "\t" })
+        let leadingIndent = indentationColumns(in: String(leadingWhitespace))
+        let trimmed = String(line.dropFirst(leadingWhitespace.count))
         let hashes = trimmed.prefix(while: { $0 == "#" }).count
         let prefix: String
         if hashes > 0 {
@@ -764,7 +793,7 @@ extension MindMapOutline {
         } else {
             return nil
         }
-        lines[nodeID] = String(repeating: " ", count: leading) + prefix + title
+        lines[nodeID] = String(repeating: " ", count: leadingIndent) + prefix + title
         return lines.joined(separator: "\n")
     }
 
@@ -1061,7 +1090,7 @@ extension MindMapOutline {
         let parentLine = lines[parentID]
         let parentMarker = listMarker(in: parentLine)
         let isList = parentMarker != nil
-        let indent = parentLine.prefix(while: { $0 == " " }).count
+        let indent = leadingIndentColumns(in: parentLine)
         let contentLineCount = lines.count - (source.hasSuffix("\n") ? 1 : 0)
         let endLine = subtreeEndLine(at: position, nodes: parsed, lineCount: contentLineCount)
         let insertion = firstDescendantLine(at: position, nodes: parsed, fallback: endLine)
@@ -1762,7 +1791,7 @@ extension MindMapOutline {
         let sourceEnd = subtreeEndLine(at: sourcePosition, nodes: parsed, lineCount: contentLineCount)
         guard !(nodeID..<sourceEnd).contains(targetID) else { return nil }
 
-        let sourceIndent = lines[nodeID].prefix(while: { $0 == " " }).count
+        let sourceIndent = leadingIndentColumns(in: lines[nodeID])
         guard hasSafelyIndentedListContent(
             lines, from: nodeID + 1, to: sourceEnd, baseIndent: sourceIndent
         ) else { return nil }
@@ -1770,7 +1799,7 @@ extension MindMapOutline {
         let targetLine = lines[targetID]
         let targetMarker = listMarker(in: targetLine)
         let targetIsList = targetMarker != nil
-        let targetIndent = targetLine.prefix(while: { $0 == " " }).count
+        let targetIndent = leadingIndentColumns(in: targetLine)
         let targetEnd = subtreeEndLine(at: targetPosition, nodes: parsed, lineCount: contentLineCount)
         let targetFirstChild = firstDescendantLine(
             at: targetPosition, nodes: parsed, fallback: targetEnd

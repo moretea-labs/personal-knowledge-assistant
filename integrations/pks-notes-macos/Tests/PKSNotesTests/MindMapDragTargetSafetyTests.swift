@@ -886,3 +886,55 @@ extension MindMapDragTargetSafetyTests {
         )
     }
 }
+
+extension MindMapDragTargetSafetyTests {
+    func testTabIndentedAttachedMarkdownCanBeReparentedAndKeepsNodeIdentity() throws {
+        let source = "# Plan\n- Parent\n\t- Move me\n\t\tContext belongs to Move me.\n\t\t- Existing child\n- Target\n"
+        let oldNodes = MindMapOutline.nodes(in: source)
+        let moved = try XCTUnwrap(oldNodes.first(where: { $0.title == "Move me" }))
+        let target = try XCTUnwrap(oldNodes.first(where: { $0.title == "Target" }))
+
+        let outcome = MindMapOutline.moveNodeSubtreeWithOutcome(
+            in: source, nodeID: moved.id, asChildOf: target.id
+        )
+        XCTAssertEqual(
+            outcome?.source,
+            "# Plan\n- Parent\n- Target\n  - Move me\n      Context belongs to Move me.\n      - Existing child\n"
+        )
+        guard let outcome else { return }
+
+        let updatedNodes = MindMapOutline.nodes(in: outcome.source)
+        let updatedMove = try XCTUnwrap(updatedNodes.first(where: { $0.title == "Move me" }))
+        let updatedChild = try XCTUnwrap(updatedNodes.first(where: { $0.title == "Existing child" }))
+        XCTAssertEqual(updatedMove.attachedBodyFingerprint, moved.attachedBodyFingerprint)
+        XCTAssertEqual(updatedChild.depth, updatedMove.depth + 1)
+    }
+
+    func testAddingChildToTabIndentedListBodyPreservesTheBodyAndHierarchy() throws {
+        let source = "# Plan\n- Parent\n\tContext belongs to Parent.\n- Target\n"
+        let parent = try XCTUnwrap(MindMapOutline.nodes(in: source).first(where: { $0.title == "Parent" }))
+
+        let outcome = MindMapOutline.addChildWithOutcome(in: source, parentID: parent.id)
+        XCTAssertEqual(
+            outcome?.source,
+            "# Plan\n- Parent\n\tContext belongs to Parent.\n  - New idea\n- Target\n"
+        )
+    }
+
+    func testAddingSiblingAndRenamingTabIndentedNodesPreservesIndentation() throws {
+        let source = "# Plan\n- Parent\n\t- Move me\n\t\tAttached text.\n\t- Existing\n"
+        let node = try XCTUnwrap(MindMapOutline.nodes(in: source).first(where: { $0.title == "Move me" }))
+
+        let sibling = MindMapOutline.addSiblingWithOutcome(in: source, nodeID: node.id)
+        XCTAssertEqual(
+            sibling?.source,
+            "# Plan\n- Parent\n\t- Move me\n\t\tAttached text.\n    - New idea\n\t- Existing\n"
+        )
+
+        let renamed = MindMapOutline.rename(in: source, nodeID: node.id, to: "Renamed")
+        XCTAssertEqual(
+            renamed,
+            "# Plan\n- Parent\n    - Renamed\n\t\tAttached text.\n\t- Existing\n"
+        )
+    }
+}
