@@ -284,6 +284,46 @@ final class MindMapOutlineTests: XCTestCase {
         )
     }
 
+    func testFourColumnIndentedCodeDoesNotConsumeFollowingMarkdownBlocks() {
+        for fenceLine in ["    ```", "\t```"] {
+            let markdown = "# Root\n\(fenceLine)\n- Real\n  [Real link](/real.pdf)\n```\n- Next\n```"
+            let nodes = MindMapOutline.nodes(in: markdown)
+
+            XCTAssertEqual(nodes.map(\.title), ["Root", "Real"], fenceLine)
+            let flags = MindMapOutline.blockCodeLineFlags(in: markdown)
+            XCTAssertFalse(flags[2], fenceLine)
+            let realOffset = (markdown as NSString).range(of: "- Real").location
+            XCTAssertFalse(MindMapOutline.isInsideCode(in: markdown, at: realOffset), fenceLine)
+            XCTAssertEqual(MindMapOutline.linkOccurrences(in: markdown).map { $0.link.target }, ["/real.pdf"], fenceLine)
+        }
+    }
+
+    func testFencedCodeUsesNestedListContentIndent() {
+        let markdown = """
+        # Root
+        - Parent
+          - Child
+            ```swift
+            - Fake nested node
+            [Fake nested link](/fake.pdf)
+            ```
+          - Real sibling
+            [Real sibling link](/real.pdf)
+        - End
+        """
+        let nodes = MindMapOutline.nodes(in: markdown)
+
+        XCTAssertEqual(nodes.map(\.title), ["Root", "Parent", "Child", "Real sibling", "End"])
+        let flags = MindMapOutline.blockCodeLineFlags(in: markdown)
+        XCTAssertTrue(flags[4])
+        XCTAssertFalse(flags[7])
+        let fakeOffset = (markdown as NSString).range(of: "- Fake nested node").location
+        XCTAssertTrue(MindMapOutline.isInsideCode(in: markdown, at: fakeOffset))
+        XCTAssertEqual(MindMapOutline.linkOccurrences(in: markdown).map { $0.link.target }, ["/real.pdf"])
+        let realLinkOffset = (markdown as NSString).range(of: "Real sibling link").location
+        XCTAssertFalse(MindMapOutline.isInsideCode(in: markdown, at: realLinkOffset))
+    }
+
     func testLongerFenceDoesNotCloseOnShorterEmbeddedFence() {
         let markdown = """
         # Root

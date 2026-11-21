@@ -142,19 +142,26 @@ enum MindMapOutline {
     private struct MarkdownFence {
         let marker: Character
         let length: Int
+        let baseIndent: Int
     }
 
-    private static func openingFence(in line: String) -> MarkdownFence? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+    private static func openingFence(in line: String, baseIndent: Int = 0) -> MarkdownFence? {
+        let indent = leadingIndentColumns(in: line)
+        guard indent >= baseIndent, indent - baseIndent <= 3 else { return nil }
+        let content = droppingIndentationColumns(from: line, count: baseIndent)
+        let trimmed = content.trimmingCharacters(in: .whitespaces)
         guard let marker = trimmed.first, marker == "`" || marker == "~" else { return nil }
         let length = trimmed.prefix(while: { $0 == marker }).count
         guard length >= 3 else { return nil }
         if marker == "`", trimmed.dropFirst(length).contains(marker) { return nil }
-        return MarkdownFence(marker: marker, length: length)
+        return MarkdownFence(marker: marker, length: length, baseIndent: baseIndent)
     }
 
     private static func closesFence(_ line: String, matching fence: MarkdownFence) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let indent = leadingIndentColumns(in: line)
+        guard indent >= fence.baseIndent, indent - fence.baseIndent <= 3 else { return false }
+        let content = droppingIndentationColumns(from: line, count: fence.baseIndent)
+        let trimmed = content.trimmingCharacters(in: .whitespaces)
         guard trimmed.first == fence.marker else { return false }
         let length = trimmed.prefix(while: { $0 == fence.marker }).count
         guard length >= fence.length else { return false }
@@ -178,7 +185,10 @@ enum MindMapOutline {
                 nodeCursor += 1
             }
 
-            let opening = openingFence(in: line)
+            let fenceBaseIndent = fenceContainerIndent(
+                for: line, after: previousNode, in: lines, baseIndent: baseIndent
+            )
+            let opening = openingFence(in: line, baseIndent: fenceBaseIndent)
             let closesActiveFence = activeFence.map { closesFence(line, matching: $0) } ?? false
             flags[lineIndex] = activeFence != nil
                 || opening != nil
@@ -283,6 +293,20 @@ enum MindMapOutline {
         return continuationIndent + 4
     }
 
+    private static func fenceContainerIndent(
+        for line: String,
+        after previousNode: MindMapNode?,
+        in lines: [String],
+        baseIndent: Int = 0
+    ) -> Int {
+        guard let previousNode, lines.indices.contains(previousNode.id),
+              isListLine(lines[previousNode.id]),
+              let contentIndent = listContinuationIndent(in: lines[previousNode.id]),
+              leadingIndentColumns(in: line) >= contentIndent
+        else { return baseIndent }
+        return contentIndent
+    }
+
     private static func isIndentedCodeLine(
         _ line: String,
         after previousNode: MindMapNode?,
@@ -290,9 +314,10 @@ enum MindMapOutline {
         baseIndent: Int = 0
     ) -> Bool {
         let indent = leadingIndentColumns(in: line)
-        return indent >= indentedCodeThreshold(
-            after: previousNode, in: lines, baseIndent: baseIndent
+        let containerIndent = fenceContainerIndent(
+            for: line, after: previousNode, in: lines, baseIndent: baseIndent
         )
+        return indent >= containerIndent + 4
     }
 
     /// List bodies move with their node only when every nonempty line is
@@ -469,10 +494,6 @@ enum MindMapOutline {
                 if closesFence(line, matching: fence) { activeFence = nil }
                 continue
             }
-            if let opening = openingFence(in: line) {
-                activeFence = opening
-                continue
-            }
             if trimmed.isEmpty {
                 if !listIndentStack.isEmpty { blankLineSinceListItem = true }
                 continue
@@ -487,6 +508,18 @@ enum MindMapOutline {
                 }
             }
             blankLineSinceListItem = false
+
+            let indent = leadingIndentColumns(in: line)
+            let fenceBaseIndent = listIndentStack.last.map {
+                indent >= $0.contentIndent ? $0.contentIndent : baseIndent
+            } ?? baseIndent
+            if let opening = openingFence(in: line, baseIndent: fenceBaseIndent) {
+                while let parent = listIndentStack.last, indent < parent.contentIndent {
+                    listIndentStack.removeLast()
+                }
+                activeFence = opening
+                continue
+            }
             if isIndentedCodeLine(line, after: result.last, in: lines, baseIndent: baseIndent) {
                 continue
             }
@@ -498,7 +531,6 @@ enum MindMapOutline {
                 }
                 continue
             }
-            let indent = leadingIndentColumns(in: line)
             if let marker = listMarker(in: trimmed) {
                 let title = String(trimmed.dropFirst(marker.markdownPrefix.count))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -609,21 +641,26 @@ enum MindMapOutline {
         let source = markdown as NSString
         let safeOffset = min(max(0, offset), source.length)
         let lines = markdown.components(separatedBy: "\n")
-        let lineIndex = source.substring(to: safeOffset).reduce(into: 0) { count, character in
-            if character == "\n" { count += 1 }
-        }
-        let previousNode = nodes(in: markdown).last(where: { $0.id < lineIndex })
-        let indentedCode = lines.indices.contains(lineIndex)
-            && isIndentedCodeLine(lines[lineIndex], after: previousNode, in: lines)
+        let parsedNodes = nodes(in: markdown)
+        var nodeCursor = 0
+        var previousNode: MindMapNode?
         var lineStart = 0
         var activeFence: MarkdownFence?
 
-        for line in lines {
+        for (lineIndex, line) in lines.enumerated() {
+            while nodeCursor < parsedNodes.count && parsedNodes[nodeCursor].id < lineIndex {
+                previousNode = parsedNodes[nodeCursor]
+                nodeCursor += 1
+            }
+            let fenceBaseIndent = fenceContainerIndent(
+                for: line, after: previousNode, in: lines
+            )
+            let opening = openingFence(in: line, baseIndent: fenceBaseIndent)
+            let closesActiveFence = activeFence.map { closesFence(line, matching: $0) } ?? false
+            let indentedCode = isIndentedCodeLine(line, after: previousNode, in: lines)
             let lineLength = (line as NSString).length
             let lineEnd = lineStart + lineLength
             let containsOffset = safeOffset >= lineStart && safeOffset <= lineEnd
-            let opening = openingFence(in: line)
-            let closesActiveFence = activeFence.map { closesFence(line, matching: $0) } ?? false
 
             if containsOffset {
                 if opening != nil || activeFence != nil || indentedCode { return true }
@@ -1471,7 +1508,10 @@ extension MindMapOutline {
                 if closesFence(line, matching: fence) { activeFence = nil }
                 continue
             }
-            if let opening = openingFence(in: line) {
+            let fenceBaseIndent = fenceContainerIndent(
+                for: line, after: previousNode, in: lines, baseIndent: baseIndent
+            )
+            if let opening = openingFence(in: line, baseIndent: fenceBaseIndent) {
                 activeFence = opening
                 continue
             }
