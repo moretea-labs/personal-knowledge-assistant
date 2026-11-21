@@ -250,10 +250,20 @@ enum MarkdownEditing {
         let formattedLines = lines.enumerated().map { offset, line -> String in
             let absoluteLine = firstLine + offset
             if codeLines[absoluteLine] {
-                if removesExistingList {
-                    return line.hasPrefix("  ") ? String(line.dropFirst(2)) : line
+                let codeIndentColumns: Int
+                switch kind {
+                case .ordered:
+                    codeIndentColumns = 3
+                case .bullet, .task:
+                    codeIndentColumns = 2
                 }
-                return hasExistingList ? line : "  " + line
+                let codeIndent = String(repeating: " ", count: codeIndentColumns)
+                if removesExistingList {
+                    return line.hasPrefix(codeIndent)
+                        ? String(line.dropFirst(codeIndentColumns))
+                        : line
+                }
+                return hasExistingList ? line : codeIndent + line
             }
             if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && lines.count > 1 { return line }
 

@@ -316,12 +316,29 @@ extension MarkdownEditingTests {
         }
     }
 
-    func testOrderedListPreservesFencedCodeAndCreatesAnEmptyItem() {
+    func testOrderedListPreservesFencedCodeAndCreatesAnEmptyItem() throws {
         let source = "first\n```swift\nprint(1)\n```\nlast\n"
         let numbered = MarkdownEditing.apply(
             .ordered, to: source, selection: NSRange(location: 0, length: (source as NSString).length)
         )
-        XCTAssertEqual(numbered.text, "1. first\n  ```swift\n  print(1)\n  ```\n2. last\n")
+        XCTAssertEqual(numbered.text, "1. first\n   ```swift\n   print(1)\n   ```\n2. last\n")
+
+        let rendered = try AttributedString(markdown: numbered.text)
+        let codeRun = try XCTUnwrap(rendered.runs.first {
+            String(rendered[$0.range].characters).contains("print(1)")
+        })
+        let intent = try XCTUnwrap(codeRun.presentationIntent)
+        XCTAssertTrue(intent.components.contains {
+            if case .orderedList = $0.kind { return true }
+            return false
+        })
+        XCTAssertTrue(intent.components.contains {
+            if case .listItem = $0.kind { return true }
+            return false
+        })
+
+        let unformatted = MarkdownEditing.apply(.ordered, to: numbered.text, selection: numbered.selection)
+        XCTAssertEqual(unformatted.text, source)
 
         let empty = MarkdownEditing.apply(.ordered, to: "", selection: NSRange(location: 0, length: 0))
         XCTAssertEqual(empty.text, "1. ")
