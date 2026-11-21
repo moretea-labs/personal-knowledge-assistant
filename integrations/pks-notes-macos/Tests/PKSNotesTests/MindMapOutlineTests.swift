@@ -13,6 +13,22 @@ final class MindMapOutlineTests: XCTestCase {
         let nodes = MindMapOutline.nodes(in: "# Root\n```md\n# Not heading\n- Not node\n```\n- Real")
         XCTAssertEqual(nodes.map(\.title), ["Root", "Real"])
     }
+    func testATXHeadingsAcceptTabSeparatorsAndStripOnlyValidClosingHashes() throws {
+        let markdown = "#\tRoot\t##\n##\tChild ###\n### Child#\n## Next\n"
+        let nodes = MindMapOutline.nodes(in: markdown)
+
+        XCTAssertEqual(nodes.map(\.title), ["Root", "Child", "Child#", "Next"])
+        XCTAssertEqual(nodes.map(\.depth), [0, 1, 2, 1])
+
+        let moved = try XCTUnwrap(MindMapOutline.moveNodeToAdjacentSibling(
+            in: markdown, nodeID: try XCTUnwrap(nodes.last?.id), direction: .up
+        ))
+        XCTAssertEqual(
+            moved.source,
+            "#\tRoot\t##\n## Next\n##\tChild ###\n### Child#\n"
+        )
+    }
+
 
     func testTabIndentedCodeBlocksDoNotCreateNodesOrKnowledgeLinks() {
         let markdown = "# Root\n\t- Fake root node\n\t[Fake root link](/root.pdf)\n- Parent\n\t\t- Fake nested node\n\t\t[Fake nested link](/nested.pdf)\n- Child\n\t[Real child link](/child.pdf)\n- Next\n"

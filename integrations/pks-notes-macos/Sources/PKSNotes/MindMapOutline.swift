@@ -488,12 +488,12 @@ enum MindMapOutline {
             if isIndentedCodeLine(line, after: result.last, in: lines, baseIndent: baseIndent) {
                 continue
             }
-            let hashes = trimmed.prefix(while: { $0 == "#" }).count
-            if (1...6).contains(hashes), trimmed.dropFirst(hashes).first == " " {
-                headingDepth = hashes
+            if let heading = atxHeading(in: line) {
+                headingDepth = heading.level
                 listIndentStack.removeAll(keepingCapacity: true)
-                let title = String(trimmed.dropFirst(hashes)).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !title.isEmpty { result.append(.init(id: index, depth: hashes - 1, title: title)) }
+                if !heading.title.isEmpty {
+                    result.append(.init(id: index, depth: heading.level - 1, title: heading.title))
+                }
                 continue
             }
             let indent = leadingIndentColumns(in: line)
@@ -1827,12 +1827,29 @@ extension MindMapOutline {
         )
     }
 
+    /// Parse an ATX heading's opening marker, title and optional closing hash run.
+    /// CommonMark permits a space or tab after the opening hashes; a closing run
+    /// is syntax only when whitespace-delimited, otherwise its hashes stay in the title.
+    private static func atxHeading(in line: String) -> (level: Int, title: String)? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        let level = trimmed.prefix(while: { $0 == "#" }).count
+        guard (1...6).contains(level) else { return nil }
+        let content = trimmed.dropFirst(level)
+        guard content.first == " " || content.first == "\t" else { return nil }
+
+        let rawTitle = String(content.drop(while: { $0 == " " || $0 == "\t" }))
+        let closingCount = rawTitle.reversed().prefix { $0 == "#" }.count
+        if closingCount > 0 {
+            let beforeClosing = String(rawTitle.dropLast(closingCount))
+            if beforeClosing.isEmpty || beforeClosing.last == " " || beforeClosing.last == "\t" {
+                return (level, beforeClosing.trimmingCharacters(in: .whitespaces))
+            }
+        }
+        return (level, rawTitle)
+    }
+
     private static func headingLevel(in line: String) -> Int? {
-        let leadingCount = line.prefix(while: \.isWhitespace).count
-        let content = line.dropFirst(leadingCount)
-        let level = content.prefix(while: { $0 == "#" }).count
-        guard (1...6).contains(level), content.dropFirst(level).first == " " else { return nil }
-        return level
+        atxHeading(in: line)?.level
     }
 
     private static func replacingHeadingLevel(in line: String, with level: Int) -> String? {
@@ -1840,7 +1857,9 @@ extension MindMapOutline {
         let leading = String(line.prefix(while: \.isWhitespace))
         let content = line.dropFirst(leading.count)
         let current = content.prefix(while: { $0 == "#" }).count
-        guard (1...6).contains(current), content.dropFirst(current).first == " " else { return nil }
+        let separator = content.dropFirst(current).first
+        guard (1...6).contains(current),
+              separator == " " || separator == "\t" else { return nil }
         return leading + String(repeating: "#", count: level) + String(content.dropFirst(current))
     }
 
