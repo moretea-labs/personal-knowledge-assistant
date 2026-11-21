@@ -314,6 +314,18 @@ enum MarkdownEditing {
         return String(repeating: " ", count: depth * 3)
     }
 
+    private static func parseTaskListBody(_ body: String) -> (checked: String, content: String)? {
+        let marker = String(body.prefix(3))
+        guard marker == "[ ]" || marker == "[x]" || marker == "[X]" else { return nil }
+
+        let remainder = body.dropFirst(3)
+        guard remainder.isEmpty || remainder.first == " " || remainder.first == "\t" else {
+            return nil
+        }
+        let content = remainder.drop(while: { $0 == " " || $0 == "\t" })
+        return (checked: String(marker.dropFirst().prefix(1)), content: String(content))
+    }
+
     private static func parseListLine(_ line: String) -> ParsedListLine? {
         let indentation = String(line.prefix { $0 == " " || $0 == "\t" })
         let value = String(line.dropFirst(indentation.count))
@@ -322,19 +334,11 @@ enum MarkdownEditing {
         if let marker = value.first, "-*+".contains(marker),
            markerSeparator == " " || markerSeparator == "\t" {
             let body = String(value.dropFirst(2))
-            if body == "[ ]" || body.hasPrefix("[ ] ") {
+            if let task = parseTaskListBody(body) {
                 return ParsedListLine(
                     indentation: indentation,
-                    kind: .task(checked: " "),
-                    content: body == "[ ]" ? "" : String(body.dropFirst(4))
-                )
-            }
-            if body == "[x]" || body.hasPrefix("[x] ") || body == "[X]" || body.hasPrefix("[X] ") {
-                let checked = String(body.dropFirst(1).prefix(1))
-                return ParsedListLine(
-                    indentation: indentation,
-                    kind: .task(checked: checked),
-                    content: body.count == 3 ? "" : String(body.dropFirst(4))
+                    kind: .task(checked: task.checked),
+                    content: task.content
                 )
             }
             return ParsedListLine(indentation: indentation, kind: .bullet, content: body)

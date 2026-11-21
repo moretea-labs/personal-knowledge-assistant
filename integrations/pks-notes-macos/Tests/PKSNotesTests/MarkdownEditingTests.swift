@@ -557,3 +557,25 @@ extension MarkdownEditingTests {
         }
     }
 }
+
+
+extension MarkdownEditingTests {
+    func testTaskListCommandsRecognizeTabAndRepeatedSpaceSeparators() {
+        let source = "- [ ]\tRead the paper\n- [x]   Complete the outline\n- [X]\t  Review\n"
+        let selection = NSRange(location: 0, length: (source as NSString).length)
+
+        let toggledOff = MarkdownEditing.apply(.task, to: source, selection: selection)
+        XCTAssertEqual(toggledOff.text, "Read the paper\nComplete the outline\nReview\n")
+
+        let bullets = MarkdownEditing.apply(.bullet, to: source, selection: selection)
+        XCTAssertEqual(bullets.text, "- Read the paper\n- Complete the outline\n- Review\n")
+
+        let ordered = MarkdownEditing.apply(.ordered, to: source, selection: selection)
+        XCTAssertEqual(ordered.text, "1. Read the paper\n2. Complete the outline\n3. Review\n")
+
+        let mixed = "- [ ]\tRead the paper\n- [x]   Complete the outline\nPlain line\n"
+        let mixedSelection = NSRange(location: 0, length: (mixed as NSString).length)
+        let tasks = MarkdownEditing.apply(.task, to: mixed, selection: mixedSelection)
+        XCTAssertEqual(tasks.text, "- [ ] Read the paper\n- [x] Complete the outline\n- [ ] Plain line\n")
+    }
+}
