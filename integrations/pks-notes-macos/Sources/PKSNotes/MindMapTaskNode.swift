@@ -10,10 +10,14 @@ enum MindMapTaskNode {
 
     static func parse(_ title: String) -> Display? {
         for (marker, checked) in [("[ ]", false), ("[x]", true), ("[X]", true)] {
-            if title == marker { return .init(title: "", checked: checked) }
-            if title.hasPrefix(marker + " ") {
-                return .init(title: String(title.dropFirst(marker.count + 1)), checked: checked)
+            guard title.hasPrefix(marker) else { continue }
+            let remainder = title.dropFirst(marker.count)
+            guard !remainder.isEmpty else {
+                return .init(title: "", checked: checked)
             }
+            guard remainder.first == " " || remainder.first == "\t" else { continue }
+            let visibleTitle = remainder.drop(while: { $0 == " " || $0 == "\t" })
+            return .init(title: String(visibleTitle), checked: checked)
         }
         return nil
     }

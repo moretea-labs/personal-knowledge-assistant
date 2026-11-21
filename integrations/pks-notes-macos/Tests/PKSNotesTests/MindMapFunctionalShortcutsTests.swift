@@ -163,6 +163,40 @@ final class MindMapFunctionalShortcutsTests: XCTestCase {
         XCTAssertNil(MindMapTaskNode.toggle(in: markdown, nodeID: 0))
     }
 
+    func testTaskCheckboxAcceptsSpacesAndTabsAfterMarker() throws {
+        let markdown = "# Tasks\n- [ ]\tRead the paper\n- [x]   Complete the outline\n- [X]\t\n"
+        let nodes = MindMapOutline.nodes(in: markdown)
+        let tabTask = try XCTUnwrap(nodes.first { $0.title.hasPrefix("[ ]") })
+        let spacedTask = try XCTUnwrap(nodes.first { $0.title.hasPrefix("[x]") })
+        let emptyTabTask = try XCTUnwrap(nodes.first { $0.title == "[X]" })
+
+        XCTAssertEqual(
+            MindMapTaskNode.parse(tabTask.title),
+            .init(title: "Read the paper", checked: false)
+        )
+        XCTAssertEqual(
+            MindMapTaskNode.parse(spacedTask.title),
+            .init(title: "Complete the outline", checked: true)
+        )
+        XCTAssertEqual(
+            MindMapTaskNode.parse(emptyTabTask.title),
+            .init(title: "", checked: true)
+        )
+        XCTAssertEqual(MindMapTaskNode.titleForEditing(tabTask.title), "Read the paper")
+        XCTAssertEqual(
+            MindMapTaskNode.replacingTitle("Read chapter", in: tabTask.title),
+            "[ ] Read chapter"
+        )
+
+        let checked = try XCTUnwrap(MindMapTaskNode.toggle(in: markdown, nodeID: tabTask.id))
+        XCTAssertTrue(checked.contains("- [x] Read the paper\n"))
+        XCTAssertTrue(checked.contains("- [x]   Complete the outline\n"))
+        XCTAssertTrue(checked.contains("- [X]\t\n"))
+
+        let reopened = try XCTUnwrap(MindMapTaskNode.toggle(in: markdown, nodeID: spacedTask.id))
+        XCTAssertTrue(reopened.contains("- [ ] Complete the outline\n"))
+    }
+
     func testTitleStylingAndCheckboxTogglingRemainComposable() throws {
         let base = "# Tasks\n- [ ] Review [paper](Docs/Research.md)\n"
         let originalID = try XCTUnwrap(MindMapOutline.nodes(in: base).last?.id)
