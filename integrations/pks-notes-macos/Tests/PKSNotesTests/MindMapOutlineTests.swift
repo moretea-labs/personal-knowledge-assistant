@@ -298,6 +298,42 @@ final class MindMapOutlineTests: XCTestCase {
         }
     }
 
+    func testListMarkerWithFiveSpacesStartsIndentedCodeInsteadOfMapNode() {
+        let markdown = """
+        # Root
+        -     [Fake bullet link](/fake-bullet.pdf)
+        10.     [Fake ordered link](/fake-ordered.pdf)
+        - 	  [Fake tab link](/fake-tab.pdf)
+        -    Four-space title
+        - Real
+          [Real link](/real.pdf)
+        """
+
+        let nodes = MindMapOutline.nodes(in: markdown)
+        XCTAssertEqual(nodes.map(\.title), ["Root", "Four-space title", "Real"])
+
+        let codeFlags = MindMapOutline.blockCodeLineFlags(in: markdown)
+        XCTAssertTrue(codeFlags[1])
+        XCTAssertTrue(codeFlags[2])
+        XCTAssertTrue(codeFlags[3])
+        XCTAssertFalse(codeFlags[4])
+
+        let source = markdown as NSString
+        for fakeLabel in ["Fake bullet link", "Fake ordered link", "Fake tab link"] {
+            let offset = source.range(of: fakeLabel).location
+            XCTAssertTrue(MindMapOutline.isInsideCode(in: markdown, at: offset), fakeLabel)
+        }
+
+        let emptyItem = "# Root\n- " + String(repeating: " ", count: 4) + "\n- Real"
+        XCTAssertEqual(MindMapOutline.nodes(in: emptyItem).map(\.title), ["Root", "Real"])
+        XCTAssertFalse(MindMapOutline.blockCodeLineFlags(in: emptyItem)[1])
+
+        XCTAssertEqual(
+            MindMapOutline.linkOccurrences(in: markdown).map { $0.link.target },
+            ["/real.pdf"]
+        )
+    }
+
     func testFencedCodeUsesNestedListContentIndent() {
         let markdown = """
         # Root

@@ -195,6 +195,7 @@ enum MindMapOutline {
             flags[lineIndex] = activeFence != nil
                 || opening != nil
                 || isIndentedCodeLine(line, containerIndent: fenceBaseIndent)
+                || listItemStartsWithIndentedCode(line)
 
             if activeFence != nil {
                 if closesActiveFence { activeFence = nil }
@@ -268,6 +269,23 @@ enum MindMapOutline {
               orderedSeparator == " " || orderedSeparator == "\t"
         else { return nil }
         return .ordered(number: number, delimiter: delimiter)
+    }
+
+    /// CommonMark allows up to four visual columns of padding after a list
+    /// marker before ordinary item text. More padding starts an indented code
+    /// block as the item's first block, so the marker line is not a map node.
+    private static func listItemStartsWithIndentedCode(_ line: String) -> Bool {
+        let leading = line.prefix(while: { $0 == " " || $0 == "\t" })
+        let content = line.dropFirst(leading.count)
+        guard listMarker(in: String(content)) != nil else { return false }
+
+        let markerWidth = content.prefix(while: { !$0.isWhitespace }).count
+        let markerEnd = indentationColumns(in: String(leading)) + markerWidth
+        let padding = content.dropFirst(markerWidth).prefix(while: { $0 == " " || $0 == "\t" })
+        let itemContent = content.dropFirst(markerWidth + padding.count)
+        guard !itemContent.isEmpty else { return false }
+        let paddingEnd = indentationColumns(in: String(padding), startingAt: markerEnd)
+        return paddingEnd - markerEnd > 4
     }
 
     private static func replacingListMarker(in line: String, with prefix: String) -> String? {
@@ -530,6 +548,9 @@ enum MindMapOutline {
                 continue
             }
             if let marker = listMarker(in: trimmed) {
+                // A marker followed by five or more visual columns starts an
+                // indented code block, not a user-visible list-item title.
+                guard !listItemStartsWithIndentedCode(line) else { continue }
                 let title = String(trimmed.dropFirst(marker.markdownPrefix.count))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if !title.isEmpty {
@@ -658,6 +679,7 @@ enum MindMapOutline {
             let opening = openingFence(in: line, baseIndent: fenceBaseIndent)
             let closesActiveFence = activeFence.map { closesFence(line, matching: $0) } ?? false
             let indentedCode = isIndentedCodeLine(line, containerIndent: fenceBaseIndent)
+                || listItemStartsWithIndentedCode(line)
             let lineLength = (line as NSString).length
             let lineEnd = lineStart + lineLength
             let containsOffset = safeOffset >= lineStart && safeOffset <= lineEnd
@@ -1518,6 +1540,7 @@ extension MindMapOutline {
                 continue
             }
             guard !isIndentedCodeLine(line, containerIndent: fenceBaseIndent),
+                  !listItemStartsWithIndentedCode(line),
                   line.contains("["), line.contains("]") else { continue }
             let matches = parsedLinks(in: line, includeImages: includeImages)
             guard !matches.isEmpty else { continue }
