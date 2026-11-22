@@ -330,6 +330,18 @@ enum MindMapDisclosureAccessibility {
     }
 }
 
+enum MindMapNodeAccessibility {
+    static func accessibilityValue(
+        level: Int,
+        isSelected: Bool,
+        language: AppLanguage
+    ) -> String {
+        let levelDescription = "\(language.text("Level")) \(max(1, level))"
+        guard isSelected else { return levelDescription }
+        return "\(language.text("Selected")) · \(levelDescription)"
+    }
+}
+
 enum MindMapDocumentProjectionState {
     static func hasChanged(from previous: URL?, to current: URL?) -> Bool {
         guard let previous, let current else { return previous != current }
@@ -1872,8 +1884,13 @@ struct MindMapCanvas: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .help(visibleTitle)
                     .accessibilityIdentifier("pks-mind-map-node-\(node.id)")
-                    .accessibilityValue(!exporting && selectedID == node.id
-                                        ? language.text("Selected") : "")
+                    .accessibilityValue(
+                        MindMapNodeAccessibility.accessibilityValue(
+                            level: node.depth + 1,
+                            isSelected: highlighted,
+                            language: language
+                        )
+                    )
                     .accessibilityAddTraits(.isButton)
                     .accessibilityAddTraits(MindMapSelectionAccessibility.selectionTraits(isSelected: highlighted))
                     .accessibilityAction {

@@ -106,3 +106,29 @@ extension MindMapVisualStyleTests {
         )
     }
 }
+
+
+extension MindMapVisualStyleTests {
+    func testNodeAccessibilityValueAnnouncesHierarchyAndSelection() {
+        XCTAssertEqual(
+            MindMapNodeAccessibility.accessibilityValue(level: 1, isSelected: false, language: .english),
+            "Level 1"
+        )
+        XCTAssertEqual(
+            MindMapNodeAccessibility.accessibilityValue(level: 3, isSelected: true, language: .english),
+            "Selected · Level 3"
+        )
+        XCTAssertEqual(
+            MindMapNodeAccessibility.accessibilityValue(level: 2, isSelected: false, language: .simplifiedChinese),
+            "层级 2"
+        )
+        XCTAssertEqual(
+            MindMapNodeAccessibility.accessibilityValue(level: 4, isSelected: true, language: .simplifiedChinese),
+            "已选择 · 层级 4"
+        )
+        XCTAssertEqual(
+            MindMapNodeAccessibility.accessibilityValue(level: 0, isSelected: false, language: .english),
+            "Level 1"
+        )
+    }
+}
