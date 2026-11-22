@@ -324,11 +324,29 @@ enum MindMapAppearanceAccessibility {
     }
 }
 
+enum MindMapDocumentProjectionState {
+    static func hasChanged(from previous: URL?, to current: URL?) -> Bool {
+        guard let previous, let current else { return previous != current }
+        return previous.standardizedFileURL != current.standardizedFileURL
+    }
+
+    static func rebasedCollapsedNodeIDs(
+        _ collapsed: Set<Int>,
+        from previousDocument: URL?,
+        to currentDocument: URL?,
+        lineIndexMap: [Int: Int]
+    ) -> Set<Int> {
+        guard !hasChanged(from: previousDocument, to: currentDocument) else { return [] }
+        return Set(collapsed.compactMap { lineIndexMap[$0] })
+    }
+}
+
 /// An editable Markdown-backed mind-map canvas. Markdown remains the only document authority.
 struct MindMapCanvas: View {
     @Environment(\.notesLanguage) private var language
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @EnvironmentObject private var model: NotesModel
     @AppStorage(MindMapVisualStyle.defaultsKey) private var mapStyleID = MindMapVisualStyle.classic.rawValue
     @AppStorage(MindMapLayoutDensity.defaultsKey) private var layoutDensityID = MindMapLayoutDensity.standard.rawValue
     @Binding var source: String
@@ -373,6 +391,8 @@ struct MindMapCanvas: View {
     @State private var mapLayout = MindMapSpatialLayout.layout([])
     @State private var projectionReady = false
     @State private var projectedRevision: UInt64?
+    @State private var projectedDocumentURL: URL?
+    @State private var suppressNextCollapsedReveal = false
     @State private var canMoveUp = false
     @State private var canMoveDown = false
     @State private var canPromote = false
@@ -400,10 +420,26 @@ struct MindMapCanvas: View {
         MindMapLayoutDensity(rawValue: layoutDensityID) ?? .standard
     }
 
-    private var projectionIsCurrent: Bool { projectedRevision == revision }
+    private var projectionBelongsToSelectedDocument: Bool {
+        !MindMapDocumentProjectionState.hasChanged(
+            from: projectedDocumentURL,
+            to: model.selected?.standardizedFileURL
+        )
+    }
+
+    private var projectionIsCurrent: Bool {
+        projectionReady
+            && projectedRevision == revision
+            && projectionBelongsToSelectedDocument
+    }
 
     /// The expensive node and connector tree does not change when the user pans
     /// or magnifies the viewport. Keep it out of those per-frame view updates.
+    private struct ProjectionTaskKey: Hashable {
+        let documentURL: URL?
+        let revision: UInt64
+    }
+
     private struct MapContentKey: Equatable {
         let revision: UInt64
         let layoutVersion: Int
@@ -540,7 +576,7 @@ struct MindMapCanvas: View {
                             )
                             .onTapGesture { selectedID = nil }
 
-                        if !projectionReady {
+                        if !projectionReady || !projectionBelongsToSelectedDocument {
                             VStack(spacing: 10) {
                                 ProgressView().controlSize(.small)
                                 Text(language.text("Preparing mind map…"))
@@ -733,12 +769,19 @@ struct MindMapCanvas: View {
         )) { notification in
             syncSelectedNodeFromMarkdownEditor(notification.object as? NSTextView)
         }
-        .task(id: revision) {
+        .task(id: ProjectionTaskKey(
+            documentURL: model.selected?.standardizedFileURL,
+            revision: revision
+        )) {
+            let documentURL = model.selected?.standardizedFileURL
+            let documentChanged = MindMapDocumentProjectionState.hasChanged(
+                from: projectedDocumentURL, to: documentURL
+            )
             let input = source
             let sourceRevision = revision
-            let previousNodes = nodes
-            let createdSourceSnapshot = createdNodeDraftSnapshot
-            if nodes.isEmpty { projectionReady = false }
+            let previousNodes = documentChanged ? [] : nodes
+            let createdSourceSnapshot = documentChanged ? nil : createdNodeDraftSnapshot
+            if documentChanged || nodes.isEmpty { projectionReady = false }
 
             let parser = Task.detached(priority: .userInitiated) {
                 () -> (nodes: [MindMapNode], lineStartOffsets: [Int],
@@ -772,24 +815,35 @@ struct MindMapCanvas: View {
             } onCancel: {
                 parser.cancel()
             }
-            guard let projection, !Task.isCancelled, revision == sourceRevision else { return }
+            guard let projection, !Task.isCancelled, revision == sourceRevision,
+                  model.selected?.standardizedFileURL == documentURL else { return }
 
             let oldNodeIDs = Set(previousNodes.map(\.id))
             let newNodeIDs = Set(projection.nodes.map(\.id))
             func rebaseNodeID(_ id: Int?) -> Int? {
-                guard let id else { return nil }
+                guard !documentChanged, let id else { return nil }
                 if oldNodeIDs.contains(id) { return projection.lineIndexMap[id] }
                 return newNodeIDs.contains(id) ? id : nil
             }
 
-            let rebasedCollapsed = Set(collapsed.compactMap { projection.lineIndexMap[$0] })
-            let rebasedCreatedNodeID = editingCreatedNodeID.flatMap { projection.createdNodeLineIndexMap[$0] }
-            let isEditingCreatedNode = editingCreatedNodeID != nil
-            let rebasedSelectedID = isEditingCreatedNode && selectedID == editingCreatedNodeID
-                ? rebasedCreatedNodeID : rebaseNodeID(selectedID)
-            let rebasedEditingNodeID = isEditingCreatedNode && editingNodeID == editingCreatedNodeID
-                ? rebasedCreatedNodeID : rebaseNodeID(editingNodeID)
-            let currentDeleteCandidate = branchDeleteCandidate.flatMap { candidate in
+            let rebasedCollapsed = MindMapDocumentProjectionState.rebasedCollapsedNodeIDs(
+                collapsed,
+                from: projectedDocumentURL,
+                to: documentURL,
+                lineIndexMap: projection.lineIndexMap
+            )
+            let rebasedCreatedNodeID = documentChanged
+                ? nil : editingCreatedNodeID.flatMap { projection.createdNodeLineIndexMap[$0] }
+            let isEditingCreatedNode = !documentChanged && editingCreatedNodeID != nil
+            let rebasedSelectedID = documentChanged ? nil : (
+                isEditingCreatedNode && selectedID == editingCreatedNodeID
+                    ? rebasedCreatedNodeID : rebaseNodeID(selectedID)
+            )
+            let rebasedEditingNodeID = documentChanged ? nil : (
+                isEditingCreatedNode && editingNodeID == editingCreatedNodeID
+                    ? rebasedCreatedNodeID : rebaseNodeID(editingNodeID)
+            )
+            let currentDeleteCandidate = documentChanged ? nil : branchDeleteCandidate.flatMap { candidate in
                 candidate.matches(
                     source: input,
                     revision: sourceRevision,
@@ -797,13 +851,14 @@ struct MindMapCanvas: View {
                 ) ? candidate : nil
             }
             let rebasedDropTargetID = rebaseNodeID(dropTargetID)
+            let collapsedChanged = rebasedCollapsed != collapsed
 
             nodes = projection.nodes
             lineStartOffsets = projection.lineStartOffsets
             nodePresentations = projection.presentations
             nodeParentIDs = projection.parentIDs
             projectedRevision = sourceRevision
-            projectionReady = true
+            projectedDocumentURL = documentURL
             selectedID = rebasedSelectedID
             editingNodeID = rebasedEditingNodeID
             editingCreatedNodeID = rebasedCreatedNodeID
@@ -815,16 +870,38 @@ struct MindMapCanvas: View {
             if editingCreatedNodeID == nil {
                 createdNodeDraftSnapshot = nil
             }
-            if rebasedCollapsed != collapsed {
+
+            if documentChanged {
+                showingNodeDetails = false
+                interchangeError = nil
+                zoom = 1
+                viewportOffset = .zero
+                didInitializeViewport = false
+                gestureBaseOffset = nil
+                gestureBaseZoom = nil
+                dragSessionID = UUID()
+                suppressNextCollapsedReveal = collapsedChanged
+            }
+            if collapsedChanged {
                 collapsed = rebasedCollapsed
-            } else {
+            }
+            if documentChanged || !collapsedChanged {
                 rebuildVisibleLayout()
             }
+            if documentChanged {
+                didInitializeViewport = focusOnRoot(viewport: viewportSize)
+            }
+            projectionReady = true
             syncSelectedNodeFromMarkdownEditor(
                 NSApp.keyWindow?.firstResponder as? NSTextView
             )
         }
         .onChange(of: collapsed) { oldValue, newValue in
+            if suppressNextCollapsedReveal {
+                suppressNextCollapsedReveal = false
+                rebuildVisibleLayout()
+                return
+            }
             let changedIDs = oldValue.symmetricDifference(newValue)
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
                 rebuildVisibleLayout()

@@ -77,6 +77,60 @@ final class MindMapDragTargetSafetyTests: XCTestCase {
         XCTAssertEqual(rebased, expected)
     }
 
+    func testCollapsedBranchesRebaseWithinOneDocumentButResetAcrossDocuments() throws {
+        let source = "# Plan\n- A\n  - A1\n- B\n"
+        let inserted = "# Plan\n- A\n  - New\n  - A1\n- B\n"
+        let oldNodes = MindMapOutline.nodes(in: source)
+        let newNodes = MindMapOutline.nodes(in: inserted)
+        let oldA = try XCTUnwrap(oldNodes.first { $0.title == "A" })
+        let oldB = try XCTUnwrap(oldNodes.first { $0.title == "B" })
+        let newA = try XCTUnwrap(newNodes.first { $0.title == "A" })
+        let newB = try XCTUnwrap(newNodes.first { $0.title == "B" })
+        let lineIndexMap = MindMapOutline.lineIndexMap(from: oldNodes, to: newNodes)
+        let firstDocument = URL(fileURLWithPath: "/workspace/first.md")
+        let normalizedFirstDocument = URL(fileURLWithPath: "/workspace/notes/../first.md")
+        let secondDocument = URL(fileURLWithPath: "/workspace/second.md")
+
+        XCTAssertFalse(
+            MindMapDocumentProjectionState.hasChanged(
+                from: firstDocument, to: normalizedFirstDocument
+            ),
+            "Equivalent standardized file URLs represent the same Markdown document."
+        )
+        XCTAssertTrue(MindMapDocumentProjectionState.hasChanged(from: firstDocument, to: secondDocument))
+        XCTAssertTrue(MindMapDocumentProjectionState.hasChanged(from: nil, to: firstDocument))
+        XCTAssertTrue(MindMapDocumentProjectionState.hasChanged(from: firstDocument, to: nil))
+
+        XCTAssertEqual(
+            MindMapDocumentProjectionState.rebasedCollapsedNodeIDs(
+                [oldA.id, oldB.id],
+                from: firstDocument,
+                to: firstDocument,
+                lineIndexMap: lineIndexMap
+            ),
+            Set([newA.id, newB.id]),
+            "Structural edits within the same note must preserve the surviving collapsed branches."
+        )
+        XCTAssertTrue(
+            MindMapDocumentProjectionState.rebasedCollapsedNodeIDs(
+                [oldA.id, oldB.id],
+                from: firstDocument,
+                to: secondDocument,
+                lineIndexMap: lineIndexMap
+            ).isEmpty,
+            "A different Markdown file must start with every branch expanded."
+        )
+        XCTAssertTrue(
+            MindMapDocumentProjectionState.rebasedCollapsedNodeIDs(
+                [oldA.id],
+                from: nil,
+                to: firstDocument,
+                lineIndexMap: lineIndexMap
+            ).isEmpty,
+            "The first projection of a document must not inherit transient state."
+        )
+    }
+
     func testDeletingLeafRebasesCollapsedBranchesAfterItsLine() throws {
         let source = "# Plan\n- A\n  - A1\n- Delete me\n- B\n  - B1\n"
         let nodes = MindMapOutline.nodes(in: source)
