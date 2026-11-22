@@ -79,9 +79,9 @@ final class MindMapVisualStyleTests: XCTestCase {
 
 
 extension MindMapVisualStyleTests {
-    func testAppearanceSelectionExposesNativeAccessibilityTrait() {
-        let selected = MindMapAppearanceAccessibility.selectionTraits(isSelected: true)
-        let unselected = MindMapAppearanceAccessibility.selectionTraits(isSelected: false)
+    func testSelectionExposesNativeAccessibilityTrait() {
+        let selected = MindMapSelectionAccessibility.selectionTraits(isSelected: true)
+        let unselected = MindMapSelectionAccessibility.selectionTraits(isSelected: false)
 
         XCTAssertTrue(selected.contains(.isSelected))
         XCTAssertFalse(unselected.contains(.isSelected))

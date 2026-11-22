@@ -318,7 +318,7 @@ struct MindMapNodeDragPayload: Codable, Transferable, Equatable, Sendable {
     }
 }
 
-enum MindMapAppearanceAccessibility {
+enum MindMapSelectionAccessibility {
     static func selectionTraits(isSelected: Bool) -> AccessibilityTraits {
         isSelected ? .isSelected : []
     }
@@ -1151,7 +1151,7 @@ struct MindMapCanvas: View {
                             }
                         }
                         .accessibilityIdentifier("pks-mind-map-style-\(style.rawValue)")
-                        .accessibilityAddTraits(MindMapAppearanceAccessibility.selectionTraits(isSelected: mapStyle == style))
+                        .accessibilityAddTraits(MindMapSelectionAccessibility.selectionTraits(isSelected: mapStyle == style))
                     }
                     Divider()
                     Text(language.text("Layout Density"))
@@ -1166,7 +1166,7 @@ struct MindMapCanvas: View {
                             }
                         }
                         .accessibilityIdentifier("pks-mind-map-density-\(density.rawValue)")
-                        .accessibilityAddTraits(MindMapAppearanceAccessibility.selectionTraits(isSelected: layoutDensity == density))
+                        .accessibilityAddTraits(MindMapSelectionAccessibility.selectionTraits(isSelected: layoutDensity == density))
                     }
                     Divider()
                     Text(language.text("Appearance applies to all mind maps."))
@@ -1864,6 +1864,7 @@ struct MindMapCanvas: View {
                     .accessibilityValue(!exporting && selectedID == node.id
                                         ? language.text("Selected") : "")
                     .accessibilityAddTraits(.isButton)
+                    .accessibilityAddTraits(MindMapSelectionAccessibility.selectionTraits(isSelected: highlighted))
                     .accessibilityAction {
                         selectNode(node.id)
                     }
