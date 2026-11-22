@@ -418,7 +418,6 @@ final class MindNodePackageTests: XCTestCase {
             "An ordinary note without a map",
             "# First\n# Second\n",
             "# Root\nA paragraph must not silently disappear.\n- Topic",
-            "# Root\n- A\n    - Indentation gap"
         ] {
             XCTAssertThrowsError(try MindNodePackage.exportOutline(
                 invalid, usingTemplate: template, to: destination
@@ -447,6 +446,19 @@ final class MindNodePackageTests: XCTestCase {
         XCTAssertFalse(manager.fileExists(atPath: output.appendingPathComponent("QuickLook").path))
         XCTAssertTrue(manager.fileExists(atPath: resources.appendingPathComponent("user-image.png").path))
         XCTAssertTrue(manager.fileExists(atPath: quickLook.appendingPathComponent("Preview.jpg").path))
+    }
+
+    func testNativeExportPreservesCommonMarkFourSpaceNestedListHierarchy() throws {
+        let (base, template) = try fixture()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let destination = base.appendingPathComponent("FourSpace.mindnode", isDirectory: true)
+        let markdown = "# Root\n- A\n    - Child\n"
+
+        try MindNodePackage.exportOutline(markdown, usingTemplate: template, to: destination)
+        let imported = try MindNodePackage.importOutline(from: destination)
+        let nodes = MindMapOutline.nodes(in: imported)
+        XCTAssertEqual(nodes.map(\.title), ["Root", "A", "Child"])
+        XCTAssertEqual(nodes.map(\.depth), [0, 1, 2])
     }
 
     func testNativeExportRejectsRichMarkdownInsteadOfFlatteningIt() throws {
