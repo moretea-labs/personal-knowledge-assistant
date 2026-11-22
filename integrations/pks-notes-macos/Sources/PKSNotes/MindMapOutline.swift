@@ -175,24 +175,26 @@ enum MindMapOutline {
         let lines = markdown.components(separatedBy: "\n")
         let parsedNodes = nodes(in: markdown, baseIndent: baseIndent)
         var nodeCursor = 0
-        var previousNode: MindMapNode?
+        var listIndentStack: [(contentIndent: Int, depth: Int)] = []
         var activeFence: MarkdownFence?
         var flags = Array(repeating: false, count: lines.count)
 
         for (lineIndex, line) in lines.enumerated() {
             while nodeCursor < parsedNodes.count && parsedNodes[nodeCursor].id < lineIndex {
-                previousNode = parsedNodes[nodeCursor]
+                advanceListContext(
+                    for: parsedNodes[nodeCursor], in: lines, stack: &listIndentStack
+                )
                 nodeCursor += 1
             }
 
-            let fenceBaseIndent = fenceContainerIndent(
-                for: line, after: previousNode, in: lines, baseIndent: baseIndent
+            let fenceBaseIndent = listContainerIndent(
+                for: line, in: listIndentStack, baseIndent: baseIndent
             )
             let opening = openingFence(in: line, baseIndent: fenceBaseIndent)
             let closesActiveFence = activeFence.map { closesFence(line, matching: $0) } ?? false
             flags[lineIndex] = activeFence != nil
                 || opening != nil
-                || isIndentedCodeLine(line, after: previousNode, in: lines, baseIndent: baseIndent)
+                || isIndentedCodeLine(line, containerIndent: fenceBaseIndent)
 
             if activeFence != nil {
                 if closesActiveFence { activeFence = nil }
@@ -279,45 +281,41 @@ enum MindMapOutline {
         listMarker(in: line) != nil
     }
 
-    private static func indentedCodeThreshold(
-        after previousNode: MindMapNode?,
+    private static func advanceListContext(
+        for node: MindMapNode,
         in lines: [String],
-        baseIndent: Int
-    ) -> Int {
-        guard let previousNode, lines.indices.contains(previousNode.id),
-              let continuationIndent = listContinuationIndent(in: lines[previousNode.id])
-        else { return baseIndent + 4 }
-        // CommonMark's indented code threshold is four columns beyond the
-        // list item's actual content start, including multi-digit markers and
-        // any extra padding after the marker (e.g. `10.    item`).
-        return continuationIndent + 4
+        stack: inout [(contentIndent: Int, depth: Int)]
+    ) {
+        guard lines.indices.contains(node.id) else { return }
+        let line = lines[node.id]
+        if atxHeading(in: line) != nil {
+            stack.removeAll(keepingCapacity: true)
+            return
+        }
+        guard isListLine(line) else { return }
+
+        let indent = leadingIndentColumns(in: line)
+        while let parent = stack.last, indent < parent.contentIndent {
+            stack.removeLast()
+        }
+        let contentIndent = listContinuationIndent(in: line) ?? (indent + 2)
+        stack.append((contentIndent: contentIndent, depth: node.depth))
     }
 
-    private static func fenceContainerIndent(
+    private static func listContainerIndent(
         for line: String,
-        after previousNode: MindMapNode?,
-        in lines: [String],
-        baseIndent: Int = 0
+        in stack: [(contentIndent: Int, depth: Int)],
+        baseIndent: Int
     ) -> Int {
-        guard let previousNode, lines.indices.contains(previousNode.id),
-              isListLine(lines[previousNode.id]),
-              let contentIndent = listContinuationIndent(in: lines[previousNode.id]),
-              leadingIndentColumns(in: line) >= contentIndent
-        else { return baseIndent }
-        return contentIndent
+        let indent = leadingIndentColumns(in: line)
+        return stack.last(where: { indent >= $0.contentIndent })?.contentIndent ?? baseIndent
     }
 
     private static func isIndentedCodeLine(
         _ line: String,
-        after previousNode: MindMapNode?,
-        in lines: [String],
-        baseIndent: Int = 0
+        containerIndent: Int
     ) -> Bool {
-        let indent = leadingIndentColumns(in: line)
-        let containerIndent = fenceContainerIndent(
-            for: line, after: previousNode, in: lines, baseIndent: baseIndent
-        )
-        return indent >= containerIndent + 4
+        leadingIndentColumns(in: line) >= containerIndent + 4
     }
 
     /// List bodies move with their node only when every nonempty line is
@@ -510,9 +508,9 @@ enum MindMapOutline {
             blankLineSinceListItem = false
 
             let indent = leadingIndentColumns(in: line)
-            let fenceBaseIndent = listIndentStack.last.map {
-                indent >= $0.contentIndent ? $0.contentIndent : baseIndent
-            } ?? baseIndent
+            let fenceBaseIndent = listContainerIndent(
+                for: line, in: listIndentStack, baseIndent: baseIndent
+            )
             if let opening = openingFence(in: line, baseIndent: fenceBaseIndent) {
                 while let parent = listIndentStack.last, indent < parent.contentIndent {
                     listIndentStack.removeLast()
@@ -520,7 +518,7 @@ enum MindMapOutline {
                 activeFence = opening
                 continue
             }
-            if isIndentedCodeLine(line, after: result.last, in: lines, baseIndent: baseIndent) {
+            if isIndentedCodeLine(line, containerIndent: fenceBaseIndent) {
                 continue
             }
             if let heading = atxHeading(in: line) {
@@ -643,21 +641,23 @@ enum MindMapOutline {
         let lines = markdown.components(separatedBy: "\n")
         let parsedNodes = nodes(in: markdown)
         var nodeCursor = 0
-        var previousNode: MindMapNode?
+        var listIndentStack: [(contentIndent: Int, depth: Int)] = []
         var lineStart = 0
         var activeFence: MarkdownFence?
 
         for (lineIndex, line) in lines.enumerated() {
             while nodeCursor < parsedNodes.count && parsedNodes[nodeCursor].id < lineIndex {
-                previousNode = parsedNodes[nodeCursor]
+                advanceListContext(
+                    for: parsedNodes[nodeCursor], in: lines, stack: &listIndentStack
+                )
                 nodeCursor += 1
             }
-            let fenceBaseIndent = fenceContainerIndent(
-                for: line, after: previousNode, in: lines
+            let fenceBaseIndent = listContainerIndent(
+                for: line, in: listIndentStack, baseIndent: 0
             )
             let opening = openingFence(in: line, baseIndent: fenceBaseIndent)
             let closesActiveFence = activeFence.map { closesFence(line, matching: $0) } ?? false
-            let indentedCode = isIndentedCodeLine(line, after: previousNode, in: lines)
+            let indentedCode = isIndentedCodeLine(line, containerIndent: fenceBaseIndent)
             let lineLength = (line as NSString).length
             let lineEnd = lineStart + lineLength
             let containsOffset = safeOffset >= lineStart && safeOffset <= lineEnd
@@ -1495,27 +1495,29 @@ extension MindMapOutline {
         let lines = markdown.components(separatedBy: "\n")
         let parsedNodes = nodes(in: markdown, baseIndent: baseIndent)
         var nodeCursor = 0
-        var previousNode: MindMapNode?
+        var listIndentStack: [(contentIndent: Int, depth: Int)] = []
         var result: [MarkdownLinkOccurrence] = []
         var activeFence: MarkdownFence?
         for (lineIndex, line) in lines.enumerated() {
             if lineIndex.isMultiple(of: 128), Task.isCancelled { return result }
             while nodeCursor < parsedNodes.count && parsedNodes[nodeCursor].id < lineIndex {
-                previousNode = parsedNodes[nodeCursor]
+                advanceListContext(
+                    for: parsedNodes[nodeCursor], in: lines, stack: &listIndentStack
+                )
                 nodeCursor += 1
             }
             if let fence = activeFence {
                 if closesFence(line, matching: fence) { activeFence = nil }
                 continue
             }
-            let fenceBaseIndent = fenceContainerIndent(
-                for: line, after: previousNode, in: lines, baseIndent: baseIndent
+            let fenceBaseIndent = listContainerIndent(
+                for: line, in: listIndentStack, baseIndent: baseIndent
             )
             if let opening = openingFence(in: line, baseIndent: fenceBaseIndent) {
                 activeFence = opening
                 continue
             }
-            guard !isIndentedCodeLine(line, after: previousNode, in: lines, baseIndent: baseIndent),
+            guard !isIndentedCodeLine(line, containerIndent: fenceBaseIndent),
                   line.contains("["), line.contains("]") else { continue }
             let matches = parsedLinks(in: line, includeImages: includeImages)
             guard !matches.isEmpty else { continue }

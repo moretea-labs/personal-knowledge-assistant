@@ -1403,3 +1403,45 @@ extension MindMapOutlineTests {
         )
     }
 }
+
+
+extension MindMapOutlineTests {
+    func testParentLevelFenceAfterNestedChildDoesNotHideParentSibling() {
+        let markdown = """
+        # Root
+        - Outer
+          - Parent
+            - Child
+            ```
+            - Fake parent code node
+            [Fake parent code link](/fake-parent.pdf)
+            ```
+            - Parent sibling
+              [Parent sibling link](/parent-sibling.pdf)
+          - Outer sibling
+        - End
+        """
+        let nodes = MindMapOutline.nodes(in: markdown)
+
+        XCTAssertEqual(
+            nodes.map(\.title),
+            ["Root", "Outer", "Parent", "Child", "Parent sibling", "Outer sibling", "End"]
+        )
+
+        let flags = MindMapOutline.blockCodeLineFlags(in: markdown)
+        XCTAssertTrue(flags[5])
+        XCTAssertTrue(flags[6])
+        XCTAssertTrue(flags[7])
+        XCTAssertFalse(flags[8])
+        XCTAssertFalse(flags[9])
+
+        let fakeOffset = (markdown as NSString).range(of: "Fake parent code link").location
+        let realOffset = (markdown as NSString).range(of: "Parent sibling link").location
+        XCTAssertTrue(MindMapOutline.isInsideCode(in: markdown, at: fakeOffset))
+        XCTAssertFalse(MindMapOutline.isInsideCode(in: markdown, at: realOffset))
+        XCTAssertEqual(
+            MindMapOutline.linkOccurrences(in: markdown).map { $0.link.target },
+            ["/parent-sibling.pdf"]
+        )
+    }
+}
