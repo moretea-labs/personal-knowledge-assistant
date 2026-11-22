@@ -334,6 +334,20 @@ final class MindMapOutlineTests: XCTestCase {
         )
     }
 
+    func testCRLFEmptyListMarkersWithWidePaddingAreNotIndentedCode() {
+        for markerLine in ["-     ", "10.     ", "- \t  "] {
+            let markdown = "# Root\r\n\(markerLine)\r\n- Real\r\n"
+            XCTAssertEqual(MindMapOutline.nodes(in: markdown).map(\.title), ["Root", "Real"], markerLine)
+            XCTAssertFalse(MindMapOutline.blockCodeLineFlags(in: markdown)[1], markerLine)
+
+            let markerOffset = (markdown as NSString).range(of: markerLine).location
+            XCTAssertFalse(
+                MindMapOutline.isInsideCode(in: markdown, at: markerOffset + 2),
+                markerLine
+            )
+        }
+    }
+
     func testFencedCodeUsesNestedListContentIndent() {
         let markdown = """
         # Root

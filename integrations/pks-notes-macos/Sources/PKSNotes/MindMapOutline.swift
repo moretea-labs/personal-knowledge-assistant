@@ -283,7 +283,7 @@ enum MindMapOutline {
         let markerEnd = indentationColumns(in: String(leading)) + markerWidth
         let padding = content.dropFirst(markerWidth).prefix(while: { $0 == " " || $0 == "\t" })
         let itemContent = content.dropFirst(markerWidth + padding.count)
-        guard !itemContent.isEmpty else { return false }
+        guard itemContent.contains(where: { !$0.isNewline }) else { return false }
         let paddingEnd = indentationColumns(in: String(padding), startingAt: markerEnd)
         return paddingEnd - markerEnd > 4
     }
