@@ -277,6 +277,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Collapse / expand branch": "折叠 / 展开分支",
         "Expand Branch": "展开分支",
         "Collapse Branch": "折叠分支",
+        "Expanded": "已展开",
+        "Collapsed": "已折叠",
         "Clear selection": "取消选择",
         "Shortcuts work when the map is focused, not while editing a node title.": "画布获得焦点时可使用快捷键；编辑节点名称时使用正常文本输入。",
         "OK": "确定",

@@ -86,4 +86,23 @@ extension MindMapVisualStyleTests {
         XCTAssertTrue(selected.contains(.isSelected))
         XCTAssertFalse(unselected.contains(.isSelected))
     }
+
+    func testExpandedDisclosureAnnouncesLocalizedState() {
+        XCTAssertEqual(
+            MindMapDisclosureAccessibility.accessibilityValue(isExpanded: true, language: .english),
+            "Expanded"
+        )
+        XCTAssertEqual(
+            MindMapDisclosureAccessibility.accessibilityValue(isExpanded: false, language: .english),
+            "Collapsed"
+        )
+        XCTAssertEqual(
+            MindMapDisclosureAccessibility.accessibilityValue(isExpanded: true, language: .simplifiedChinese),
+            "已展开"
+        )
+        XCTAssertEqual(
+            MindMapDisclosureAccessibility.accessibilityValue(isExpanded: false, language: .simplifiedChinese),
+            "已折叠"
+        )
+    }
 }

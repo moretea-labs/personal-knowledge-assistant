@@ -324,6 +324,12 @@ enum MindMapSelectionAccessibility {
     }
 }
 
+enum MindMapDisclosureAccessibility {
+    static func accessibilityValue(isExpanded: Bool, language: AppLanguage) -> String {
+        language.text(isExpanded ? "Expanded" : "Collapsed")
+    }
+}
+
 enum MindMapDocumentProjectionState {
     static func hasChanged(from previous: URL?, to current: URL?) -> Bool {
         guard let previous, let current else { return previous != current }
@@ -1808,6 +1814,11 @@ struct MindMapCanvas: View {
                     .help(disclosureTitle)
                     .accessibilityIdentifier("pks-mind-map-disclosure-\(node.id)")
                     .accessibilityLabel(disclosureTitle)
+                    .accessibilityValue(
+                        MindMapDisclosureAccessibility.accessibilityValue(
+                            isExpanded: !collapsed.contains(node.id), language: language
+                        )
+                    )
                 }
             } else {
                 Color.clear.frame(width: 24, height: 24)
