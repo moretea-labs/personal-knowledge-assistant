@@ -1,3 +1,9 @@
+mod embedded;
+
+pub use embedded::{
+    EmbeddedDocumentRequest, EmbeddedIndexResponse, FinalizeSourceRequest, FinalizeSourceResponse,
+};
+
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
