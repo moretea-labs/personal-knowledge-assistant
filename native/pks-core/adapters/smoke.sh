@@ -25,28 +25,37 @@ env "CARGO_TARGET_${target_env}_RUSTFLAGS=-C link-arg=-mmacosx-version-min=14.0"
 lib="$CARGO_TARGET_DIR/$target_triple/release/libpks_core.a"
 test -f "$lib"
 
-sqlite3 "$tmp/golden.sqlite" <<'SQL'
-CREATE TABLE documents(
-  id TEXT PRIMARY KEY,title TEXT,uri TEXT,source_type TEXT,
-  document_type TEXT,modified_at TEXT,index_status TEXT,deleted_at TEXT
-);
-CREATE TABLE chunks(
-  id TEXT PRIMARY KEY,document_id TEXT,text TEXT,page INTEGER,heading_path TEXT,
-  embedding_json TEXT,embedding_provider TEXT,embedding_dim INTEGER
-);
-CREATE VIRTUAL TABLE chunks_fts USING fts5(
-  chunk_id UNINDEXED,document_id UNINDEXED,title,text
-);
-INSERT INTO documents VALUES(
-  'alpha','Alpha','/tmp/Alpha.md','local','note','2026-11-23','indexed',NULL
-);
-INSERT INTO chunks(id,document_id,text) VALUES(
-  'alpha-1','alpha','alpha searchable body'
-);
-INSERT INTO chunks_fts VALUES(
-  'alpha-1','alpha','Alpha','alpha searchable body'
-);
-SQL
+cat > "$tmp/index-smoke.c" <<'C'
+#include "pks_core.h"
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 64;
+
+    PksHandle *handle = pks_open_embedded(argv[1]);
+    if (!handle) return 65;
+
+    const char *document =
+        "{\"contractVersion\":1,"
+        "\"sourceId\":\"smoke\","
+        "\"sourceType\":\"local\","
+        "\"sourceName\":\"Smoke\","
+        "\"rootUri\":\"/tmp\","
+        "\"uri\":\"/tmp/Alpha.md\","
+        "\"title\":\"Alpha\","
+        "\"text\":\"alpha searchable body\","
+        "\"documentType\":\"note\"}";
+
+    char *result = pks_index_document_json(handle, document);
+    if (!result) {
+        pks_close(handle);
+        return 66;
+    }
+
+    pks_string_free(result);
+    pks_close(handle);
+    return 0;
+}
+C
 
 cat > "$tmp/main.swift" <<'SWIFT'
 import Foundation
@@ -68,6 +77,7 @@ guard object["contractVersion"] as? Int == 1,
 SWIFT
 
 {
+  clang -arch "$arch" -mmacosx-version-min=14.0     -I include "$tmp/index-smoke.c" "$lib" -o "$tmp/index-smoke"
   clang -bundle -undefined dynamic_lookup -mmacosx-version-min=14.0     -I "$node_include" adapters/node.c "$lib" -o "$tmp/pks.node"
   swiftc -target "$swift_target" -I adapters     adapters/PKSNative.swift "$tmp/main.swift" "$lib"     -o "$tmp/swift-smoke"
 } 2> "$tmp/link.log"
@@ -78,6 +88,8 @@ if grep -q "built for newer 'macOS' version" "$tmp/link.log"; then
   exit 1
 fi
 cat "$tmp/link.log" >&2
+
+"$tmp/index-smoke" "$tmp/golden.sqlite"
 
 node -e '
 const addon = require(process.argv[1]);
@@ -93,7 +105,7 @@ if (!response.results.some(result => result.title === "Alpha")) {
 
 "$tmp/swift-smoke" "$tmp/golden.sqlite"
 
-for binary in "$tmp/pks.node" "$tmp/swift-smoke"; do
+for binary in "$tmp/index-smoke" "$tmp/pks.node" "$tmp/swift-smoke"; do
   build_info="$(xcrun vtool -show-build "$binary")"
   echo "$build_info"
   grep -q "minos 14.0" <<<"$build_info" || {
