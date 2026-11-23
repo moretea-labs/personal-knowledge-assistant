@@ -108,6 +108,37 @@ if (!syncResponse.results.some(result => result.title === "Alpha")) {
   if (JSON.stringify(asyncResponse) !== JSON.stringify(syncResponse)) {
     throw new Error("Node async adapter diverged from sync result");
   }
+
+  if (typeof addon.openHandle !== "function" ||
+      typeof addon.searchHandle !== "function" ||
+      typeof addon.searchHandleAsync !== "function") {
+    throw new Error("persistent handle API missing");
+  }
+  const handle = addon.openHandle(db);
+  const handleSync = JSON.parse(addon.searchHandle(handle, request));
+  const handleAsync = JSON.parse(await addon.searchHandleAsync(handle, request));
+  if (JSON.stringify(handleSync) !== JSON.stringify(syncResponse) ||
+      JSON.stringify(handleAsync) !== JSON.stringify(syncResponse)) {
+    throw new Error("persistent handle adapter diverged from legacy result");
+  }
+
+  const parallel = await Promise.all(
+    Array.from({length: 4}, () => addon.searchHandleAsync(handle, request))
+  );
+  for (const raw of parallel) {
+    if (JSON.stringify(JSON.parse(raw)) !== JSON.stringify(syncResponse)) {
+      throw new Error("parallel persistent handle search diverged");
+    }
+  }
+
+  const semanticRequest = JSON.stringify({
+    contractVersion: 1, query: "alpha searchable body", mode: "semantic", limit: 5
+  });
+  const semanticCold = JSON.parse(await addon.searchHandleAsync(handle, semanticRequest));
+  const semanticWarm = JSON.parse(await addon.searchHandleAsync(handle, semanticRequest));
+  if (JSON.stringify(semanticCold) !== JSON.stringify(semanticWarm)) {
+    throw new Error("persistent semantic cache changed search results");
+  }
 })().catch(error => {
   console.error(error);
   process.exit(1);
