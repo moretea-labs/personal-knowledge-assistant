@@ -1,0 +1,4 @@
+module PKSCore {
+    header "../include/pks_core.h"
+    export *
+}
