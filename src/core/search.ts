@@ -25,45 +25,66 @@ export class SearchEngine {
     if ((opts.mode === undefined || opts.mode === 'auto') && isLocatorQuery(query)) return metadata.slice(0, limit);
     const fts = this.fts(query, Math.max(limit * 3, 20), opts);
     if ((opts.mode === undefined || opts.mode === 'auto') && fts.length >= limit && metadata.length === 0) return fts.slice(0, limit);
-    // A single-term query with enough literal FTS matches should not decode
-    // thousands of vectors. Natural-language and low-recall queries still use
-    // semantic evidence; explicit mode=semantic always computes it.
-    const sufficientLiteral = (opts.mode === undefined || opts.mode === 'auto')
-      && !/\s/u.test(query.trim()) && fts.length >= limit;
-    const sem = (sufficientLiteral || opts.mode === 'fts' || query.trim().length < 2)
-      ? [] : await this.semantic(query, Math.max(limit * 3, 20), opts);
+    // Auto is deterministic catalog + full-text search. Hash-ngram similarity
+    // remains explicit (mode=semantic) or evidence-gated (mode=related).
     const map = new Map<string,SearchResult>();
-    for (const r of [...fts, ...sem]) {
+    for (const r of fts) {
       const k = r.chunkId || r.documentId;
       const old = map.get(k);
       if (!old) map.set(k, r);
       else {
-        old.score = Math.max(old.score, r.score) + Math.min(old.score, r.score) * 0.35;
+        old.score = Math.max(old.score, r.score);
         old.reasons = [...new Set([...old.reasons, ...r.reasons])];
         if (!old.snippet && r.snippet) old.snippet = r.snippet;
       }
     }
-    const representedDocuments = new Set([...map.values()].map(r=>r.documentId));
-    for (const r of metadata) {
-      if (representedDocuments.has(r.documentId)) continue;
-      map.set(`document:${r.documentId}`, r);
+    const firstChunkByDocument = new Map<string,string>();
+    for (const r of fts) {
+      if (r.chunkId && !firstChunkByDocument.has(r.documentId)) {
+        firstChunkByDocument.set(r.documentId, r.chunkId);
+      }
     }
-    return [...map.values()].sort((a,b)=>b.score-a.score).slice(0, limit);
+    for (const r of metadata) {
+      const key = firstChunkByDocument.get(r.documentId);
+      const direct = r.reasons.includes('verified_alias') || r.score >= 0.88;
+      if (key && direct) {
+        const old = map.get(key)!;
+        map.set(key, {
+          ...old,
+          score: Math.max(old.score, r.score),
+          reasons: [...new Set([...r.reasons, ...old.reasons])]
+        });
+      } else if (!key) {
+        map.set(`document:${r.documentId}`, r);
+      }
+    }
+    const evidenceRank = (r:SearchResult) => {
+      const direct = r.reasons.includes('verified_alias')
+        || ((r.reasons.includes('metadata') || r.reasons.includes('metadata_deferred')) && r.score >= 0.88);
+      if (direct) return 0;
+      if (r.reasons.includes('full_text') || r.reasons.includes('literal_substring')) return 1;
+      return 2;
+    };
+    return [...map.values()].sort((a,b) => {
+      const evidence = evidenceRank(a) - evidenceRank(b);
+      return evidence || b.score - a.score;
+    }).slice(0, limit);
   }
 
   /** Related notes require multiple concrete content signals. Hash-vector proximity
    * alone (or one shared filename word) is not evidence of a relationship. */
   private async related(query:string,limit:number,opts:any):Promise<SearchResult[]> {
     const keywords=relatedKeywords(query);
-    if(keywords.length<2)return[];
+    const evidenceTerms=relatedEvidenceTerms(query);
+    if(keywords.length<2||evidenceTerms.length<2)return[];
     const candidates=[...this.fts(keywords.slice(0,12).join(' '),Math.max(40,limit*6),opts),
       ...await this.semantic(query,Math.max(40,limit*6),opts)];
     const ranked=new Map<string,SearchResult>();
     for(const hit of candidates){
       if(opts.excludeUri&&hit.uri===opts.excludeUri)continue;
-      const evidence=String(hit.title+' '+(hit.snippet||'')).normalize('NFKC').toLocaleLowerCase();
-      const matches=keywords.filter(word=>evidence.includes(word)).length;
-      const coverage=matches/keywords.length;
+      const evidence=String(hit.snippet||'').normalize('NFKC').toLocaleLowerCase();
+      const matches=evidenceTerms.filter(word=>evidence.includes(word)).length;
+      const coverage=matches/evidenceTerms.length;
       // Two independent signals and substantial coverage, not a fixed top-N filler.
       if(matches<2||coverage<0.24)continue;
       const similarity=hit.reasons.includes('semantic_hash')?hit.score/0.82:0;
@@ -165,16 +186,29 @@ export class SearchEngine {
 
   private fts(query:string, limit:number, opts:any):SearchResult[] {
     const w=this.where(opts);
-    const safe=query.replace(/["']/g,' ').trim().split(/\s+/).filter(Boolean).map((x:string)=>`"${x.replace(/"/g,'')}"`).join(' OR ');
-    if(!safe)return[];
+    const tokens=query.normalize('NFKC').toLocaleLowerCase().match(/\p{Script=Han}+|[\p{L}\p{N}]+/gu)||[];
+    const safe=tokens.map((x:string)=>`"${x.replace(/["']/g,'')}"`).join(' OR ');
+    const coverageTerms=relatedKeywords(query);
+    if(!safe||!coverageTerms.length)return[];
+    const minimumCoverage=coverageTerms.length===1?1:opts.mode==='related'
+      ?2:Math.max(2,Math.ceil(coverageTerms.length*0.5));
     try {
-      const rows=this.db.db.prepare(`SELECT d.id document_id,c.id chunk_id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,c.text,c.page,c.heading_path,bm25(chunks_fts) rank FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.chunk_id JOIN documents d ON d.id=c.document_id WHERE chunks_fts MATCH ? AND ${w.sql} ORDER BY rank LIMIT ?`).all(safe,...w.args,limit) as any[];
+      const candidateLimit=Math.min(200,Math.max(limit*3,limit));
+      const rows=this.db.db.prepare(`SELECT d.id document_id,c.id chunk_id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,c.text,c.page,c.heading_path,bm25(chunks_fts) rank FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.chunk_id JOIN documents d ON d.id=c.document_id WHERE chunks_fts MATCH ? AND ${w.sql} ORDER BY rank LIMIT ?`).all(safe,...w.args,candidateLimit) as any[];
+      const coverageByChunk=new Map<string,string>(rows.map((r:any)=>[r.chunk_id,String(r.text)]));
       const results:SearchResult[]=rows.map((r,i)=>({documentId:r.document_id,chunkId:r.chunk_id,title:r.title,uri:r.uri,sourceType:r.source_type,documentType:r.document_type,modifiedAt:r.modified_at,snippet:snippet(r.text,query),score:1/(1+i*0.08),reasons:['full_text'],page:r.page??undefined,headingPath:r.heading_path??undefined}));
+      const rankResults=()=>results.map((result,order)=>{
+        const evidence=(coverageByChunk.get(result.chunkId||'')||String(result.snippet||'')).normalize('NFKC').toLocaleLowerCase();
+        const matches=coverageTerms.filter(term=>evidence.includes(term)).length;
+        return {result,order,matches};
+      }).filter(candidate=>candidate.matches>=minimumCoverage)
+        .sort((a,b)=>b.matches-a.matches||a.order-b.order);
+      let ranked=rankResults();
       // unicode61 groups adjacent Han characters into longer tokens, so a
       // literal short Chinese substring can be absent from FTS5 results.
       // Run a bounded exact-content fallback only when needed; no extra index.
       const literal=query.trim().normalize('NFKC');
-      if(results.length<limit&&/^[\p{Script=Han}]{2,8}$/u.test(literal)){
+      if(ranked.length<limit&&/^[\p{Script=Han}]{2,8}$/u.test(literal)){
         const seen=new Set(rows.map(r=>r.chunk_id));
         const extra=this.db.db.prepare(`SELECT d.id document_id,c.id chunk_id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,c.text,c.page,c.heading_path
           FROM chunks c JOIN documents d ON d.id=c.document_id
@@ -183,14 +217,16 @@ export class SearchEngine {
         for(const r of extra){
           if(seen.has(r.chunk_id))continue;
           seen.add(r.chunk_id);
+          coverageByChunk.set(r.chunk_id,String(r.text));
           results.push({documentId:r.document_id,chunkId:r.chunk_id,title:r.title,uri:r.uri,
             sourceType:r.source_type,documentType:r.document_type,modifiedAt:r.modified_at,
             snippet:snippet(r.text,literal),score:0.82/(1+results.length*0.08),
             reasons:['literal_substring'],page:r.page??undefined,headingPath:r.heading_path??undefined});
-          if(results.length>=limit)break;
+
         }
       }
-      return results;
+      ranked=rankResults();
+      return ranked.slice(0,limit).map((candidate,index)=>({...candidate.result,score:1/(1+index*0.08)}));
     } catch { return []; }
   }
 
@@ -245,23 +281,37 @@ export class SearchEngine {
   }
 }
 
-// Use concrete language-bearing terms, never generic UI vocabulary, to confirm
-// related-note evidence. Chinese bigrams retain overlap without relying on FTS's
-// word segmentation; this is a derived ranking rule, not another search index.
+// Use meaningful language-bearing terms for FTS candidate recall. Split Han runs
+// into overlapping bigrams because SQLite unicode61 treats adjacent Han as one token;
+// these bigrams are a query-time fallback, not a second index.
 function relatedKeywords(query:string):string[]{
-  const ignore=new Set(['notes','note','markdown','about','with','from','this','that','your','the','and','for','are','was','into','page','笔记','内容','相关','关于','我们','这个','以及']);
-  const words=query.normalize('NFKC').toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu)||[];
+  const ignore=new Set(['my','the','and','about','with','from','this','that','your','for','are','was','were','into','page','notes','note','markdown','file','files','folder','folders','document','documents','search','content','pdf','path','paths','location','where','find','locate','please','help','all','every','is','a','an','to','of','in','on','at','by','as','or','but','how','what','when','which','who','why','can','could','should','would','it','you','we','our','i','me','app','apps','ui','ux','笔记','内容','相关','关于','我们','这个','以及']);
+  const cleaned=query.normalize('NFKC').toLocaleLowerCase()
+    .replace(/(?:请帮我|帮我|找一下|找找|找|我的|所有|全部|文件夹|文件|资料|笔记|相关|搜索|内容|文档|这个|那个|一个|在哪里|在哪儿|在哪|路径|位置|的|以及|与)/gu,' ');
+  const words=cleaned.match(/\p{Script=Han}+|[\p{L}\p{N}]+/gu)||[];
   const result:string[]=[];
   const seen=new Set<string>();
   const add=(word:string)=>{if(!ignore.has(word)&&!seen.has(word)){seen.add(word);result.push(word);}};
   for(const word of words){
-    if(/[\p{Script=Han}]/u.test(word)){
+    if(/\p{Script=Han}/u.test(word)){
       const chars=Array.from(word);
       for(let i=0;i+1<chars.length;i++)add(chars[i]+chars[i+1]);
-    }else if(word.length>=4){add(word);}
+    }else if(word.length>=2){add(word);}
     if(result.length>=24)break;
   }
   return result.slice(0,24);
+}
+
+// Related evidence is stricter than candidate recall: count actual word segments,
+// not overlapping Han bigrams from one phrase as multiple independent signals.
+function relatedEvidenceTerms(query:string):string[]{
+  const keywords=new Set(relatedKeywords(query));
+  const segmenter=new Intl.Segmenter('zh-CN',{granularity:'word'});
+  const segments=[...segmenter.segment(query.normalize('NFKC').toLocaleLowerCase())];
+  return [...new Set(segments
+    .filter(part=>part.isWordLike&&part.segment.length>=2)
+    .map(part=>part.segment)
+    .filter(term=>keywords.has(term)))].slice(0,24);
 }
 
 // Recency/ordering words alone do not imply a health-structured query.

@@ -3408,25 +3408,26 @@ struct NotesWindow: View {
         }
         guard mode == .edit || mode == .split else { return }
 
+        // Resolve the owning document window before the sheet dismisses. After
+        // dismissal, keyWindow/mainWindow can point at another Leafspan window.
+        let documentWindow = NSApp.keyWindow?.sheetParent ?? NSApp.keyWindow ?? NSApp.mainWindow
         Task { @MainActor in
             editorFocused = true
             // In Split the editor is already mounted; in Edit it may have just
             // replaced the preview after another navigation action.
             try? await Task.sleep(for: .milliseconds(40))
-            // A sheet can remain the key window when the outline selection closes.
-            // Target the owning document window rather than searching the sheet's
-            // content for a Markdown editor that it does not contain.
-            let documentWindow = NSApp.keyWindow?.sheetParent ?? NSApp.mainWindow ?? NSApp.keyWindow
             guard model.selected?.standardizedFileURL == targetNote,
                   !model.loadingNote, model.externalBody == nil,
                   mode == .edit || mode == .split,
                   let documentWindow,
+                  documentWindow.isVisible,
                   let textView = markdownTextView(in: documentWindow.contentView),
                   let location = MarkdownOutline.currentUTF16Offset(
                     for: heading, in: textView.string
                   ) else {
+                // Keep the current outline available for retry. A transient
+                // responder/window lookup failure must not disable navigation.
                 showingOutline = false
-                outlineHeadings = []
                 return
             }
             documentWindow.makeFirstResponder(textView)

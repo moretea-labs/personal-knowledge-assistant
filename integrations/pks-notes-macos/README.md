@@ -66,10 +66,12 @@ For native GUI acceptance, use only the installed `~/Applications/Leafspan.app` 
 
 The canonical folder is `~/Library/Mobile Documents/com~apple~CloudDocs/学习笔记管理`. No source files are imported, relocated or copied. iCloud Drive handles synchronization. Do not bypass the native folder picker by writing the folder path to app preferences: that does not grant macOS permissions.
 
-The app bundle copies `Resources/AppIcon.icns` into `Contents/Resources` and declares `CFBundleIconFile=AppIcon`; the icon generator uses native AppKit/ImageIO to derive every size from `Resources/LeafspanIcon-master.png`. The 2026-11-12 design combines an ivory tile and white note page with a muted apricot folded border and three graphite writing strokes, retaining a calm, light palette. See [icon verification](verification/README.md).
+The app bundle copies `Resources/AppIcon.icns` into `Contents/Resources` and declares `CFBundleIconFile=AppIcon`; the icon generator uses native AppKit/ImageIO to derive every size from `Resources/LeafspanIcon-master.png`. The 2026-11-12 design combines a full-bleed ivory background and white note page with a muted apricot folded border and three graphite writing strokes, retaining a calm, light palette. See [icon verification](verification/README.md).
 
 ## Verification
 
 The Swift tests cover workspace-local filename/body search without a service, optional cross-source results, cancellation, Chinese decoding, mixed-file browsing, PDF navigation, autosave/external-write safety, traversal protection and Markdown links. The optional local related-knowledge service is never required for workspace Search. Native GUI acceptance must still be verified separately.
 
 The app does not implement remote access or its own synchronization. Large or not-yet-downloaded iCloud items can still take time to open. Avoid simultaneous edits from multiple applications.
+
+Apple icon source requirement: an opaque full-bleed square, with no pre-rendered outer rounded tile, transparent margin or perimeter border. The system applies the outer mask. The internal apricot notebook border remains foreground artwork. `verify-app-icon.py` rejects non-square or alpha-masked production PNGs.

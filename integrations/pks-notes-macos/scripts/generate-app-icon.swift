@@ -4,8 +4,9 @@ import Foundation
 import ImageIO
 import CryptoKit
 
-// Leafspan's 2026-11-12 icon: an ivory tile, muted apricot folded cover and
-// a legible note page. Derive every shipped size from this one master.
+// Export a full-bleed opaque square. Apple owns the OUTER mask/corner radius;
+// never add a rounded tile, transparent margin, border or canvas shadow here.
+// The inner apricot notebook shape remains part of the selected artwork.
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
 let resources = root.appendingPathComponent("Resources", isDirectory: true)
 let master = resources.appendingPathComponent("LeafspanIcon-master.png")
@@ -25,21 +26,40 @@ guard let source = CGImageSourceCreateWithData(masterData as CFData, nil),
       let artwork = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
     fatalError("Cannot read Leafspan icon master: \(master.path)")
 }
+guard artwork.width == artwork.height else {
+    fputs("Apple app icon source must be a full-bleed square.\n", stderr)
+    exit(1)
+}
+let byteCount = artwork.width * artwork.height * 4
+let pixels = UnsafeMutablePointer<UInt8>.allocate(capacity: byteCount)
+defer { pixels.deallocate() }
+pixels.initialize(repeating: 0, count: byteCount)
+guard let opacityCheck = CGContext(
+    data: pixels, width: artwork.width, height: artwork.height,
+    bitsPerComponent: 8, bytesPerRow: artwork.width * 4,
+    space: CGColorSpaceCreateDeviceRGB(),
+    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+) else { fatalError("Cannot validate app icon opacity") }
+opacityCheck.draw(artwork, in: CGRect(x: 0, y: 0, width: artwork.width, height: artwork.height))
+guard stride(from: 3, to: byteCount, by: 4).allSatisfy({ pixels[$0] == 255 }) else {
+    fputs("Apple app icon source must be fully opaque, including all four corners. Do not bake in a rounded mask or transparent margin.\n", stderr)
+    exit(1)
+}
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 for (points, scales) in [(16, [1, 2]), (32, [1, 2]), (128, [1, 2]), (256, [1, 2]), (512, [1, 2])] {
     for scale in scales {
         let pixels = points * scale
-        guard let bitmap = NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
-            isPlanar: false, colorSpaceName: .deviceRGB,
-            bytesPerRow: 0, bitsPerPixel: 0
-        ), let graphics = NSGraphicsContext(bitmapImageRep: bitmap) else {
+        guard let context = CGContext(
+            data: nil, width: pixels, height: pixels, bitsPerComponent: 8,
+            bytesPerRow: pixels * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        ) else {
             fatalError("Cannot allocate icon bitmap \(pixels)")
         }
-        graphics.cgContext.interpolationQuality = .high
-        graphics.cgContext.draw(artwork, in: CGRect(x: 0, y: 0, width: pixels, height: pixels))
-        graphics.flushGraphics()
+        context.interpolationQuality = .high
+        context.draw(artwork, in: CGRect(x: 0, y: 0, width: pixels, height: pixels))
+        guard let rendered = context.makeImage() else { fatalError("Cannot render icon bitmap") }
+        let bitmap = NSBitmapImageRep(cgImage: rendered)
         guard let data = bitmap.representation(using: .png, properties: [:]) else {
             fatalError("Cannot encode icon bitmap \(pixels)")
         }

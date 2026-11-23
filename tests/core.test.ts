@@ -3,7 +3,49 @@ import test from 'node:test';import assert from 'node:assert/strict';import { mk
 async function setup(){const root=await mkdtemp(join(tmpdir(),'pks-'));const docs=join(root,'docs');const managed=join(root,'managed');const data=join(root,'data');await mkdir(docs,{recursive:true});await mkdir(managed,{recursive:true});const cfg:PKSConfig={dataDir:data,managedStore:managed,port:0,host:'127.0.0.1',sourceRoots:[{id:'docs',type:'local',name:'Docs',root:docs},{id:'managed',type:'managed',name:'Managed',root:managed}],semantic:{provider:'hash',dimensions:128}};return{root,docs,managed,svc:await new PKSService(cfg).open()};}
 test('indexes, searches, structures health and preserves provenance',async()=>{const x=await setup();await writeFile(join(x.docs,'lab-2026-07-10.md'),'# Lab\n肌酐 112 μmol/L\n胱抑素C 1.57 mg/L\n');await x.svc.sync();const r=await x.svc.search('肌酐');assert.ok(r.length);assert.match(r[0].uri,/lab-2026-07-10/);const rows=x.svc.db.db.prepare('select * from medical_observations order by observation_type').all() as any[];assert.equal(rows.length,2);assert.ok(rows.every(r=>r.source_document_id));assert.ok(rows.every(r=>r.observed_at==='2026-07-10')); x.svc.db.close();});
 test('writes canonical markdown and can undo',async()=>{const x=await setup();await x.svc.sync();const m=await x.svc.writer.create({domain:'movies',title:'Dune',content:'Great world building.',structuredData:{type:'movie_watch',rating:4,watched_at:'2026-08-10',genres:['science fiction','drama']}});assert.match(await readFile(m.uri,'utf8'),/rating: 4/);const rs=await x.svc.search('Dune');assert.ok(rs.length);const mem=x.svc.memory.build('movies');assert.equal(mem.profile.count,1);await x.svc.writer.undo(m.mutationId);assert.equal((await x.svc.search('Dune')).length,0);assert.equal(x.svc.memory.get('movies').profile.count,0);x.svc.db.close();});
-test('semantic hash search catches related Chinese character patterns',async()=>{const x=await setup();await writeFile(join(x.docs,'guitar.md'),'# 稳定性练习\n切换和弦时手提前离开，导致尾音 sustain 不足。');await x.svc.sync();const rs=await x.svc.search('和弦切换尾音太短');assert.ok(rs.length);assert.match(rs[0].title,/guitar/);x.svc.db.close();});
+test('explicit semantic mode catches related Chinese character patterns',async()=>{const x=await setup();const note=join(x.docs,'guitar.md');await writeFile(note,'# 稳定性练习\n切换和弦时手提前离开，导致尾音 sustain 不足。');await x.svc.sync();const rs=await x.svc.search('和弦切换尾音太短',{mode:'semantic'});assert.ok(rs.some((r:any)=>r.uri===note));x.svc.db.close();});
+
+test('auto search does not mix weak hash-ngram-only candidates into routine results',async()=>{
+  const x=await setup();const note=join(x.docs,'guitar.md');
+  await writeFile(note,'# 稳定性练习\n切换和弦时手提前离开，导致尾音 sustain 不足。');await x.svc.sync();
+  const automatic=await x.svc.search('和弦切换尾音太短',{mode:'auto',limit:10});
+  assert.deepEqual(automatic,[]);assert.equal((x.svc.searcher as any).semanticCache,null);
+  const explicit=await x.svc.search('和弦切换尾音太短',{mode:'semantic',limit:10});
+  assert.ok(explicit.some((r:any)=>r.uri===note));x.svc.db.close();
+});
+
+test('full-text search ranks meaningful term coverage and drops single-term noise',async()=>{
+  const x=await setup();const partial=join(x.docs,'partial.md');const complete=join(x.docs,'complete.md');const noise=join(x.docs,'noise.md');
+  await writeFile(partial,'# Partial\n'+'night '.repeat(20)+'piano');
+  await writeFile(complete,'# Complete\nnight piano practice');
+  await writeFile(noise,'# Noise\nnight only');await x.svc.sync();
+  const results=await x.svc.search('night piano practice',{mode:'fts',limit:10});
+  assert.deepEqual(results.map((r:any)=>r.uri),[complete,partial]);x.svc.db.close();
+});
+
+test('full-text query coverage handles adjacent Han and Latin terms',async()=>{
+  const x=await setup();const note=join(x.docs,'music.md');
+  await writeFile(note,'# Music\n夜的钢琴曲 PDF practice notes.');await x.svc.sync();
+  const results=await x.svc.search('夜的钢琴曲PDF practice',{mode:'fts',limit:10});
+  assert.ok(results.some((r:any)=>r.uri===note));x.svc.db.close();
+});
+
+test('auto search ranks filename evidence before body matches and preserves PKS navigation',async()=>{
+  const x=await setup();const direct=join(x.docs,'Night Piano.md');const bodyOnly=join(x.docs,'practice.md');
+  await writeFile(direct,'# Night Piano\nNight piano practice with exact content.');
+  await writeFile(bodyOnly,'# Practice\nNight piano practice for a separate note.');await x.svc.sync();
+  const results=await x.svc.search('night piano',{mode:'auto',limit:10});
+  assert.equal(results[0].uri,direct);assert.ok(results[0].chunkId);
+  assert.ok(results[0].reasons.includes('metadata'));assert.ok(results[0].reasons.includes('full_text'));
+  assert.ok(results[0].snippet?.toLowerCase().includes('night'));x.svc.db.close();
+});
+
+test('related suggestions require content matches rather than filename-only evidence',async()=>{
+  const x=await setup();const titleOnly=join(x.docs,'guitar-chord.md');
+  await writeFile(titleOnly,'# Guitar practice\nGuitar maintenance and setup tips.');await x.svc.sync();
+  const results=await x.svc.search('guitar chord',{mode:'related',limit:8});
+  assert.ok(!results.some((r:any)=>r.uri===titleOnly));x.svc.db.close();
+});
 
 test('user health correction survives reindex',async()=>{const x=await setup();const p=join(x.docs,'2026-07-10-lab.md');await writeFile(p,'肌酐 172 μmol/L');await x.svc.sync();const row=x.svc.db.db.prepare("select * from medical_observations where observation_type='creatinine'").get() as any;x.svc.correctObservation({id:row.id,value:112,observedAt:'2026-07-10'});await writeFile(p,'肌酐 172 μmol/L\n# rescanned');await x.svc.sync();const rows=x.svc.db.db.prepare("select * from medical_observations where observation_type='creatinine'").all() as any[];assert.equal(rows.length,1);assert.equal(rows[0].value,112);assert.equal(rows[0].verified,1);x.svc.db.close();});
 test('remote embedding provider speaks OpenAI-compatible protocol',async()=>{const { RemoteEmbeddingProvider }=await import('../src/core/embedding.js');const { createServer }=await import('node:http');const server=createServer(async(req,res)=>{let raw='';for await(const c of req)raw+=c;const body=JSON.parse(raw);assert.equal(body.model,'test-model');res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({data:[{embedding:[1,0,0]}]}));});await new Promise(r=>server.listen(0,'127.0.0.1',r));const port=(server.address() as any).port;const p=new RemoteEmbeddingProvider(`http://127.0.0.1:${port}/v1`,'test-model',3);assert.deepEqual(await p.embed('hello'),[1,0,0]);server.close();});
@@ -497,6 +539,17 @@ test('managed undo requires the newest active mutation even when content is iden
   x.svc.db.close();
 });
 
+
+test('related Chinese suggestions do not count overlapping bigrams from one phrase as independent evidence',async()=>{
+  const x=await setup();
+  const note=join(x.docs,'night-piano.md');
+  await writeFile(note,'# Night piano\\n夜的钢琴曲。');
+  await x.svc.sync();
+  const results=await x.svc.search('夜的钢琴曲',{mode:'related',limit:8});
+  assert.deepEqual(results,[],
+    'one Chinese concept must not satisfy the related-search evidence threshold through overlapping bigrams');
+  x.svc.db.close();
+});
 
 test('related Chinese plant-care suggestions use full note evidence and suppress nearby-topic collisions',async()=>{
   const x=await setup();

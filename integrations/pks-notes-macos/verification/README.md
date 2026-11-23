@@ -11,7 +11,16 @@ The user requested that the current ivory/apricot note icon be committed and rem
 
 Record each completed check with its exact scope and artifact identity. Reuse a passed check when its inputs and relevant environment are unchanged; rerun only affected checks after a change. Asset checks do not certify application functionality or release readiness.
 
-## 2026-11-12 — light note with muted apricot border (current)
+## 2026-11-12 — Apple-managed outer mask (current)
+
+- User reported a double outer edge after installation. The former master had a baked-in rounded tile and transparent exterior; its earlier size/alpha checks did not validate the Apple canvas contract. That export is superseded, not a valid baseline to restore.
+- Corrected only the outer background: it is now a full-bleed opaque square. Preserved the selected apricot notebook foreground, white page, graphite strokes and local fold shading. No outer rounded tile, perimeter frame or transparent padding.
+- Built-in Imagegen edit prompt: “Preserve the central notebook foreground; remove the outer rounded tile, bevel, perimeter shadow and transparency; extend an opaque ivory background to all square edges and corners; let Apple apply the final outer mask.”
+- Apple sources: [App icons HIG](https://developer.apple.com/design/human-interface-guidelines/app-icons), [Creating an icon in Icon Composer](https://developer.apple.com/documentation/xcode/creating-your-app-icon-using-icon-composer).
+- Exporter checks every source pixel for opacity before rendering; production PNGs are RGB. Installer/packager/CI also reject non-square or alpha-masked PNGs. The accepted-artwork SHA manifest is updated for this explicitly requested correction.
+- Current evidence: [`icon-square-2026-11-12.json`](icon-square-2026-11-12.json). Earlier variant and lock checks remain historical evidence, not current fingerprints.
+
+## 2026-11-12 — light note with muted apricot border (superseded canvas)
 
 - User requested a combination of image two and three: paler orange border, retaining the rest of the third image’s light effect.
 - Built-in Imagegen edit: use the neutral light icon as the base and the orange note as the cover-placement reference; recolor only the folded notebook border to low-saturation apricot (main-face target approximately `#E8B18C`), keeping the ivory outer tile, white page, graphite strokes, geometry and soft shadows.

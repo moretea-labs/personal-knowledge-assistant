@@ -512,14 +512,27 @@ final class PDFCitationDragTests: XCTestCase {
         defaults.removeObject(forKey: "PKSNotesLastOpenedMarkdown")
 
         let pdf = root.appendingPathComponent("Reading (v2).pdf")
-        XCTAssertTrue(FileManager.default.createFile(atPath: pdf.path, contents: Data()))
-        let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Important fact"))
-        let anchor = try XCTUnwrap(PDFSourceAnchor(
-            page: 1,
-            normalizedRects: [CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.04)],
-            fingerprint: fingerprint
+        let sourceText = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
+        sourceText.string = "Important fact from the reading"
+        let sourceDocument = try XCTUnwrap(
+            PDFDocument(data: sourceText.dataWithPDF(inside: sourceText.bounds))
+        )
+        XCTAssertTrue(sourceDocument.write(to: pdf))
+        let sourceView = PDFView(frame: sourceText.bounds)
+        let sourceController = PDFReaderController()
+        sourceController.attach(
+            view: sourceView, document: sourceDocument, url: pdf,
+            requestedPage: nil, requestedAnchor: nil
+        )
+        defer { sourceController.detach(view: sourceView) }
+        sourceView.currentSelection = try XCTUnwrap(
+            sourceDocument.findString("Important fact", withOptions: []).first
+        )
+        let anchor = try XCTUnwrap(sourceController.selectedSourceAnchor())
+        XCTAssertEqual(sourceController.selectedText(), "Important fact")
+        let snippet = try XCTUnwrap(PDFPageReference.noteSnippet(
+            for: pdf, page: 1, root: root, selectedText: "Important fact", anchor: anchor
         ))
-        let snippet = try XCTUnwrap(PDFPageReference.noteSnippet(for: pdf, page: 1, root: root, selectedText: "Important fact", anchor: anchor))
         let citation = "\n\n\(snippet)\n\n"
         let markdown = "# Root\n- Parent\n  - Concept\n    Existing text\n- Next\n"
         let offset = (markdown as NSString).range(of: "Existing text").location
@@ -553,7 +566,25 @@ final class PDFCitationDragTests: XCTestCase {
         let nodes = MindMapOutline.nodes(in: reopened.draft)
         let concept = try XCTUnwrap(nodes.first(where: { $0.title == "Concept" }))
         let links = MindMapOutline.presentations(in: reopened.draft, nodes: nodes)
-        XCTAssertEqual(links[concept.id]?.links.map(\.target), [expectedTarget])
+        let restoredLink = try XCTUnwrap(links[concept.id]?.links.first?.target)
+        XCTAssertEqual(restoredLink, expectedTarget)
+
+        // Follow the link recovered from the saved/reopened Mind Map node into
+        // a fresh PDFKit document and require the exact original text selection.
+        let restoredURL = try XCTUnwrap(URL(string: restoredLink))
+        let restoredPage = PDFPageReference.page(from: restoredURL)
+        let restoredAnchor = try XCTUnwrap(PDFPageReference.anchor(from: restoredURL))
+        let reopenedPDF = try XCTUnwrap(PDFDocument(url: pdf))
+        let reopenedPDFView = PDFView(frame: sourceText.bounds)
+        let reopenedPDFController = PDFReaderController()
+        reopenedPDFController.attach(
+            view: reopenedPDFView, document: reopenedPDF, url: pdf,
+            requestedPage: restoredPage, requestedAnchor: restoredAnchor
+        )
+        defer { reopenedPDFController.detach(view: reopenedPDFView) }
+        XCTAssertEqual(reopenedPDFController.selectedText(), "Important fact")
+        XCTAssertEqual(reopenedPDFController.selectedSourcePage(), 1)
+        XCTAssertFalse(reopenedPDFController.invalidRequestedSelection)
     }
 
     func testPDFCitationDropOnMindMapTitleAttachesToNodeWithoutSplittingTitle() throws {

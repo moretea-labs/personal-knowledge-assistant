@@ -2,6 +2,7 @@
 """Check the selected artwork before installation, packaging, or CI."""
 import hashlib
 import plistlib
+import struct
 import sys
 from pathlib import Path
 
@@ -20,16 +21,25 @@ def main() -> int:
         if {entry[1] for entry in entries} != expected_paths:
             raise ValueError("Icon manifest does not cover the three canonical assets")
         for expected, relative_path in entries:
-            actual = hashlib.sha256((root / relative_path).read_bytes()).hexdigest()
+            data = (root / relative_path).read_bytes()
+            actual = hashlib.sha256(data).hexdigest()
             if actual != expected:
                 raise ValueError(f"Selected icon changed: {relative_path}")
+            if relative_path.endswith(".png"):
+                if len(data) < 29 or data[:8] != b"\x89PNG\r\n\x1a\n":
+                    raise ValueError(f"Invalid icon PNG: {relative_path}")
+                width, height = struct.unpack(">II", data[16:24])
+                if width != height or width < 1024:
+                    raise ValueError(f"Icon source must be square and at least 1024px: {relative_path}")
+                if data[24] != 8 or data[25] != 2:
+                    raise ValueError(f"Icon PNG must be opaque RGB, without a pre-cut alpha mask: {relative_path}")
         with (root / "Resources/Info.plist").open("rb") as stream:
             if plistlib.load(stream).get("CFBundleIconFile") != "AppIcon":
                 raise ValueError("Bundle icon must refer to the selected AppIcon.icns")
     except (OSError, ValueError, plistlib.InvalidFileException) as error:
         print(f"Leafspan icon verification failed: {error}", file=sys.stderr)
         return 1
-    print("Leafspan selected icon verified (master, 1024 PNG, ICNS, bundle mapping).")
+    print("Leafspan selected icon verified (square opaque RGB artwork, locked exports, bundle mapping).")
     return 0
 
 
