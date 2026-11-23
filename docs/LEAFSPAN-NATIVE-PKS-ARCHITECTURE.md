@@ -40,10 +40,10 @@ The existing Node service remains the process and transport owner:
 - The native Node addon is built as `dist/native/pks.node`.
 - `PKS_SEARCH_ENGINE=typescript` is an explicit diagnostic fallback only; there is no silent fallback from native to TypeScript.
 - Service status exposes the selected search engine.
-- The macOS installer builds and requires the native addon before installing the service.
+- The macOS installer rebuilds the JavaScript service from `package-lock.json` and source in an isolated temporary root, builds the native addon, validates the native module graph, and only then swaps the running service. It refuses dirty service-source installs before any service interruption.
 - TypeScript still owns host-side source parsing, ingestion orchestration, watching, writes, and capabilities that are not part of Leafspan embedded indexing.
 
-The source implementation is canonical-native. Read-only live observations on 2026-11-24 showed the host service reporting `searchEngine: native` against `~/.pks`; HTTP health and Forge Unix-socket health agreed, and `auto`, `metadata`, and `fts` search calls produced identical HTTP/socket result payloads (compared by count and SHA-256 without exposing indexed content). The socket is mode `0600` and its provider handshake succeeded. This proves the current running transports share native retrieval, but does **not** replace a clean committed reinstall/restart acceptance. Never reinstall or restart it from unrelated dirty checkout output.
+The source implementation is canonical-native. On 2026-11-24, exact clean source commit `672ebd56a35b3e057f91e5d95f41afe092ce6747` was rebuilt and installed through the canonical macOS installer. The restarted daemon reported `searchEngine: native` with the pre-install document/chunk counts preserved; HTTP and Forge Unix-socket health agreed, and `auto`, `metadata`, and `fts` search calls produced identical HTTP/socket result payloads by count and SHA-256 without exposing indexed content. The socket remained mode `0600` and the provider handshake succeeded. The earlier rollout failure was traced to stale/incomplete committed `dist`; the installer no longer treats repository `dist` as a deployment input.
 
 ### Embedded Leafspan
 
@@ -146,7 +146,7 @@ The repository contains a privacy-safe language-neutral Golden Corpus used by Ty
 
 Verified evidence to date includes:
 
-- Rust native search unit/contract/CJK tests passing.
+- Rust native search unit/contract/CJK tests passing; explicit scale runs covered 10k and 50k documents.
 - Rust embedded index lifecycle test passing.
 - Embedded incremental test proves unchanged content preserves the existing chunk row and a title change refreshes FTS.
 - Node service native-vs-TypeScript deterministic parity test passing.
@@ -156,6 +156,7 @@ Verified evidence to date includes:
 - Search concurrency/local-first/superseded-query tests passing with provider injection.
 - Universal `arm64+x86_64` PKSCore build completed with macOS `minos 14.0`.
 - Leafspan production Swift build completed with PKSCore linked.
+- Clean committed host-daemon install/restart completed from `672ebd5`; post-install HTTP/Forge-socket native search parity, socket permissions and provider handshake passed.
 
 ## Guardrails
 
@@ -177,7 +178,6 @@ The architecture is implemented, but the following are still separate acceptance
 3. **Signing/notarization/App Store packaging:** validate the generated universal native core inside the final signed artifact.
 4. **PDF content indexing for added libraries:** currently metadata-only; no claim of embedded PDF text extraction.
 5. **Refresh lifecycle:** decide and verify launch/background/watcher policy beyond add/manual refresh.
-6. **Live local daemon rollout:** current native HTTP/Forge-socket health and search parity are verified read-only. The remaining rollout gate is a clean committed install/restart followed by the same transport checks; do not deploy unrelated dirty `dist` output.
 
 ## Source-of-truth principle
 
