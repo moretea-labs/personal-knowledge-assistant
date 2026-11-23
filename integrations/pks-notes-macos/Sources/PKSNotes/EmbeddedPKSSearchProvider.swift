@@ -8,7 +8,26 @@ protocol GlobalLibrarySearchProviding: Sendable {
     ) async throws -> [SearchHit]
 }
 
-actor EmbeddedPKSSearchProvider: GlobalLibrarySearchProviding {
+protocol LibrarySearchProviding: GlobalLibrarySearchProviding {
+    func search(
+        _ query: String,
+        mode: String,
+        limit: Int,
+        excludeURI: String?
+    ) async throws -> [SearchHit]
+}
+
+extension LibrarySearchProviding {
+    func search(
+        _ query: String,
+        mode: String,
+        limit: Int
+    ) async throws -> [SearchHit] {
+        try await search(query, mode: mode, limit: limit, excludeURI: nil)
+    }
+}
+
+actor EmbeddedPKSSearchProvider: LibrarySearchProviding {
     private var core: EmbeddedPKSCore?
     private let databaseURL: URL?
 
@@ -20,14 +39,16 @@ actor EmbeddedPKSSearchProvider: GlobalLibrarySearchProviding {
     func search(
         _ query: String,
         mode: String = "auto",
-        limit: Int = 40
+        limit: Int = 40,
+        excludeURI: String? = nil
     ) async throws -> [SearchHit] {
         try Task.checkCancellation()
         let core = try loadedCore()
         let results = try await core.search(
             query,
             mode: mode,
-            limit: limit
+            limit: limit,
+            excludeURI: excludeURI
         )
         try Task.checkCancellation()
         return results

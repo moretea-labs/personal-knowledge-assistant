@@ -2,53 +2,36 @@ import Foundation
 import XCTest
 @testable import PKSNotes
 
-/// Local-only deterministic transport fixture; no real related-knowledge service is contacted.
-private final class DelayedSearchURLProtocol: URLProtocol {
-    private var delivery: DispatchWorkItem?
-
-    override class func canInit(with request: URLRequest) -> Bool {
-        request.url?.path == "/api/search"
-    }
-
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-    override func startLoading() {
-        guard let url = request.url,
-              let response = HTTPURLResponse(
-                url: url, statusCode: 200, httpVersion: "HTTP/1.1",
-                headerFields: ["Content-Type": "application/json"]
-              ) else { return }
-        let term = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first(where: { $0.name == "q" })?.value ?? ""
-        if term == "offline-needle" {
-            client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
-            return
+private actor DelayedLibraryProvider: LibrarySearchProviding {
+    func search(
+        _ query: String,
+        mode: String,
+        limit: Int,
+        excludeURI: String?
+    ) async throws -> [SearchHit] {
+        if query == "offline-needle" {
+            throw URLError(.cannotConnectToHost)
         }
-        let payload = try! JSONSerialization.data(withJSONObject: [[
-            "documentId": term, "title": term,
-            "uri": "/tmp/\(term).md", "sourceType": "local"
-        ]])
-        let job = DispatchWorkItem { [weak self] in
-            guard let self, self.delivery?.isCancelled == false else { return }
-            self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            self.client?.urlProtocol(self, didLoad: payload)
-            self.client?.urlProtocolDidFinishLoading(self)
-        }
-        delivery = job
-        DispatchQueue.global().asyncAfter(
-            deadline: .now() + (term == "slow" ? 0.30 : 0.02), execute: job
-        )
-    }
-
-    override func stopLoading() {
-        delivery?.cancel()
-        delivery = nil
+        try await Task.sleep(for: query == "slow" ? .milliseconds(300) : .milliseconds(20))
+        try Task.checkCancellation()
+        return [SearchHit(
+            documentId: query,
+            chunkId: nil,
+            title: query,
+            uri: "/tmp/\(query).md",
+            sourceType: "local",
+            snippet: nil,
+            score: 1,
+            headingPath: nil
+        )]
     }
 }
 
 final class SearchConcurrencyTests: XCTestCase {
     @MainActor
-    private func workspace() throws -> (NotesModel, URL) {
+    private func workspace(
+        provider: any LibrarySearchProviding = DelayedLibraryProvider()
+    ) throws -> (NotesModel, URL) {
         let defaults = UserDefaults.standard
         let keys = ["PKSNotesWorkspace", "PKSNotesWorkspaceBookmark", "PKSNotesLastOpenedMarkdown"]
         let original = keys.map { defaults.object(forKey: $0) }
@@ -62,7 +45,7 @@ final class SearchConcurrencyTests: XCTestCase {
             }
             try? FileManager.default.removeItem(at: root)
         }
-        let model = NotesModel()
+        let model = NotesModel(libraryProvider: provider)
         XCTAssertTrue(model.openWorkspace(root))
         return (model, root)
     }
@@ -72,12 +55,8 @@ final class SearchConcurrencyTests: XCTestCase {
         let (model, root) = try workspace()
         let note = root.appendingPathComponent("Field notes.md")
         try "# Field notes\nAn offline-needle is in the body.".write(to: note, atomically: true, encoding: .utf8)
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [DelayedSearchURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
         model.query = "offline-needle"
-        model.search(using: session)
+        model.search()
         for _ in 0..<200 where model.searching {
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -97,12 +76,8 @@ final class SearchConcurrencyTests: XCTestCase {
     func testLocalResultsPublishBeforeSlowProviderAndWorkspaceChangeCancelsSearch() async throws {
         let (model, root) = try workspace()
         try "slow keyword".write(to: root.appendingPathComponent("Local.md"), atomically: true, encoding: .utf8)
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [DelayedSearchURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
         model.query = "slow"
-        model.search(using: session)
+        model.search()
         for _ in 0..<100 where model.hits.isEmpty {
             try await Task.sleep(for: .milliseconds(2))
         }
@@ -119,17 +94,13 @@ final class SearchConcurrencyTests: XCTestCase {
 
     @MainActor
     func testSupersededSearchCannotOverwriteLatestResults() async throws {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [DelayedSearchURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        let model = NotesModel()
+        let model = NotesModel(libraryProvider: DelayedLibraryProvider())
 
         model.query = "slow"
-        model.search(using: session)
+        model.search()
         try await Task.sleep(for: .milliseconds(40))
         model.query = "fast"
-        model.search(using: session)
+        model.search()
 
         for _ in 0..<150 where model.searching {
             try await Task.sleep(for: .milliseconds(10))
@@ -145,17 +116,13 @@ final class SearchConcurrencyTests: XCTestCase {
 
     @MainActor
     func testQueryEditAndClearCancelPendingSearchWithoutStaleError() async throws {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [DelayedSearchURLProtocol.self]
-        let session = URLSession(configuration: .ephemeral)
-        defer { session.invalidateAndCancel() }
-        let model = NotesModel()
+        let model = NotesModel(libraryProvider: DelayedLibraryProvider())
 
         model.query = "slow"
-        model.search(using: session)
+        model.search()
         XCTAssertTrue(model.searching)
         model.query = ""
-        model.search(using: session)
+        model.search()
         XCTAssertFalse(model.searching)
         XCTAssertTrue(model.hits.isEmpty)
         XCTAssertFalse(model.searchFailed)

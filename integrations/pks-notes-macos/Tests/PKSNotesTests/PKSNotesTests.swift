@@ -6,22 +6,15 @@ import SwiftUI
 import XCTest
 @testable import PKSNotes
 
-private final class UnavailableSearchURLProtocol: URLProtocol, @unchecked Sendable {
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-    override func startLoading() {
-        guard let url = request.url,
-              let response = HTTPURLResponse(url: url, statusCode: 503,
-                                             httpVersion: "HTTP/1.1", headerFields: nil) else {
-            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
-            return
-        }
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocolDidFinishLoading(self)
+private actor UnavailableLibraryProvider: LibrarySearchProviding {
+    func search(
+        _ query: String,
+        mode: String,
+        limit: Int,
+        excludeURI: String?
+    ) async throws -> [SearchHit] {
+        throw URLError(.cannotConnectToHost)
     }
-
-    override func stopLoading() {}
 }
 
 final class PKSNotesTests: XCTestCase {
@@ -269,15 +262,11 @@ final class PKSNotesTests: XCTestCase {
         let note = root.appendingPathComponent("Plant.md")
         try "龟背竹换盆后减少浇水".write(to: note, atomically: true, encoding: .utf8)
 
-        let model = NotesModel()
+        let model = NotesModel(libraryProvider: UnavailableLibraryProvider())
         XCTAssertTrue(model.openWorkspace(root))
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [UnavailableSearchURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
 
         model.query = "龟背竹"
-        model.search(using: session)
+        model.search()
         for _ in 0..<250 {
             if !model.searching { break }
             try? await Task.sleep(nanoseconds: 20_000_000)

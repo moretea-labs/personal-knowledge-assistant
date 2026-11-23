@@ -1108,6 +1108,7 @@ final class NotesModel: ObservableObject {
     private var backlinkParseCache = WorkspaceBacklinkParseCache()
     private var cloudBacklinkCursor = 0
     private var relatedTask: Task<Void, Never>?
+    private let libraryProvider: any LibrarySearchProviding
     private var fileRefreshTask: Task<Void, Never>?
     private var folderLoadTask: Task<Void, Never>?
     private var pendingFolderPaths: Set<String> = []
@@ -1182,7 +1183,8 @@ final class NotesModel: ObservableObject {
         }
     }
 
-    init() {
+    init(libraryProvider: any LibrarySearchProviding = EmbeddedPKSSearchProvider()) {
+        self.libraryProvider = libraryProvider
         let preferences = UserDefaults.standard
         if let bookmark = preferences.data(forKey: "PKSNotesWorkspaceBookmark") {
             var stale = false
@@ -2182,22 +2184,15 @@ final class NotesModel: ObservableObject {
         }
 
         relatedTask = Task { [weak self] in
+            guard let self else { return }
             do {
-                var parts = URLComponents(string: "http://127.0.0.1:3217/api/search")!
-                parts.queryItems = [
-                    URLQueryItem(name: "q", value: queryText),
-                    URLQueryItem(name: "mode", value: "related"),
-                    URLQueryItem(name: "excludeUri", value: note.standardizedFileURL.path),
-                    URLQueryItem(name: "limit", value: "8")
-                ]
-                var request = URLRequest(url: parts.url!)
-                request.timeoutInterval = 6
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                    throw URLError(.badServerResponse)
-                }
-                let results = try JSONDecoder().decode([SearchHit].self, from: data)
-                guard !Task.isCancelled, let self, self.selected == note else { return }
+                let results = try await self.libraryProvider.search(
+                    queryText,
+                    mode: "related",
+                    limit: 8,
+                    excludeURI: note.standardizedFileURL.path
+                )
+                guard !Task.isCancelled, self.selected == note else { return }
 
                 var seen: Set<String> = []
                 self.relatedHits = results.filter { hit in
@@ -2207,7 +2202,7 @@ final class NotesModel: ObservableObject {
                 self.loadingRelated = false
             } catch is CancellationError {
             } catch {
-                guard !Task.isCancelled, let self, self.selected == note else { return }
+                guard !Task.isCancelled, self.selected == note else { return }
                 self.relatedHits = []
                 self.relatedError = "Related search unavailable."
                 self.loadingRelated = false
@@ -2822,7 +2817,7 @@ final class NotesModel: ObservableObject {
         return result
     }
 
-    func search(using session: URLSession = .shared) {
+    func search() {
         // The local workspace remains searchable without the optional related-knowledge service.
         searchTask?.cancel()
         searchTask = nil
@@ -2857,7 +2852,7 @@ final class NotesModel: ObservableObject {
             self.searchStatus = self.localSearchStatus(local, providerAvailable: nil)
             var providerAvailable = false
             do {
-                let remote = try await Self.fetchSearch(text, using: session)
+                let remote = try await self.libraryProvider.search(text, mode: "auto", limit: 30, excludeURI: nil)
                 guard !Task.isCancelled,
                       self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text,
                       self.root == workspaceRoot else { return }
@@ -2888,19 +2883,6 @@ final class NotesModel: ObservableObject {
             status += " · \(local.coverage.skippedFiles) " + language.text("bodies not searched")
         }
         return status
-    }
-
-    nonisolated private static func fetchSearch(_ text: String, using session: URLSession) async throws -> [SearchHit] {
-        var parts = URLComponents(string: "http://127.0.0.1:3217/api/search")!
-        parts.queryItems = [URLQueryItem(name: "q", value: text),
-                            URLQueryItem(name: "limit", value: "30")]
-        var request = URLRequest(url: parts.url!)
-        request.timeoutInterval = 8
-        let (data, response) = try await session.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw URLError(.badServerResponse)
-        }
-        return try JSONDecoder().decode([SearchHit].self, from: data)
     }
 
     private func requestMarkdownAnchor(
@@ -3688,43 +3670,12 @@ final class NotesModel: ObservableObject {
             }
             return
         }
-        guard confirmLeavingNote() else { return }
-        // This request becomes the newest navigation intent, including after Discard.
-        cancelNoteLoad()
-        previewTask?.cancel()
-        let sourceNote = selected
-        let sourceDraftRevision = draftRevision
-        let sourceRoot = root
-        previewTask = Task {
-            do {
-                let encoded = hit.documentId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!
-                let url = URL(string: "http://127.0.0.1:3217/api/read/\(encoded)?maxChars=30000")!
-                var request = URLRequest(url: url)
-                request.timeoutInterval = 8
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                    throw URLError(.badServerResponse)
-                }
-                let result = try JSONDecoder().decode(ReadResponse.self, from: data)
-                // Discard means the old draft may still be dirty until this preview
-                // commits. Only reject a stale response if context changed since launch.
-                guard !Task.isCancelled, selected == sourceNote,
-                      draftRevision == sourceDraftRevision, root == sourceRoot else { return }
-                selected = nil
-                previewPDF = nil
-                externalTitle = hit.title + " · " + AppLanguage.current.text("Read-only search result")
-                externalBody = result.content
-                previewSource = hit
-                activeMatch = hit
-                matchedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-                matchJumpSequence &+= 1
-                message = result.truncated == true ? "Preview truncated at 30,000 characters." : nil
-            } catch is CancellationError {
-                // The user opened a different note or preview while the request was in flight.
-            } catch {
-                guard !Task.isCancelled else { return }
-                message = "\(AppLanguage.current.text("Could not preview source")): \(error.localizedDescription)"
-            }
+        if let webURL = hit.webURL {
+            NSWorkspace.shared.open(webURL)
+            return
         }
+        message = AppLanguage.current.resolved == .simplifiedChinese
+            ? "该搜索结果没有可离线访问的本地文件"
+            : "This search result has no local file available offline."
     }
 }
