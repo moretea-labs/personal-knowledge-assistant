@@ -43,7 +43,7 @@ The existing Node service remains the process and transport owner:
 - The macOS installer builds and requires the native addon before installing the service.
 - TypeScript still owns host-side source parsing, ingestion orchestration, watching, writes, and capabilities that are not part of Leafspan embedded indexing.
 
-The source implementation is canonical-native. A read-only observation on 2026-11-24 showed the running host service reporting `searchEngine: native` against `~/.pks`; this proves the current daemon is using native retrieval, but does **not** replace clean-build rollout/socket-client acceptance. Never reinstall or restart it from unrelated dirty checkout output.
+The source implementation is canonical-native. Read-only live observations on 2026-11-24 showed the host service reporting `searchEngine: native` against `~/.pks`; HTTP health and Forge Unix-socket health agreed, and `auto`, `metadata`, and `fts` search calls produced identical HTTP/socket result payloads (compared by count and SHA-256 without exposing indexed content). The socket is mode `0600` and its provider handshake succeeded. This proves the current running transports share native retrieval, but does **not** replace a clean committed reinstall/restart acceptance. Never reinstall or restart it from unrelated dirty checkout output.
 
 ### Embedded Leafspan
 
@@ -177,7 +177,7 @@ The architecture is implemented, but the following are still separate acceptance
 3. **Signing/notarization/App Store packaging:** validate the generated universal native core inside the final signed artifact.
 4. **PDF content indexing for added libraries:** currently metadata-only; no claim of embedded PDF text extraction.
 5. **Refresh lifecycle:** decide and verify launch/background/watcher policy beyond add/manual refresh.
-6. **Live local daemon rollout:** the current daemon reports native search over HTTP status; still verify a clean committed install/restart plus HTTP and Forge-socket search parity before closing rollout acceptance. Do not deploy unrelated dirty `dist` output.
+6. **Live local daemon rollout:** current native HTTP/Forge-socket health and search parity are verified read-only. The remaining rollout gate is a clean committed install/restart followed by the same transport checks; do not deploy unrelated dirty `dist` output.
 
 ## Source-of-truth principle
 
