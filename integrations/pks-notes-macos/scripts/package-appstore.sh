@@ -72,6 +72,8 @@ if [[ -e "$app" || -e "$pkg" ]]; then
 fi
 
 cd "$root"
+"$root/scripts/build-pks-core-xcframework.sh"
+test -f "$root/.build/pks-native/PKSCore.xcframework/Info.plist"
 swift build -c release --arch arm64
 release_bin="$(swift build -c release --arch arm64 --show-bin-path)"
 
