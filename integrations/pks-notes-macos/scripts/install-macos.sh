@@ -8,8 +8,10 @@ if [[ ! -f "$icon" ]]; then
   echo "Generate the icon first: cd $source_root && swift scripts/generate-app-icon.swift" >&2
   exit 1
 fi
+"$source_root/scripts/build-pks-core-xcframework.sh"
+(cd "$source_root" && swift build -c release)
 if [[ ! -x "$binary" ]]; then
-  echo "Build first: cd $source_root && swift build -c release" >&2
+  echo "Release build did not produce $binary" >&2
   exit 1
 fi
 destination="$HOME/Applications/Leafspan.app"
