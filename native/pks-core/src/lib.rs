@@ -109,27 +109,44 @@ impl PksHandle {
     fn fts(&self, req: &SearchRequest, limit: usize) -> rusqlite::Result<Vec<SearchResult>> {
         let terms = tokens(&req.query);
         if terms.is_empty() { return Ok(Vec::new()); }
+        let minimum = if terms.len()==1 {1} else {2.max((terms.len()+1)/2)};
+        let candidate_limit = (limit*4).min(200);
         let match_expr = terms.iter().map(|t| format!("\"{}\"", t.replace('"', ""))).collect::<Vec<_>>().join(" OR ");
-        let mut stmt = self.db.prepare("SELECT d.id,c.id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,c.text,c.page,c.heading_path,d.index_status,bm25(chunks_fts) AS rank FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.chunk_id JOIN documents d ON d.id=c.document_id WHERE chunks_fts MATCH ?1 AND d.deleted_at IS NULL ORDER BY rank LIMIT ?2")?;
-        let rows = stmt.query_map(params![match_expr, (limit*4).min(200) as i64], |r| Ok((
-            r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,
-            r.get::<_,Option<String>>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,String>(7)?,r.get::<_,Option<i64>>(8)?,
-            r.get::<_,Option<String>>(9)?,r.get::<_,Option<String>>(10)?
-        )))?;
-        let mut out=Vec::new();
+        let mut stmt = self.db.prepare(
+            "SELECT d.id,c.id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,c.text,c.page,c.heading_path,d.index_status,bm25(chunks_fts) AS rank FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.chunk_id JOIN documents d ON d.id=c.document_id WHERE chunks_fts MATCH ?1 AND d.deleted_at IS NULL ORDER BY rank LIMIT ?2"
+        )?;
+        let rows = stmt.query_map(params![match_expr, candidate_limit as i64], fts_sql_row)?;
+        let mut found: Vec<(usize,usize,SearchResult)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for row in rows {
-            let (document_id,chunk_id,title,uri,source_type,document_type,modified_at,text,page,heading_path,index_status)=row?;
-            if req.exclude_uri.as_deref()==Some(uri.as_str()) || !matches_filters(req,&source_type,document_type.as_deref(),modified_at.as_deref()) {continue;}
-            let evidence=normalize(&text);
-            let matched=terms.iter().filter(|t|evidence.contains(&normalize(t))).count();
-            let minimum=if terms.len()==1 {1} else {2.max((terms.len()+1)/2)};
-            if matched<minimum {continue;}
-            let snippet=make_snippet(&text,&req.query);
-            let score=1.0/(1.0+out.len() as f64*0.08);
-            out.push(SearchResult {document_id,chunk_id:Some(chunk_id),title,uri,source_type,document_type,modified_at,
-                snippet,score,reasons:vec!["full_text".into()],page,heading_path,index_status});
+            let (hit,text)=row?;
+            add_fts_evidence(req,&terms,minimum,hit,&text,"full_text",&mut seen,&mut found);
         }
-        Ok(out)
+
+        // unicode61 indexes a long Han run as one token, so searching for
+        // shorter Han phrases can miss exact content. Reuse the canonical
+        // chunks table only when FTS recall is sparse; never create an index.
+        let phrases = req.query.split(|ch:char| !is_han(ch))
+            .filter(|part|part.chars().count()>=2).collect::<Vec<_>>();
+        if found.len()<limit && !phrases.is_empty() {
+            let predicate = vec!["instr(c.text,?)>0";phrases.len()].join(" AND ");
+            let sql = format!(
+                "SELECT d.id,c.id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,c.text,c.page,c.heading_path,d.index_status FROM chunks c JOIN documents d ON d.id=c.document_id WHERE {predicate} AND d.deleted_at IS NULL ORDER BY d.modified_at DESC LIMIT ?"
+            );
+            let mut args = phrases.iter().map(|phrase|rusqlite::types::Value::Text((*phrase).to_string()))
+                .collect::<Vec<_>>();
+            args.push(rusqlite::types::Value::Integer(candidate_limit as i64));
+            let mut fallback = self.db.prepare(&sql)?;
+            let rows = fallback.query_map(rusqlite::params_from_iter(args), fts_sql_row)?;
+            for row in rows {
+                let (hit,text)=row?;
+                add_fts_evidence(req,&terms,minimum,hit,&text,"literal_substring",&mut seen,&mut found);
+            }
+        }
+        found.sort_by(|a,b|b.0.cmp(&a.0)
+            .then_with(||b.2.score.total_cmp(&a.2.score))
+            .then_with(||a.1.cmp(&b.1)));
+        Ok(found.into_iter().take(limit).map(|(_,_,hit)|hit).collect())
     }
 
     fn structured(&self, req: &SearchRequest, limit: usize) -> rusqlite::Result<Vec<SearchResult>> {
@@ -222,6 +239,54 @@ impl PksHandle {
         merged.sort_by(|a,b| evidence_rank(a).cmp(&evidence_rank(b)).then_with(||b.score.total_cmp(&a.score)));
         merged.truncate(limit); Ok(merged)
     }
+}
+
+
+fn is_han(ch:char)->bool {
+    matches!(ch,'\u{3400}'..='\u{9fff}' | '\u{20000}'..='\u{2ebef}')
+}
+fn fts_sql_row(row:&rusqlite::Row<'_>)->rusqlite::Result<(SearchResult,String)> {
+    let text:String=row.get(7)?;
+    Ok((SearchResult {
+        document_id:row.get(0)?,chunk_id:Some(row.get(1)?),
+        title:row.get(2)?,uri:row.get(3)?,source_type:row.get(4)?,
+        document_type:row.get(5)?,modified_at:row.get(6)?,
+        snippet:String::new(),score:0.0,reasons:Vec::new(),
+        page:row.get(8)?,heading_path:row.get(9)?,index_status:row.get(10)?,
+    },text))
+}
+fn add_fts_evidence(
+    req:&SearchRequest, terms:&[String], minimum:usize, mut hit:SearchResult,
+    text:&str, reason:&str, seen:&mut std::collections::HashSet<String>,
+    out:&mut Vec<(usize,usize,SearchResult)>
+) {
+    let chunk_id=hit.chunk_id.as_deref().unwrap_or("");
+    if seen.contains(chunk_id)
+        || req.exclude_uri.as_deref()==Some(hit.uri.as_str())
+        || !matches_filters(req,&hit.source_type,hit.document_type.as_deref(),hit.modified_at.as_deref()) {
+        return;
+    }
+    let evidence=text.to_lowercase();
+    let ranges=terms.iter().filter_map(|term|evidence.find(term).map(|start|(start,start+term.len()))).collect::<Vec<_>>();
+    let matches=ranges.len();
+    if matches<minimum {return;}
+    let span=if matches>1 {
+        ranges.iter().map(|x|x.1).max().unwrap()-ranges.iter().map(|x|x.0).min().unwrap()
+    } else {ranges[0].1-ranges[0].0};
+    let gap=span.saturating_sub(ranges.iter().map(|(start,end)|end-start).sum());
+    let proximity=if matches>1 {1.0/(1.0+gap as f64/80.0)} else {0.5};
+    let phrase=evidence.contains(&req.query.to_lowercase());
+    let heading=evidence.lines().take(24).any(|line|
+        line.trim_start().starts_with('#')&&terms.iter().all(|t|line.contains(t)));
+    let coverage=matches as f64/terms.len() as f64;
+    let relevance=(coverage*0.62+proximity*0.20
+        +if phrase {0.12} else {0.0}
+        +if heading {0.06} else {0.0}).min(1.0);
+    hit.score=(0.45+relevance*0.5).min(0.96);
+    hit.snippet=make_snippet(text,&req.query);
+    hit.reasons.push(reason.to_string());
+    seen.insert(chunk_id.to_string());
+    out.push((matches,out.len(),hit));
 }
 
 fn looks_structured(query:&str)->bool { let q=query.to_lowercase(); q.contains("肌酐")||q.contains("胱抑素")||q.contains("cystatin")||q.contains("creatinine")||q.contains("他克莫司")||q.contains("tacrolimus") }
