@@ -3487,7 +3487,7 @@ extension PKSNotesTests {
         XCTAssertEqual(try Data(contentsOf: pdf), originalPDFData, "Capturing a quote must never modify the source PDF.")
         let pageOnlyCapture = try String(contentsOf: note, encoding: .utf8)
         XCTAssertTrue(pageOnlyCapture.contains("[Book.pdf · p. 4](/Book.pdf#page=4)"))
-        XCTAssertTrue(pageOnlyCapture.contains("> Unanchored quote"))
+        XCTAssertFalse(pageOnlyCapture.contains("> Unanchored quote"), "An unanchored selection must not be persisted as a quote.")
 
         let fingerprint = try XCTUnwrap(PDFSourceAnchor.fingerprint(for: "Important fact\nSecond line"))
         let anchor = try XCTUnwrap(PDFSourceAnchor(

@@ -8,12 +8,12 @@ final class WorkspaceChromeTests: XCTestCase {
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Format"), "格式")
     }
 
-    func testPDFPageOnlyFallbackWarningMatchesPreservedQuoteBehavior() {
-        let warning = "This PDF selection cannot be highlighted precisely. The selected quote and a link to its first page will still be saved. Select a smaller passage on one page to enable precise highlighting."
+    func testPDFPageOnlyFallbackWarningExplainsQuoteIsNotSaved() {
+        let warning = "This PDF selection cannot be highlighted precisely. Only a link to its first page will be saved; the selected quote will not be included. Select a smaller passage on one page to enable precise highlighting."
         XCTAssertEqual(AppLanguage.english.text(warning), warning)
         XCTAssertEqual(
             AppLanguage.simplifiedChinese.text(warning),
-            "当前 PDF 选区无法精确高亮。仍会保存选中的原文及指向起始页的页码链接。请缩小选区并确保内容位于同一页，以启用精确高亮。"
+            "此 PDF 选区无法精确高亮。只会保存指向所选内容起始页的链接，不会包含所选引文。请在单页中选择更短的内容，以启用精确高亮。"
         )
     }
 
