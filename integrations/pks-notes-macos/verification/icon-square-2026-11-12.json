@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-12",
+  "feature": "Apple-managed icon outer mask correction",
+  "checks": {
+    "squareOpaqueRGBMasterAnd1024": "passed",
+    "exporterEveryPixelOpacityCheck": "passed",
+    "tenNativeSizesAndIcnsExtraction": "passed",
+    "repeatExportIdenticalHash": "passed",
+    "oldRoundedMasterRejectedDespiteUpdatedPin": "passed",
+    "failurePreservesExistingExports": "passed",
+    "masterVisualReviewNoOuterTile": "passed",
+    "installedSystemReview": "pending"
+  },
+  "assets": {
+    "Resources/LeafspanIcon-master.png": "9a51379f04d936ebee52d46f253767ffb2bb2c7d21c7ee248a4aee19cb2b60e7",
+    "Resources/AppIcon-1024.png": "951d7882b73b866d436bc1fd67736a1579a5f2d353f569b05ab175615538ff5c",
+    "Resources/AppIcon.icns": "9134e35226c6b51fbdc9a37dbf9682bf1fef7ad8ddeed3f6f2b8cfdbc6621eaa",
+    "Resources/AppIcon.sha256": "68b32c8e83e14411c07bd4ebc999ed320f4556b5805667a8e4423dafe83e4be4",
+    "scripts/generate-app-icon.swift": "495182f079d0f47b30717f8be8d01ebc66dacf8b56bb2ad110913bbcae078608",
+    "scripts/verify-app-icon.py": "589217a3bf5fe4e63f1f675e442b32106e088c64f92c019e35305d1d81192ea0"
+  },
+  "references": [
+    "https://developer.apple.com/design/human-interface-guidelines/app-icons",
+    "https://developer.apple.com/documentation/xcode/creating-your-app-icon-using-icon-composer"
+  ],
+  "scope": "Canvas correction and export checks; preserves selected notebook foreground. No unrelated feature tests repeated."
+}
