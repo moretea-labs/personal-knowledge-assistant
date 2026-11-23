@@ -1,0 +1,65 @@
+import XCTest
+@testable import PKSNotes
+
+final class EmbeddedPKSLibraryTests: XCTestCase {
+    func testOverlapRejectsWorkspaceAndNestedDirectories() {
+        let workspace = URL(fileURLWithPath: "/Users/test/Documents/Workspace")
+        XCTAssertTrue(EmbeddedPKSLibrarySourceRegistry.overlaps(workspace, workspace))
+        XCTAssertTrue(EmbeddedPKSLibrarySourceRegistry.overlaps(
+            URL(fileURLWithPath: "/Users/test/Documents"),
+            workspace
+        ))
+        XCTAssertTrue(EmbeddedPKSLibrarySourceRegistry.overlaps(
+            workspace.appendingPathComponent("Notes"),
+            workspace
+        ))
+        XCTAssertFalse(EmbeddedPKSLibrarySourceRegistry.overlaps(
+            URL(fileURLWithPath: "/Users/test/Library"),
+            workspace
+        ))
+    }
+
+#if canImport(PKSCore)
+    func testRegistryAndIndexerPersistGrantAndBuildOfflineIndex() async throws {
+        let suite = "EmbeddedPKSLibraryTests-\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-Library-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try "# Alpha\nOffline library phrase".write(
+            to: root.appendingPathComponent("Alpha.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try Data("%PDF-1.4 test".utf8).write(to: root.appendingPathComponent("Manual.pdf"))
+
+        let registry = EmbeddedPKSLibrarySourceRegistry(suiteName: suite)
+        let source = try await registry.add(folder: root, excludingWorkspace: nil)
+        let persistedSources = await registry.sources()
+        XCTAssertEqual(persistedSources.count, 1)
+        XCTAssertEqual(try EmbeddedPKSLibrarySourceRegistry.resolve(source).path, root.path)
+
+        let database = root.appendingPathComponent("Index/knowledge.db")
+        let core = try EmbeddedPKSCore(databaseURL: database)
+        let indexer = EmbeddedPKSLibraryIndexer(core: core)
+        let summary = try await indexer.refresh(source)
+        XCTAssertEqual(summary.scannedFiles, 2)
+        XCTAssertEqual(summary.indexedContentFiles, 1)
+        XCTAssertEqual(summary.metadataOnlyFiles, 1)
+
+        let contentHits = try await core.search("Offline library", source: source.id)
+        XCTAssertTrue(contentHits.contains { $0.title == "Alpha.md" })
+        let pdfHits = try await core.search("Manual PDF", mode: "metadata", source: source.id)
+        XCTAssertEqual(pdfHits.first?.title, "Manual.pdf")
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("Alpha.md"))
+        let refreshed = try await indexer.refresh(source)
+        XCTAssertEqual(refreshed.deletedDocuments, 1)
+        let deletedHits = try await core.search("Alpha", mode: "metadata", source: source.id)
+        XCTAssertTrue(deletedHits.isEmpty)
+    }
+#endif
+}
