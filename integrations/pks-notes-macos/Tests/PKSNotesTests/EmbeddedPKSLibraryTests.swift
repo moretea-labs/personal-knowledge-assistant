@@ -3,6 +3,41 @@ import XCTest
 @testable import PKSNotes
 
 final class EmbeddedPKSLibraryTests: XCTestCase {
+    func testReselectingExistingFolderRenewsBookmarkWithoutDuplicateSource() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-Regrant-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let suite = "EmbeddedPKSRegrant-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let prior = EmbeddedPKSLibrarySource(
+            id: "stable-library-id",
+            name: folder.lastPathComponent,
+            bookmark: Data([0x00, 0x01, 0x02]),
+            lastKnownPath: folder.standardizedFileURL.resolvingSymlinksInPath().path,
+            createdAt: createdAt
+        )
+        defaults.set(try PropertyListEncoder().encode([prior]),
+                     forKey: EmbeddedPKSLibrarySourceRegistry.defaultsKey)
+
+        let registry = EmbeddedPKSLibrarySourceRegistry(suiteName: suite)
+        XCTAssertThrowsError(try EmbeddedPKSLibrarySourceRegistry.resolve(prior))
+        let renewed = try await registry.add(folder: folder, excludingWorkspace: nil)
+        XCTAssertEqual(renewed.id, prior.id)
+        XCTAssertEqual(renewed.createdAt, createdAt)
+        XCTAssertNotEqual(renewed.bookmark, prior.bookmark)
+        XCTAssertEqual(try EmbeddedPKSLibrarySourceRegistry.resolve(renewed).path,
+                       folder.standardizedFileURL.resolvingSymlinksInPath().path)
+
+        let selectedAgain = try await registry.add(folder: folder, excludingWorkspace: nil)
+        XCTAssertEqual(selectedAgain.id, prior.id)
+        let saved = await registry.sources()
+        XCTAssertEqual(saved.count, 1)
+        XCTAssertEqual(saved.first?.bookmark, selectedAgain.bookmark)
+    }
+
     func testOverlapRejectsWorkspaceAndNestedDirectories() {
         let workspace = URL(fileURLWithPath: "/Users/test/Documents/Workspace")
         XCTAssertTrue(EmbeddedPKSLibrarySourceRegistry.overlaps(workspace, workspace))

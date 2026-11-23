@@ -47,15 +47,15 @@ actor EmbeddedPKSLibrarySourceRegistry {
         }
 
         var current = sources()
-        if let existing = current.first(where: {
+        let existingIndex = current.firstIndex(where: {
             Self.canonical(URL(fileURLWithPath: $0.lastKnownPath)) == resolved
-        }) {
-            return existing
-        }
+        })
 
+        // An explicit folder selection is also a permission renewal. Do not
+        // return an old or revoked bookmark for the same path.
         let bookmark: Data
         do {
-            bookmark = try resolved.bookmarkData(
+            bookmark = try folder.bookmarkData(
                 options: [.withSecurityScope],
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
@@ -64,14 +64,19 @@ actor EmbeddedPKSLibrarySourceRegistry {
             throw EmbeddedPKSLibraryError.bookmarkCreationFailed
         }
 
+        let previous = existingIndex.map { current[$0] }
         let source = EmbeddedPKSLibrarySource(
-            id: "leafspan-library-\(UUID().uuidString.lowercased())",
+            id: previous?.id ?? "leafspan-library-\(UUID().uuidString.lowercased())",
             name: resolved.lastPathComponent.isEmpty ? resolved.path : resolved.lastPathComponent,
             bookmark: bookmark,
             lastKnownPath: resolved.path,
-            createdAt: Date()
+            createdAt: previous?.createdAt ?? Date()
         )
-        current.append(source)
+        if let existingIndex {
+            current[existingIndex] = source
+        } else {
+            current.append(source)
+        }
         try persist(current)
         return source
     }
