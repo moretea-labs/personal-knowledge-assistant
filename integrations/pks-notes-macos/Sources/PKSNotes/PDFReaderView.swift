@@ -359,6 +359,12 @@ struct PDFOutlineEntry: Identifiable, Equatable {
     let pageIndex: Int
 }
 
+enum PDFOutlineAccessibility {
+    static func label(for entry: PDFOutlineEntry, language: AppLanguage) -> String {
+        "\(entry.title) · \(language.text("Level")) \(entry.depth + 1) · \(language.text("Page")) \(entry.pageIndex + 1)"
+    }
+}
+
 enum PDFReadingPositionStore {
     static let defaultsKey = "PKSNotesPDFReadingPositionsV1"
     static let maxEntries = 200
@@ -1206,6 +1212,7 @@ struct NativePDFPreview: View {
                         } label: {
                             Text(String(repeating: "  ", count: entry.depth) + entry.title)
                         }
+                        .accessibilityLabel(PDFOutlineAccessibility.label(for: entry, language: language))
                     }
                 }
             } label: {
