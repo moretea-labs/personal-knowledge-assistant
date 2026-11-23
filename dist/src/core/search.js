@@ -13,6 +13,9 @@ export class SearchEngine {
         const metadata = this.metadata(query, Math.max(limit * 2, 20), opts);
         if (opts.mode === 'metadata')
             return metadata.slice(0, limit);
+        // Locating a file is a catalog lookup, never an approximate content search.
+        if ((opts.mode === undefined || opts.mode === 'auto') && isLocatorQuery(query))
+            return metadata.slice(0, limit);
         const fts = this.fts(query, Math.max(limit * 3, 20), opts);
         if ((opts.mode === undefined || opts.mode === 'auto') && fts.length >= limit && metadata.length === 0)
             return fts.slice(0, limit);
@@ -60,22 +63,46 @@ export class SearchEngine {
         return { sql: parts.join(' AND '), args };
     }
     metadata(query, limit, opts) {
-        const q = query.trim().toLowerCase();
-        if (!q)
+        const pdfOnly = /\bpdf\b/i.test(query);
+        const needle = normalizeCatalogText(locatorSubject(query).replace(/\bpdf\b/gi, ''));
+        if (!needle)
             return [];
         const w = this.where(opts);
-        const rows = this.db.db.prepare(`SELECT d.id document_id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,d.index_status,d.metadata_json FROM documents d WHERE ${w.sql} AND (lower(d.title) LIKE ? OR lower(d.uri) LIKE ?) ORDER BY CASE WHEN lower(d.title)=? THEN 0 WHEN lower(d.title) LIKE ? THEN 1 ELSE 2 END,d.modified_at DESC LIMIT ?`).all(...w.args, `%${q}%`, `%${q}%`, q, `${q}%`, limit);
-        return rows.map((r, i) => ({
-            documentId: r.document_id,
-            title: r.title,
-            uri: r.uri,
-            sourceType: r.source_type,
-            documentType: r.document_type,
-            modifiedAt: r.modified_at,
-            snippet: r.index_status === 'deferred' ? 'Cloud/offline placeholder: metadata is indexed; content will be indexed when locally available.' : r.uri,
-            score: Math.max(0.72, 0.98 - i * 0.015),
-            reasons: [r.index_status === 'deferred' ? 'metadata_deferred' : 'metadata']
-        }));
+        const rows = this.db.db.prepare('SELECT d.id document_id,d.title,d.uri,d.source_type,d.document_type,d.modified_at,d.index_status,d.tags_json FROM documents d WHERE ' + w.sql).all(...w.args);
+        // corrections is the existing higher-authority user-correction ledger; never duplicate aliases in derived documents.
+        const aliases = new Map();
+        for (const c of this.db.db.prepare("SELECT target_id,new_value FROM corrections WHERE field='search_aliases' ORDER BY rowid DESC").all()) {
+            if (!aliases.has(c.target_id)) {
+                try {
+                    const names = JSON.parse(c.new_value);
+                    aliases.set(c.target_id, Array.isArray(names) ? names : []);
+                }
+                catch {
+                    aliases.set(c.target_id, []);
+                }
+            }
+        }
+        return rows.map(r => {
+            if (pdfOnly && !String(r.uri).toLowerCase().endsWith('.pdf'))
+                return null;
+            const title = normalizeCatalogText(r.title);
+            const path = normalizeCatalogText(r.uri);
+            const known = (aliases.get(r.document_id) || []).map(normalizeCatalogText);
+            const tagNames = JSON.parse(r.tags_json || '[]').map(normalizeCatalogText);
+            const exactAlias = known.some(x => x === needle);
+            const titleExact = title === needle || title.replace(/pdf$/, '') === needle;
+            const titleContains = title.includes(needle);
+            const aliasContains = known.some(x => x.includes(needle));
+            const pathContains = path.includes(needle);
+            const tagContains = tagNames.some(x => x.includes(needle));
+            if (!(exactAlias || titleExact || titleContains || aliasContains || pathContains || tagContains))
+                return null;
+            const score = exactAlias ? 1.0 : titleExact ? 0.99 : titleContains ? 0.96 : aliasContains ? 0.95 : pathContains ? 0.88 : 0.72;
+            return { documentId: r.document_id, title: r.title, uri: r.uri, sourceType: r.source_type, documentType: r.document_type, modifiedAt: r.modified_at, indexStatus: r.index_status,
+                snippet: r.index_status === 'deferred' ? 'Cloud placeholder: filename/path known; PDF text not locally accessible.' :
+                    r.index_status === 'metadata_only' ? 'PDF metadata only: no extractable native text.' : r.uri,
+                score, reasons: [exactAlias || aliasContains ? 'verified_alias' : r.index_status === 'deferred' ? 'metadata_deferred' : 'metadata'] };
+        }).filter(Boolean).sort((a, b) => b.score - a.score || String(a.title).localeCompare(String(b.title))).slice(0, limit);
     }
     fts(query, limit, opts) {
         const w = this.where(opts);
@@ -118,3 +145,10 @@ function snippet(text, q) { const terms = q.toLowerCase().split(/\s+/).filter(Bo
         break;
 } if (pos < 0)
     pos = 0; return text.slice(Math.max(0, pos - 100), Math.min(text.length, pos + 320)).replace(/\s+/g, ' ').trim(); }
+/** File location questions require verified names/aliases and must not use fuzzy hash vectors. */
+function isLocatorQuery(q) { return /(?:在哪里|在哪儿|在哪|放在哪里|路径|位置|查找|找到|找一下|文件|资料|电子书|pdf|where\s+(?:is|are)|locate|find\s+(?:my|the|a)|.{2,12}小绿书)/i.test(q) || /^[\p{L}\p{N}]{2,12}书$/u.test(q.trim()); }
+function locatorSubject(q) {
+    const cleaned = q.replace(/(?:请帮我|帮我|我的|在哪里|在哪儿|在哪|存放在|找到|查找|找一下|找找|找|位置|路径|相关的|相关|资料|文件|电子书|有没有|where\s+(?:is|are)|locate|find\s+(?:my|the|a))/gi, ' ').trim();
+    return cleaned || q.trim();
+}
+function normalizeCatalogText(s) { return String(s || '').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ''); }

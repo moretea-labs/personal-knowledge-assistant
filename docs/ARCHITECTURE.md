@@ -119,3 +119,17 @@ The provider contract is in `src/forge/contract.ts`; transport implementation is
 - full Notion/Obsidian replacement
 - silent bulk physical reorganization
 - treating all chat text as permanent memory
+
+### Finding files and PDF availability (2026-10-21)
+
+File-location intent uses the existing SQLite document catalog (title, original URI, inferred topic tags and verified user aliases) before full-text retrieval. It does **not** use approximate hash vectors to claim a particular file is found. Normal knowledge questions still use the existing FTS/hybrid content search.
+
+PDFs with no native text are `metadata_only`; inaccessible iCloud placeholders are `deferred`. Both remain discoverable by filename/path/verified alias, with an explicit `indexStatus`. The document read route uses indexed text chunks for PDF rather than decoding binary bytes as UTF-8. A placeholder is not a fully indexed PDF: content extraction needs the actual local bytes. This implementation does not download cloud files or introduce OCR.
+
+Automatic topic tags such as `英语学习`, `雅思`, `词汇`, `语法`, `听力` and `口语` are derived from a PDF's canonical path and name during indexing. User-confirmed title aliases are higher-authority corrections in the existing `corrections` ledger (`field=search_aliases`, `new_value` JSON array). `knowledge_admin(operation=set_aliases, document_id=..., aliases=[...])` replaces a document's nickname set without modifying its PDF, preserving aliases across scans. **A nickname cannot be assigned to an unverified book.**
+
+The source file is the physical authority; the document catalog, topic tags, and search rankings remain rebuildable. The user-alias correction ledger is already PKS's explicit higher-authority correction mechanism and is not a second document catalog.
+
+Existing indexed files, including deferred cloud placeholders, receive deterministic path-derived catalog tag updates during ordinary incremental scans without native-text extraction or downloading the file. This keeps the single catalog current even when unchanged content is skipped.
+
+The Forge managed-CLI installation manifest imports the single action/permission schema from `src/forge/contract.ts` (compiled distribution). The managed bridge `scripts/forge-provider.mjs` and the Unix-socket server delegate to the same `PKSService`. Updating source code alone is not a live provider deployment; the Forge plugin registration and lifecycle must observe the updated manifest.

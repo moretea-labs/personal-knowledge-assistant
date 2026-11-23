@@ -9,3 +9,59 @@ test('user health correction survives reindex',async()=>{const x=await setup();c
 test('remote embedding provider speaks OpenAI-compatible protocol',async()=>{const { RemoteEmbeddingProvider }=await import('../src/core/embedding.js');const { createServer }=await import('node:http');const server=createServer(async(req,res)=>{let raw='';for await(const c of req)raw+=c;const body=JSON.parse(raw);assert.equal(body.model,'test-model');res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({data:[{embedding:[1,0,0]}]}));});await new Promise(r=>server.listen(0,'127.0.0.1',r));const port=(server.address() as any).port;const p=new RemoteEmbeddingProvider(`http://127.0.0.1:${port}/v1`,'test-model',3);assert.deepEqual(await p.embed('hello'),[1,0,0]);server.close();});
 
 test('Notion metadata snapshot indexes titles without a token and reconciles deletions',async()=>{const x=await setup();const snapshot=join(x.root,'notion-metadata.json');x.svc.cfg.notion={enabled:true,auth:'notion_snapshot',snapshotPath:snapshot,contentMode:'metadata',workspaceId:'workspace-test'};await writeFile(snapshot,JSON.stringify({schemaVersion:1,mode:'metadata',workspaceId:'workspace-test',workspaceName:'Test',fetchedAt:'2026-08-11T00:00:00Z',results:[{object:'page',id:'page-1',title:'Reading List',last_edited_time:'2026-08-10T00:00:00Z',url:'https://www.notion.so/page-1',parent:{type:'workspace',workspace:true}}]}));const first=await x.svc.sync();assert.equal(first.errors.length,0);const rs=await x.svc.search('Reading List');assert.equal(rs.length,1);assert.equal(rs[0].sourceType,'notion');const row=x.svc.db.db.prepare("select metadata_json from documents where uri='notion://page-1' and deleted_at is null").get() as any;assert.match(row.metadata_json,/metadata_snapshot/);await writeFile(snapshot,JSON.stringify({schemaVersion:1,mode:'metadata',workspaceId:'workspace-test',workspaceName:'Test',fetchedAt:'2026-08-11T01:00:00Z',results:[]}));await x.svc.sync();assert.equal((await x.svc.search('Reading List')).length,0);x.svc.db.close();});
+
+test('file locating uses catalog and aliases, including metadata-only cloud PDFs',async()=>{
+  const x=await setup();
+  const pdf=join(x.docs,'English-Vocabulary-Handbook.pdf');
+  await writeFile(pdf,'synthetic PDF with no native text');
+  await writeFile(join(x.docs,'unrelated.md'),'# Utilities\nSome text about unrelated pages and a Spotify collection.');
+  await x.svc.sync();
+  const row=x.svc.db.db.prepare('SELECT id,index_status,tags_json FROM documents WHERE uri=?').get(pdf) as any;
+  assert.equal(row.index_status,'metadata_only');
+  assert.match(row.tags_json,/英语学习/);
+  assert.deepEqual((await x.svc.search('韦氏小绿书')).map(x=>x.uri),[]);
+  const name=await x.svc.search('English-Vocabulary-Handbook.pdf');
+  assert.equal(name.length,1);assert.equal(name[0].uri,pdf);assert.equal(name[0].indexStatus,'metadata_only');
+  assert.deepEqual(x.svc.setSearchAliases(row.id,['韦氏小绿书','The Green Vocabulary Book']).aliases,['韦氏小绿书','The Green Vocabulary Book']);
+  const alias=await x.svc.search('韦氏小绿书');
+  assert.equal(alias.length,1);assert.equal(alias[0].uri,pdf);assert.ok(alias[0].reasons.includes('verified_alias'));
+  await x.svc.sync();
+  assert.equal((await x.svc.search('韦氏小绿书')).length,1,'explicit aliases survive rebuild');
+  x.svc.db.db.prepare("UPDATE documents SET index_status='deferred',content_hash=NULL WHERE id=?").run(row.id);
+  const deferred=await x.svc.search('帮我找English-Vocabulary-Handbook.pdf在哪里');
+  assert.equal(deferred.length,1);assert.equal(deferred[0].indexStatus,'deferred');
+  assert.ok(deferred[0].snippet.includes('Cloud placeholder'));
+  assert.deepEqual((await x.svc.search('我把不相关的韦氏资料放在哪里')).map(x=>x.uri),[]);
+  assert.ok(x.svc.status().indexStatusCounts.some((s:any)=>s.status==='deferred'&&s.count>=1));
+  x.svc.db.close();
+});
+
+test('English-learning catalog tags let PDF location queries find a source folder',async()=>{
+  const x=await setup();
+  const folder=join(x.docs,'雅思');await mkdir(folder,{recursive:true});
+  const pdf=join(folder,'500-Real-English-Phrases.pdf');
+  await writeFile(pdf,'PDF without native text');
+  await x.svc.sync();
+  const matches=await x.svc.search('我的英语学习相关PDF在哪里');
+  assert.equal(matches.length,1);assert.equal(matches[0].uri,pdf);
+  assert.equal(matches[0].indexStatus,'metadata_only');
+  x.svc.db.close();
+});
+
+test('unchanged deferred PDF catalog refreshes topic tags without touching content',async()=>{
+  const x=await setup();
+  const folder=join(x.docs,'雅思');await mkdir(folder,{recursive:true});
+  const pdf=join(folder,'Cambridge-English-Vocabulary.pdf');await writeFile(pdf,'cloud placeholder fixture');
+  await x.svc.sync();
+  const doc=x.svc.db.db.prepare('SELECT id FROM documents WHERE uri=?').get(pdf) as any;
+  x.svc.db.db.prepare("UPDATE documents SET tags_json='[]',index_status='deferred',content_hash=NULL,last_indexed_at=? WHERE id=?").run(new Date().toISOString(),doc.id);
+  const result=await x.svc.sync();
+  assert.equal(result.indexed,0);
+  const row=x.svc.db.db.prepare('SELECT index_status,tags_json FROM documents WHERE id=?').get(doc.id) as any;
+  assert.equal(row.index_status,'deferred');
+  assert.match(row.tags_json,/英语学习/);
+  assert.match(row.tags_json,/雅思/);
+  const found=await x.svc.search('我的英语学习相关PDF在哪里');
+  assert.equal(found.length,1);assert.equal(found[0].uri,pdf);assert.equal(found[0].indexStatus,'deferred');
+  x.svc.db.close();
+});

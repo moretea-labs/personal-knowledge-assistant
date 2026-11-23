@@ -40,6 +40,8 @@ export class PKSService {
     async search(query, opts = {}) { return this.searcher.search(query, opts); }
     async read(documentId, maxChars = 20000) { const d = this.db.db.prepare('SELECT * FROM documents WHERE id=? AND deleted_at IS NULL').get(documentId); if (!d)
         return null; let content = ''; try {
+        if (d.uri.toLowerCase().endsWith('.pdf'))
+            throw new Error('Binary PDF must use indexed text');
         content = await readFile(d.uri, 'utf8');
     }
     catch {
@@ -48,6 +50,20 @@ export class PKSService {
     } return { document: d, content: content.slice(0, maxChars), truncated: content.length > maxChars }; }
     correctObservation(input) { const row = this.db.db.prepare('SELECT * FROM medical_observations WHERE id=?').get(input.id); if (!row)
         throw new Error('Observation not found'); const value = input.value ?? row.value, unit = input.unit ?? row.unit, date = input.observedAt ?? row.observed_at; this.db.db.prepare('UPDATE medical_observations SET value=?,unit=?,observed_at=?,verified=1,confidence=1,extraction_method=? WHERE id=?').run(value, unit, date, 'user_verified', input.id); this.db.db.prepare('INSERT INTO corrections(id,target_id,field,old_value,new_value,reason,created_at) VALUES(?,?,?,?,?,?,?)').run(crypto.randomUUID(), input.id, 'medical_observation', JSON.stringify({ value: row.value, unit: row.unit, observedAt: row.observed_at }), JSON.stringify({ value, unit, observedAt: date }), input.reason || 'user correction', new Date().toISOString()); this.memory.build('health'); return { ok: true, id: input.id, value, unit, observedAt: date, verified: true }; }
+    setSearchAliases(documentId, input) {
+        const doc = this.db.db.prepare('SELECT id FROM documents WHERE id=? AND deleted_at IS NULL').get(documentId);
+        if (!doc)
+            throw new Error('Document not found');
+        if (!Array.isArray(input) || input.length > 16)
+            throw new Error('aliases must be an array of at most 16 names');
+        const aliases = [...new Set(input.map(x => String(x).normalize('NFKC').trim()))];
+        if (aliases.some(x => !x || x.length > 120))
+            throw new Error('alias must be 1..120 characters');
+        const before = this.db.db.prepare("SELECT new_value FROM corrections WHERE target_id=? AND field='search_aliases' ORDER BY rowid DESC LIMIT 1").get(documentId);
+        this.db.db.prepare('INSERT INTO corrections(id,target_id,field,old_value,new_value,reason,created_at) VALUES(?,?,?,?,?,?,?)')
+            .run(crypto.randomUUID(), documentId, 'search_aliases', before?.new_value || '[]', JSON.stringify(aliases), 'explicit_user_alias', new Date().toISOString());
+        return { documentId, aliases };
+    }
     organizationPlan() { const duplicates = this.db.db.prepare(`SELECT content_hash,COUNT(*) n,GROUP_CONCAT(uri,'||') uris FROM documents WHERE deleted_at IS NULL AND content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*)>1 ORDER BY n DESC LIMIT 100`).all(); const unclassified = this.db.db.prepare(`SELECT id,title,uri,modified_at,index_status FROM documents WHERE deleted_at IS NULL AND document_type='generic' ORDER BY modified_at DESC LIMIT 100`).all(); const known = this.db.db.prepare(`SELECT id,title,uri,source_id,document_type FROM documents WHERE deleted_at IS NULL AND source_type='local' AND document_type!='generic' LIMIT 200`).all(); const local = this.db.db.prepare(`SELECT id,title,uri,index_status,size FROM documents WHERE deleted_at IS NULL AND source_type='local'`).all(); const deferredCount = local.filter(x => x.index_status === 'deferred').length; const root = String(this.cfg.sourceRoots.find(x => x.id === 'documents')?.root || '').replace(/\/$/, ''); const folderCounts = new Map(); const nameGroups = new Map(); for (const d of local) {
         const rel = root && d.uri.startsWith(root + '/') ? d.uri.slice(root.length + 1) : d.uri;
         const folder = rel.includes('/') ? rel.split('/')[0] : '(Documents root)';
@@ -66,5 +82,5 @@ export class PKSService {
     } if (domain === 'movies' || domain === 'books') {
         return { domain, question, memory: this.memory.get(domain), evidence: await this.search(question || domain, { limit: 12 }) };
     } return { domain, question, evidence: await this.search(question, { limit: 20 }), memory: this.memory.get('general') }; }
-    status() { const docs = this.db.db.prepare('SELECT COUNT(*) n FROM documents WHERE deleted_at IS NULL').get().n; const chunks = this.db.db.prepare('SELECT COUNT(*) n FROM chunks').get().n; const obs = this.db.db.prepare('SELECT COUNT(*) n FROM medical_observations').get().n; const muts = this.db.db.prepare('SELECT COUNT(*) n FROM mutations').get().n; return { documents: docs, chunks, medicalObservations: obs, mutations: muts, dataDir: this.cfg.dataDir, managedStore: this.cfg.managedStore, sources: this.cfg.sourceRoots }; }
+    status() { const docs = this.db.db.prepare('SELECT COUNT(*) n FROM documents WHERE deleted_at IS NULL').get().n; const chunks = this.db.db.prepare('SELECT COUNT(*) n FROM chunks').get().n; const obs = this.db.db.prepare('SELECT COUNT(*) n FROM medical_observations').get().n; const muts = this.db.db.prepare('SELECT COUNT(*) n FROM mutations').get().n; const indexStatusCounts = this.db.db.prepare('SELECT index_status status,COUNT(*) count FROM documents WHERE deleted_at IS NULL GROUP BY index_status').all(); return { documents: docs, chunks, medicalObservations: obs, mutations: muts, indexStatusCounts, dataDir: this.cfg.dataDir, managedStore: this.cfg.managedStore, sources: this.cfg.sourceRoots }; }
 }

@@ -47,6 +47,8 @@ export interface SearchResult {
   reasons: string[];
   page?: number;
   headingPath?: string;
+  /** Catalog availability, independent of content relevance. */
+  indexStatus?: 'indexed' | 'deferred' | 'metadata_only' | 'deleted' | 'pending';
 }
 
 export interface MutationResult { mutationId: string; action: string; uri: string; reversible: boolean; }
