@@ -17,7 +17,7 @@ User-owned sources
                  |        embeddings / hybrid search
                  |        domain analysis / memory views
                  v
-        Local HTTP API + Web UI
+        Local HTTP API (Leafspan; API-only)
                  |
                  +------> Forge Unix-socket provider
                           manifest / health / execute
@@ -97,7 +97,7 @@ A source client implements official API search pagination and page/block reading
 
 ## Runtime
 
-- Local HTTP API and static Web UI.
+- Local JSON HTTP API for Leafspan; no browser dashboard or static-file serving.
 - File watcher plus periodic reconciliation.
 - Sync mutex prevents overlapping index runs.
 - Environment variable overlays for sensitive remote credentials.

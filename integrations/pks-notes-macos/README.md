@@ -8,7 +8,7 @@ A native SwiftUI Markdown workspace with optional related-knowledge search. It d
 
 - Markdown files remain in the original user-selected directory (including iCloud Drive). No import, duplication, or secondary sync mechanism.
 - The optional related-knowledge service maintains the cross-source index; Leafspan calls its local HTTP search/read API at 127.0.0.1:3217.
-- SilverBullet and Forge are not prerequisites for the editor. No Forge Runtime changes are made.
+- Forge integration is optional; the editor and workspace-local search work independently of PKS and Forge.
 - Files outside the selected workspace are read-only related-knowledge previews. Original files and their locations are never changed during search.
 
 ## Features

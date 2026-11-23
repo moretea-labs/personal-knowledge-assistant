@@ -37,13 +37,13 @@ node dist/src/cli.js search eventId --pks-config=./pks.config.json
 node dist/src/cli.js memory health --pks-config=./pks.config.json
 ```
 
-## Run local product
+## Run the local API service
 
 ```bash
 node dist/src/server.js --pks-config=./pks.config.json
 ```
 
-Open `http://127.0.0.1:3217`.
+The service exposes JSON endpoints for first-party clients; there is no browser UI. Check readiness with `GET http://127.0.0.1:3217/api/status` and search with `GET http://127.0.0.1:3217/api/search?q=...`.
 
 ## Generate Forge trusted registration input
 

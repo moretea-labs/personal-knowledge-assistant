@@ -17,7 +17,7 @@
 - Notion source/sync/write client implementation
 - OpenAI-compatible remote embedding provider plus offline hash fallback
 - File watching + periodic reconciliation + sync mutex
-- HTTP API, local Web UI, CLI
+- API-only local HTTP service for Leafspan, CLI
 - macOS LaunchAgent install script
 - Forge Unix-socket provider and bounded 5-action tool surface
 

@@ -28,7 +28,7 @@ Forge owns trusted provider installation, authorization, resource claims, and ex
 - book/movie records from frontmatter;
 - evidence-backed memory profiles;
 - optional Notion incremental sync and write primitives;
-- local web UI and HTTP API;
+- local HTTP API for Leafspan and other first-party clients (API-only; no browser UI);
 - five high-level Forge actions over the provider boundary.
 
 ## Authority and privacy model
@@ -48,7 +48,7 @@ node dist/src/cli.js sync --pks-config=./pks.config.json
 node dist/src/server.js --pks-config=./pks.config.json
 ```
 
-Open `http://127.0.0.1:3217`.
+The service exposes a local JSON API only; it does not serve a browser dashboard. Leafspan uses `GET /api/search`, `GET /api/read/:documentId`, and `GET /api/status`. The root path intentionally returns `404 not_found`.
 
 Default compatibility state remains under `~/.pks`; configuration can override data and managed-store locations.
 

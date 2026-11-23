@@ -46,7 +46,7 @@ fi
 stage="$(mktemp -d "$DEST/.stage-XXXXXX")"
 rollback="$(mktemp -d "$DEST/.rollback-XXXXXX")"
 mkdir -p "$stage/scripts"
-cp -R "$ROOT/dist" "$ROOT/web" "$stage/"
+cp -R "$ROOT/dist" "$stage/"
 cp "$ROOT/package.json" "$stage/package.json"
 cp "$ROOT/scripts/forge-provider.mjs" "$stage/scripts/forge-provider.mjs"
 "$NODE" --check "$stage/dist/src/server.js"
@@ -64,7 +64,7 @@ if /usr/sbin/lsof -nP -iTCP:3217 -sTCP:LISTEN | grep -q node; then
 fi
 
 mkdir -p "$rollback/scripts" "$DEST/scripts"
-for part in dist web package.json scripts/forge-provider.mjs; do
+for part in dist package.json scripts/forge-provider.mjs; do
   if [[ -e "$DEST/$part" ]]; then mv "$DEST/$part" "$rollback/$part"; fi
   mv "$stage/$part" "$DEST/$part"
 done
@@ -82,12 +82,13 @@ fi
 if [[ "$healthy" -ne 1 ]]; then
   echo "PKS health check failed; restoring previous installation." >&2
   launchctl bootout "$SERVICE" 2>/dev/null || true
-  for part in dist web package.json scripts/forge-provider.mjs; do
+  for part in dist package.json scripts/forge-provider.mjs; do
     rm -rf "$DEST/$part"
     if [[ -e "$rollback/$part" ]]; then mv "$rollback/$part" "$DEST/$part"; fi
   done
   launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || true
   exit 4
 fi
-echo "PKS standalone installed at $DEST; http://127.0.0.1:3217"
+if [[ -d "$DEST/web" ]]; then rm -rf -- "$DEST/web"; fi
+echo "PKS API daemon installed at $DEST; API: http://127.0.0.1:3217/api/status"
 echo "Previous binaries retained at $rollback until verified."
