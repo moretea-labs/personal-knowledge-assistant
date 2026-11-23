@@ -11,6 +11,25 @@ CONFIG="$HOME/.pks/config.json"
 NODE="$(command -v node)"
 SERVICE="gui/$(id -u)/$LABEL"
 
+health_ready() {
+  /usr/bin/curl -fsS --max-time 2 "http://127.0.0.1:3217/api/status" \
+    | "$NODE" -e 'let v="";process.stdin.on("data",x=>v+=x);process.stdin.on("end",()=>{try{const s=JSON.parse(v);process.exit(typeof s.documents==="number"&&typeof s.chunks==="number"&&s.searchEngine==="native"?0:1)}catch{process.exit(1)}})' \
+    >/dev/null 2>&1
+}
+
+bootstrap_and_wait() {
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" || return 1
+  # A freshly re-registered KeepAlive job can be launchd-throttled after repeated
+  # same-label restarts. kickstart asks launchd to start the registered job now
+  # without killing an already-running instance.
+  launchctl kickstart "$SERVICE" >/dev/null 2>&1 || true
+  for n in {1..60}; do
+    if health_ready; then return 0; fi
+    sleep 0.5
+  done
+  return 1
+}
+
 test -f "$ROOT/dist/src/server.js"
 "$ROOT/scripts/build-native-node.sh" "$ROOT/dist/native/pks.node" >/dev/null
 test -f "$ROOT/dist/native/pks.node"
@@ -70,25 +89,21 @@ for part in dist package.json scripts/forge-provider.mjs; do
   if [[ -e "$DEST/$part" ]]; then mv "$DEST/$part" "$rollback/$part"; fi
   mv "$stage/$part" "$DEST/$part"
 done
-healthy=0
-if launchctl bootstrap "gui/$(id -u)" "$PLIST"; then
-  for n in {1..20}; do
-    if /usr/bin/curl -fsS --max-time 2 "http://127.0.0.1:3217/api/status" \
-        | "$NODE" -e 'let v="";process.stdin.on("data",x=>v+=x);process.stdin.on("end",()=>{try{const s=JSON.parse(v);process.exit(typeof s.documents==="number"&&typeof s.chunks==="number"&&s.searchEngine==="native"?0:1)}catch{process.exit(1)}})' >/dev/null 2>&1; then
-      healthy=1
-      break
-    fi
-    sleep 0.5
-  done
-fi
-if [[ "$healthy" -ne 1 ]]; then
-  echo "PKS health check failed; restoring previous installation." >&2
+if ! bootstrap_and_wait; then
+  echo "PKS health check failed after launchd bootstrap/kickstart; restoring previous installation." >&2
+  launchctl print "$SERVICE" >&2 2>/dev/null || true
+  tail -40 "$HOME/.pks/server.err.log" >&2 2>/dev/null || true
   launchctl bootout "$SERVICE" 2>/dev/null || true
   for part in dist package.json scripts/forge-provider.mjs; do
     rm -rf "$DEST/$part"
     if [[ -e "$rollback/$part" ]]; then mv "$rollback/$part" "$DEST/$part"; fi
   done
-  launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+  if ! bootstrap_and_wait; then
+    echo "PKS rollback restored files but the previous daemon did not become healthy." >&2
+    launchctl print "$SERVICE" >&2 2>/dev/null || true
+    exit 5
+  fi
+  echo "Previous PKS installation restored and verified healthy." >&2
   exit 4
 fi
 if [[ -d "$DEST/web" ]]; then rm -rf -- "$DEST/web"; fi
