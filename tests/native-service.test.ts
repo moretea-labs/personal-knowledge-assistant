@@ -9,7 +9,7 @@ import type { PKSConfig } from '../src/types.js';
 
 const addonPath = process.env.PKS_NATIVE_ADDON_PATH;
 
-test('PKSService native search matches the TypeScript service contract for deterministic auto search', {
+test('PKSService defaults to native search and matches the explicit TypeScript diagnostic baseline', {
   skip: !addonPath
 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'pks-native-service-'));
@@ -30,14 +30,17 @@ test('PKSService native search matches the TypeScript service contract for deter
   });
 
   const previousEngine = process.env.PKS_SEARCH_ENGINE;
-  delete process.env.PKS_SEARCH_ENGINE;
+  process.env.PKS_SEARCH_ENGINE = 'typescript';
   const baseline = await new PKSService(config('typescript-data')).open();
-  process.env.PKS_SEARCH_ENGINE = 'native';
+  delete process.env.PKS_SEARCH_ENGINE;
   const native = await new PKSService(config('native-data')).open();
 
   try {
     await baseline.sync();
     await native.sync();
+    assert.equal(baseline.status().searchEngine, 'typescript');
+    assert.equal(native.status().searchEngine, 'native');
+
     const options = { mode: 'auto', limit: 10 };
     const expected = await baseline.search('night piano', options);
     const actual = await native.search('night piano', options);

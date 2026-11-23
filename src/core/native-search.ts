@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { SearchMode, SearchResult } from '../types.js';
 
 type SearchOptions = {
@@ -22,14 +23,18 @@ type NativeSearchResponse = {
   results: SearchResult[];
 };
 
+export function defaultNativeAddonPath(): string {
+  return fileURLToPath(new URL('../../native/pks.node', import.meta.url));
+}
+
 export class NativeSearchEngine {
   private readonly addon: NativeAddon;
   private readonly databasePath: string;
 
-  constructor(dataDir: string, addonPath = process.env.PKS_NATIVE_ADDON_PATH) {
-    if (!addonPath) {
-      throw new Error('PKS_NATIVE_ADDON_PATH is required when PKS_SEARCH_ENGINE=native');
-    }
+  constructor(
+    dataDir: string,
+    addonPath = process.env.PKS_NATIVE_ADDON_PATH ?? defaultNativeAddonPath()
+  ) {
     const require = createRequire(import.meta.url);
     this.addon = require(addonPath) as NativeAddon;
     if (!this.addon || typeof this.addon.search !== 'function') {

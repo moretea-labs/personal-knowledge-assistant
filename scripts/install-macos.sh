@@ -12,6 +12,8 @@ NODE="$(command -v node)"
 SERVICE="gui/$(id -u)/$LABEL"
 
 test -f "$ROOT/dist/src/server.js"
+"$ROOT/scripts/build-native-node.sh" "$ROOT/dist/native/pks.node" >/dev/null
+test -f "$ROOT/dist/native/pks.node"
 test -f "$ROOT/package.json"
 test -f "$ROOT/scripts/forge-provider.mjs"
 mkdir -p "$DEST" "$HOME/Library/LaunchAgents" "$HOME/.pks"
@@ -72,7 +74,7 @@ healthy=0
 if launchctl bootstrap "gui/$(id -u)" "$PLIST"; then
   for n in {1..20}; do
     if /usr/bin/curl -fsS --max-time 2 "http://127.0.0.1:3217/api/status" \
-        | "$NODE" -e 'let v="";process.stdin.on("data",x=>v+=x);process.stdin.on("end",()=>{try{const s=JSON.parse(v);process.exit(typeof s.documents==="number"&&typeof s.chunks==="number"?0:1)}catch{process.exit(1)}})' >/dev/null 2>&1; then
+        | "$NODE" -e 'let v="";process.stdin.on("data",x=>v+=x);process.stdin.on("end",()=>{try{const s=JSON.parse(v);process.exit(typeof s.documents==="number"&&typeof s.chunks==="number"&&s.searchEngine==="native"?0:1)}catch{process.exit(1)}})' >/dev/null 2>&1; then
       healthy=1
       break
     fi
