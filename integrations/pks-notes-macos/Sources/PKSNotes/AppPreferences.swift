@@ -355,6 +355,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Page": "页码",
         "Find in PDF": "在 PDF 中查找",
         "Search PDF": "搜索 PDF",
+        "Searching PDF": "正在搜索 PDF",
         "Previous Search Match": "上一条搜索结果",
         "Next Search Match": "下一条搜索结果",
         "Search Result Position": "搜索结果位置",

@@ -1355,7 +1355,10 @@ struct NativePDFPreview: View {
                 .accessibilityLabel(language.text("Search PDF"))
                 .accessibilityIdentifier("pks-pdf-search-submit")
                 if controller.isSearching {
-                    ProgressView().controlSize(.small)
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel(language.text("Searching PDF"))
+                        .accessibilityIdentifier("pks-pdf-search-progress")
                 } else if controller.searchMatchCount > 0 {
                     Text("\(controller.searchMatchIndex + 1)/\(controller.searchMatchCount)")
                         .font(.caption2.monospacedDigit())

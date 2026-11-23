@@ -230,3 +230,10 @@ final class PDFSearchFlowTests: XCTestCase {
     }
 
 }
+
+extension PDFSearchFlowTests {
+    func testSearchProgressAccessibilityLabelIsLocalized() {
+        XCTAssertEqual(AppLanguage.english.text("Searching PDF"), "Searching PDF")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Searching PDF"), "正在搜索 PDF")
+    }
+}
