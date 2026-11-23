@@ -4,3 +4,4 @@ pks.config.json
 *.log
 .DS_Store
 xcuserdata/
+native/pks-core/target/
