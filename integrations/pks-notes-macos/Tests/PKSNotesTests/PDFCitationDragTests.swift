@@ -1111,6 +1111,16 @@ extension PDFCitationDragTests {
         XCTAssertTrue(model.openKnowledgeLink(link))
         XCTAssertEqual(model.previewPDFPage, 1)
         XCTAssertEqual(model.previewPDFAnchor?.fingerprint, anchor.fingerprint)
+
+        let pageOnly = try XCTUnwrap(model.createNoteFromPDFCapture(
+            pdf: pdf, page: 1, commentary: "Unanchored capture",
+            selectedText: quote, anchor: nil
+        ))
+        let pageOnlyContent = try String(contentsOf: pageOnly, encoding: .utf8)
+        XCTAssertTrue(pageOnlyContent.contains("Unanchored capture"))
+        XCTAssertTrue(pageOnlyContent.contains("[Reading.pdf · p. 1](/Reading.pdf#page=1)"))
+        XCTAssertFalse(pageOnlyContent.contains("> Key evidence"),
+                       "A new note must not persist selected text without a verified source anchor.")
     }
 
     @MainActor
