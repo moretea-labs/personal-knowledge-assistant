@@ -1360,6 +1360,7 @@ struct GlobalSearchSettingsView: View {
     @AppStorage(GlobalSearchPreferences.indexedFoldersEnabledKey) private var indexedFoldersEnabled = false
     @AppStorage(GlobalSearchPreferences.shortcutKey) private var shortcut = GlobalSearchShortcut.defaultChoice.rawValue
     @ObservedObject private var controller = GlobalSearchController.shared
+    @StateObject private var librarySettings = EmbeddedPKSLibrarySettingsModel()
     @State private var recording = false
     @State private var recordingMonitor: Any?
     @State private var recordingHint: String?
@@ -1368,7 +1369,75 @@ struct GlobalSearchSettingsView: View {
 
     var body: some View {
         Form {
-            Toggle(chinese ? "搜索工作区与 PKS 索引内容" : "Search workspace and PKS indexed content", isOn: $indexedFoldersEnabled)
+            Section(chinese ? "搜索资料库" : "Search Library") {
+                Toggle(
+                    chinese ? "搜索额外资料库文件夹" : "Search additional library folders",
+                    isOn: $indexedFoldersEnabled
+                )
+                Text(chinese
+                     ? "当前工作区始终由 Leafspan 本地搜索；这里添加的文件夹使用离线 PKS 索引，不需要后台服务。"
+                     : "The active workspace is always searched locally. Added folders use Leafspan's offline PKS index and require no background service.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if librarySettings.sources.isEmpty {
+                    Text(chinese ? "尚未添加额外资料库" : "No additional library folders")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(librarySettings.sources) { source in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(source.name).lineLimit(1)
+                                Text(source.lastKnownPath)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            if librarySettings.workingSourceID == source.id {
+                                ProgressView().controlSize(.small)
+                            }
+                            Button {
+                                Task { _ = try? await librarySettings.refresh(source) }
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                            .buttonStyle(.borderless)
+                            .help(chinese ? "刷新索引" : "Refresh Index")
+                            .disabled(librarySettings.workingSourceID != nil)
+                            Button(role: .destructive) {
+                                Task { await librarySettings.remove(source) }
+                            } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.borderless)
+                            .help(chinese ? "移除资料库" : "Remove Library")
+                            .disabled(librarySettings.workingSourceID != nil)
+                        }
+                    }
+                }
+
+                HStack {
+                    Button(chinese ? "添加文件夹…" : "Add Folder…") {
+                        chooseLibraryFolder()
+                    }
+                    Button(chinese ? "全部刷新" : "Refresh All") {
+                        Task { await librarySettings.refreshAll() }
+                    }
+                    .disabled(librarySettings.sources.isEmpty || librarySettings.isRefreshingAll)
+                    if librarySettings.isRefreshingAll {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                if let status = librarySettings.statusMessage {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section(chinese ? "快捷键" : "Shortcut") {
             Toggle(chinese ? "启用全局快捷键" : "Enable global shortcut", isOn: $enabled)
             HStack {
                 Text(chinese ? "全局快捷键" : "Global shortcut")
@@ -1398,15 +1467,30 @@ struct GlobalSearchSettingsView: View {
                     .foregroundStyle(.secondary)
             }
             Button(chinese ? "打开全局搜索" : "Open Global Search") { controller.present() }
+            }
         }
         .formStyle(.grouped)
         .padding(.top, 12)
         .onAppear { controller.configure() }
+        .task { await librarySettings.reload() }
         .onDisappear { stopRecording() }
         .onChange(of: enabled) { _, newValue in
             if !newValue { stopRecording() }
             controller.configure()
         }
+    }
+
+    private func chooseLibraryFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.prompt = chinese ? "添加" : "Add"
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        let workspace = (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel?.root
+        indexedFoldersEnabled = true
+        Task { await librarySettings.add(folder: folder, excludingWorkspace: workspace) }
     }
 
     private func beginRecording() {
