@@ -16,6 +16,7 @@ type SearchOptions = {
 
 type NativeAddon = {
   search(databasePath: string, requestJson: string): string;
+  searchAsync?: (databasePath: string, requestJson: string) => Promise<string>;
 };
 
 type NativeSearchResponse = {
@@ -47,7 +48,7 @@ export class NativeSearchEngine {
   }
 
   async search(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
-    const response = JSON.parse(this.addon.search(this.databasePath, JSON.stringify({
+    const request = JSON.stringify({
       contractVersion: 1,
       query,
       mode: options.mode ?? 'auto',
@@ -57,7 +58,13 @@ export class NativeSearchEngine {
       dateTo: options.dateTo,
       limit: options.limit ?? 12,
       excludeUri: options.excludeUri
-    }))) as NativeSearchResponse;
+    });
+
+    const mode = options.mode ?? 'auto';
+    const raw = this.addon.searchAsync && mode !== 'fts'
+      ? await this.addon.searchAsync(this.databasePath, request)
+      : this.addon.search(this.databasePath, request);
+    const response = JSON.parse(raw) as NativeSearchResponse;
 
     if (response.contractVersion !== 1 || !Array.isArray(response.results)) {
       throw new Error('PKS native search returned an unsupported contract');

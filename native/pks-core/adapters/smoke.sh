@@ -94,13 +94,24 @@ cat "$tmp/link.log" >&2
 node -e '
 const addon = require(process.argv[1]);
 const db = process.argv[2];
-const response = JSON.parse(addon.search(db, JSON.stringify({
+const request = JSON.stringify({
   contractVersion: 1, query: "Alpha", mode: "auto", limit: 5
-})));
-if (response.contractVersion !== 1) throw new Error("bad contract version");
-if (!response.results.some(result => result.title === "Alpha")) {
-  throw new Error("Node adapter did not return Alpha");
+});
+const syncResponse = JSON.parse(addon.search(db, request));
+if (syncResponse.contractVersion !== 1) throw new Error("bad contract version");
+if (!syncResponse.results.some(result => result.title === "Alpha")) {
+  throw new Error("Node sync adapter did not return Alpha");
 }
+(async () => {
+  if (typeof addon.searchAsync !== "function") throw new Error("searchAsync missing");
+  const asyncResponse = JSON.parse(await addon.searchAsync(db, request));
+  if (JSON.stringify(asyncResponse) !== JSON.stringify(syncResponse)) {
+    throw new Error("Node async adapter diverged from sync result");
+  }
+})().catch(error => {
+  console.error(error);
+  process.exit(1);
+});
 ' "$tmp/pks.node" "$tmp/golden.sqlite"
 
 "$tmp/swift-smoke" "$tmp/golden.sqlite"
