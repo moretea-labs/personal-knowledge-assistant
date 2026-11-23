@@ -295,6 +295,26 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertFalse(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([.function]))
     }
 
+    func testGlobalShortcutFeedbackIsBilingualAndErrorsAreDistinguishable() {
+        let enabled = GlobalSearchShortcutFeedback.enabled("⌃⌥P")
+        XCTAssertEqual(enabled.message(chinese: true), "已启用 ⌃⌥P")
+        XCTAssertEqual(enabled.message(chinese: false), "Enabled ⌃⌥P")
+        XCTAssertFalse(enabled.isError)
+
+        let cases: [(GlobalSearchShortcutFeedback, String, String)] = [
+            (.handlerUnavailable, "无法启用全局快捷键", "Unable to enable global shortcut."),
+            (.registrationConflict, "无法注册快捷键，请检查是否被其他应用占用",
+             "Shortcut unavailable. Another app may be using it."),
+            (.recordingRejected, "该快捷键不可用，请换一个组合",
+             "Shortcut unavailable. Choose another combination.")
+        ]
+        for (feedback, chinese, english) in cases {
+            XCTAssertTrue(feedback.isError)
+            XCTAssertEqual(feedback.message(chinese: true), chinese)
+            XCTAssertEqual(feedback.message(chinese: false), english)
+        }
+    }
+
     func testRecordedGlobalShortcutRoundTripsAndLegacyPresetsRemainValid() throws {
         let commandShiftK = try XCTUnwrap(GlobalSearchKeyBinding.make(
             keyCode: UInt32(kVK_ANSI_K),

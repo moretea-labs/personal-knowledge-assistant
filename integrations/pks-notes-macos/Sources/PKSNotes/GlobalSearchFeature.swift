@@ -870,6 +870,33 @@ final class GlobalSearchResults: ObservableObject {
     }
 }
 
+enum GlobalSearchShortcutFeedback: Equatable {
+    case enabled(String)
+    case handlerUnavailable
+    case registrationConflict
+    case recordingRejected
+
+    var isError: Bool {
+        if case .enabled = self { return false }
+        return true
+    }
+
+    func message(chinese: Bool) -> String {
+        switch self {
+        case .enabled(let label):
+            return (chinese ? "已启用 " : "Enabled ") + label
+        case .handlerUnavailable:
+            return chinese ? "无法启用全局快捷键" : "Unable to enable global shortcut."
+        case .registrationConflict:
+            return chinese ? "无法注册快捷键，请检查是否被其他应用占用"
+                           : "Shortcut unavailable. Another app may be using it."
+        case .recordingRejected:
+            return chinese ? "该快捷键不可用，请换一个组合"
+                           : "Shortcut unavailable. Choose another combination."
+        }
+    }
+}
+
 @MainActor
 final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate {
     static let shared = GlobalSearchController()
@@ -878,6 +905,7 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
     private var quickLookView: QLPreviewView?
 
     @Published private(set) var shortcutStatus = ""
+    @Published private(set) var shortcutStatusIsError = false
     private var hotKey: EventHotKeyRef?
     private var handler: EventHandlerRef?
     private var panel: NSPanel?
@@ -893,6 +921,11 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
         return modifiers.intersection(reservedModifiers).isEmpty
     }
 
+    private func report(_ feedback: GlobalSearchShortcutFeedback) {
+        shortcutStatus = feedback.message(chinese: AppLanguage.current.resolved == .simplifiedChinese)
+        shortcutStatusIsError = feedback.isError
+    }
+
     func install() {
         configure()
     }
@@ -904,6 +937,7 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
         }
         guard UserDefaults.standard.bool(forKey: GlobalSearchPreferences.enabledKey) else {
             shortcutStatus = ""
+            shortcutStatusIsError = false
             dismiss()
             return
         }
@@ -918,7 +952,7 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
                 return noErr
             }, 1, &eventType, Unmanaged.passUnretained(self).toOpaque(), &handler)
             guard status == noErr else {
-                shortcutStatus = "无法启用全局快捷键"
+                report(.handlerUnavailable)
                 return
             }
         }
@@ -927,9 +961,7 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
         let identifier = EventHotKeyID(signature: OSType(0x4C465347), id: 1)
         let status = RegisterEventHotKey(binding.keyCode, binding.modifiers,
                                          identifier, GetApplicationEventTarget(), 0, &hotKey)
-        shortcutStatus = status == noErr
-            ? "已启用 " + binding.label
-            : "无法注册快捷键，请检查是否被其他应用占用"
+        report(status == noErr ? .enabled(binding.label) : .registrationConflict)
     }
 
     /// A failed registration must not replace the last working global shortcut.
@@ -945,7 +977,7 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
                 defaults.removeObject(forKey: GlobalSearchPreferences.shortcutKey)
             }
             configure()
-            shortcutStatus = "该快捷键不可用，请换一个组合"
+            report(.recordingRejected)
             return false
         }
         return true
@@ -1465,7 +1497,8 @@ struct GlobalSearchSettingsView: View {
             if enabled {
                 Text(controller.shortcutStatus)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(controller.shortcutStatusIsError ? Color.red : Color.secondary)
+                    .accessibilityIdentifier("leafspan-global-search-shortcut-status")
             }
             Button(chinese ? "打开全局搜索" : "Open Global Search") { controller.present() }
             }
