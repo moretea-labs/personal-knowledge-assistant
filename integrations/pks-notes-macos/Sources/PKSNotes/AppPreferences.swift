@@ -36,6 +36,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     case english = "en"
 
     static let defaultsKey = "PKSNotesLanguage"
+    static let pdfPageOnlySelectionWarningKey = "This PDF selection cannot be highlighted precisely. Only a link to its first page will be saved; the selected quote will not be included. Select a smaller passage on one page to enable precise highlighting."
 
     var id: String { rawValue }
 
@@ -387,7 +388,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Copy PDF page link": "复制 PDF 页码链接",
         "PDF page link copied": "PDF 页码链接已复制",
         "PDF page is unavailable.": "PDF 页码不可用。",
-        "This PDF selection cannot be highlighted precisely. Only a link to its first page will be saved; the selected quote will not be included. Select a smaller passage on one page to enable precise highlighting.": "此 PDF 选区无法精确高亮。只会保存指向所选内容起始页的链接，不会包含所选引文。请在单页中选择更短的内容，以启用精确高亮。",
+        pdfPageOnlySelectionWarningKey: "此 PDF 选区无法精确高亮。只会保存指向所选内容起始页的链接，不会包含所选引文。请在单页中选择更短的内容，以启用精确高亮。",
         "Referenced PDF selection changed. The page is open, but the exact highlight is no longer available.": "引用的 PDF 选区已发生变化。当前已打开对应页面，但无法恢复精确高亮。",
         "Linked Notes": "关联笔记",
         "Linked notes for this PDF": "查看关联到此 PDF 的笔记",

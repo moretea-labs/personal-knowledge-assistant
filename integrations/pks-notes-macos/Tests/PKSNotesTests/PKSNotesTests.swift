@@ -638,7 +638,7 @@ final class PKSNotesTests: XCTestCase {
         XCTAssertEqual(AppLanguage.allCases.map(\.rawValue), ["system", "zh-Hans", "en"])
         XCTAssertEqual(AppLanguage.restored("unknown"), .system)
         XCTAssertEqual(AppLanguage.simplifiedChinese.text("Search"), "搜索")
-        let pageOnlyWarning = "This PDF selection cannot be highlighted precisely. Only a link to its first page will be saved; the selected quote will not be included. Select a smaller passage on one page to enable precise highlighting."
+        let pageOnlyWarning = AppLanguage.pdfPageOnlySelectionWarningKey
         XCTAssertEqual(
             AppLanguage.simplifiedChinese.text(pageOnlyWarning),
             "此 PDF 选区无法精确高亮。只会保存指向所选内容起始页的链接，不会包含所选引文。请在单页中选择更短的内容，以启用精确高亮。"

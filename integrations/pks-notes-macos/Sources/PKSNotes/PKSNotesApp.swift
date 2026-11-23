@@ -2140,7 +2140,7 @@ struct NotesWindow: View {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(language.text("This PDF selection cannot be linked precisely. The quote will still be saved with a page-only link to its first page. Select a smaller passage on one page to enable precise highlighting."))
+                        Text(language.text(AppLanguage.pdfPageOnlySelectionWarningKey))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

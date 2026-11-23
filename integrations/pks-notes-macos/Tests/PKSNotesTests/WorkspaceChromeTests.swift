@@ -9,7 +9,7 @@ final class WorkspaceChromeTests: XCTestCase {
     }
 
     func testPDFPageOnlyFallbackWarningExplainsQuoteIsNotSaved() {
-        let warning = "This PDF selection cannot be highlighted precisely. Only a link to its first page will be saved; the selected quote will not be included. Select a smaller passage on one page to enable precise highlighting."
+        let warning = AppLanguage.pdfPageOnlySelectionWarningKey
         XCTAssertEqual(AppLanguage.english.text(warning), warning)
         XCTAssertEqual(
             AppLanguage.simplifiedChinese.text(warning),

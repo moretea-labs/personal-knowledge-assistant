@@ -1076,7 +1076,7 @@ struct NativePDFPreview: View {
                     } else if root != nil && controller.selectionNeedsPageOnlyReference {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle")
-                            Text(language.text("This PDF selection cannot be highlighted precisely. Only a link to its first page will be saved; the selected quote will not be included. Select a smaller passage on one page to enable precise highlighting."))
+                            Text(language.text(AppLanguage.pdfPageOnlySelectionWarningKey))
                             Spacer()
                         }
                         .font(.caption)
