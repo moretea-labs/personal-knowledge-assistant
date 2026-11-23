@@ -5,6 +5,7 @@ import Combine
 final class EmbeddedPKSLibrarySettingsModel: ObservableObject {
     @Published private(set) var sources: [EmbeddedPKSLibrarySource] = []
     @Published private(set) var statusMessage: String?
+    @Published private(set) var statusIsError = false
     @Published private(set) var workingSourceID: String?
     @Published private(set) var isRefreshingAll = false
 
@@ -27,12 +28,23 @@ final class EmbeddedPKSLibrarySettingsModel: ObservableObject {
         sources = await registry.sources()
     }
 
-    func add(folder: URL, excludingWorkspace workspace: URL?) async {
+    @discardableResult
+    func add(folder: URL, excludingWorkspace workspace: URL?) async -> Bool {
         statusMessage = nil
+        statusIsError = false
         do {
             let source = try await registry.add(folder: folder, excludingWorkspace: workspace)
             sources = await registry.sources()
-            _ = try await refresh(source)
+            do {
+                _ = try await refresh(source)
+            } catch {
+                // Registration succeeded: keep the folder visible and offer retry.
+                statusMessage = AppLanguage.current.resolved == .simplifiedChinese
+                    ? "已添加资料库，但索引失败。请点击刷新重试。"
+                    : "Library added, but indexing failed. Use Refresh to retry."
+                statusIsError = true
+            }
+            return true
         } catch EmbeddedPKSLibraryError.overlapsWorkspace {
             statusMessage = AppLanguage.current.resolved == .simplifiedChinese
                 ? "此文件夹与当前工作区重叠，无需重复建立索引"
@@ -42,22 +54,34 @@ final class EmbeddedPKSLibrarySettingsModel: ObservableObject {
                 ? "无法添加资料库文件夹"
                 : "Unable to add library folder."
         }
+        statusIsError = true
+        return false
     }
 
     @discardableResult
     func refresh(_ source: EmbeddedPKSLibrarySource) async throws -> EmbeddedPKSLibraryIndexSummary {
         workingSourceID = source.id
         defer { workingSourceID = nil }
-        let indexer = try ensureIndexer()
-        let summary = try await indexer.refresh(source)
-        statusMessage = Self.summaryMessage(summary)
-        return summary
+        do {
+            let indexer = try ensureIndexer()
+            let summary = try await indexer.refresh(source)
+            statusMessage = Self.summaryMessage(summary)
+            statusIsError = false
+            return summary
+        } catch {
+            statusMessage = AppLanguage.current.resolved == .simplifiedChinese
+                ? "索引刷新失败，请检查文件夹权限后重试。"
+                : "Index refresh failed. Check folder access and try again."
+            statusIsError = true
+            throw error
+        }
     }
 
     func refreshAll() async {
         guard !isRefreshingAll else { return }
         isRefreshingAll = true
         statusMessage = nil
+        statusIsError = false
         defer { isRefreshingAll = false }
 
         let current = await registry.sources()
@@ -83,6 +107,7 @@ final class EmbeddedPKSLibrarySettingsModel: ObservableObject {
         } catch is CancellationError {
             return
         } catch {
+            statusIsError = true
             statusMessage = AppLanguage.current.resolved == .simplifiedChinese
                 ? "部分资料库索引刷新失败"
                 : "Some library indexes could not be refreshed."
@@ -91,6 +116,7 @@ final class EmbeddedPKSLibrarySettingsModel: ObservableObject {
 
     func remove(_ source: EmbeddedPKSLibrarySource) async {
         statusMessage = nil
+        statusIsError = false
         do {
             let core = try ensureCore()
             _ = try await core.finalize(sourceId: source.id, seenURIs: [])
@@ -100,6 +126,7 @@ final class EmbeddedPKSLibrarySettingsModel: ObservableObject {
                 ? "已移除资料库并清理索引"
                 : "Library folder removed and its index cleared."
         } catch {
+            statusIsError = true
             statusMessage = AppLanguage.current.resolved == .simplifiedChinese
                 ? "无法移除资料库文件夹"
                 : "Unable to remove library folder."

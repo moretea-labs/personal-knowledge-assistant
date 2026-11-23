@@ -1405,7 +1405,7 @@ struct GlobalSearchSettingsView: View {
                             }
                             .buttonStyle(.borderless)
                             .help(chinese ? "刷新索引" : "Refresh Index")
-                            .disabled(librarySettings.workingSourceID != nil)
+                            .disabled(librarySettings.workingSourceID != nil || librarySettings.isRefreshingAll)
                             Button(role: .destructive) {
                                 Task { await librarySettings.remove(source) }
                             } label: {
@@ -1413,7 +1413,7 @@ struct GlobalSearchSettingsView: View {
                             }
                             .buttonStyle(.borderless)
                             .help(chinese ? "移除资料库" : "Remove Library")
-                            .disabled(librarySettings.workingSourceID != nil)
+                            .disabled(librarySettings.workingSourceID != nil || librarySettings.isRefreshingAll)
                         }
                     }
                 }
@@ -1422,10 +1422,11 @@ struct GlobalSearchSettingsView: View {
                     Button(chinese ? "添加文件夹…" : "Add Folder…") {
                         chooseLibraryFolder()
                     }
+                    .disabled(librarySettings.workingSourceID != nil || librarySettings.isRefreshingAll)
                     Button(chinese ? "全部刷新" : "Refresh All") {
                         Task { await librarySettings.refreshAll() }
                     }
-                    .disabled(librarySettings.sources.isEmpty || librarySettings.isRefreshingAll)
+                    .disabled(librarySettings.sources.isEmpty || librarySettings.isRefreshingAll || librarySettings.workingSourceID != nil)
                     if librarySettings.isRefreshingAll {
                         ProgressView().controlSize(.small)
                     }
@@ -1433,7 +1434,7 @@ struct GlobalSearchSettingsView: View {
                 if let status = librarySettings.statusMessage {
                     Text(status)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(librarySettings.statusIsError ? Color.red : Color.secondary)
                 }
             }
 
@@ -1489,8 +1490,10 @@ struct GlobalSearchSettingsView: View {
         panel.prompt = chinese ? "添加" : "Add"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
         let workspace = (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel?.root
-        indexedFoldersEnabled = true
-        Task { await librarySettings.add(folder: folder, excludingWorkspace: workspace) }
+        Task {
+            let registered = await librarySettings.add(folder: folder, excludingWorkspace: workspace)
+            if registered { indexedFoldersEnabled = true }
+        }
     }
 
     private func beginRecording() {
