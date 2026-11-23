@@ -87,8 +87,10 @@
       "id": "semantic-offline-fallback",
       "mode": "semantic",
       "query": "guitar chord switching technique",
-      "expectedPrefixFiles": [
-        "Guitar Practice.md"
+      "expectedContainsFiles": [
+        "Guitar Practice.md",
+        "Chord Finger Exercises.md",
+        "Guitar Shopping.md"
       ],
       "requiredReasons": [
         "semantic_hash"

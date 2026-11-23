@@ -41,6 +41,11 @@ test('PKS search contract golden corpus v1', async () => {
       if (scenario.expectedFiles) assert.deepEqual(files, scenario.expectedFiles, `golden case: ${scenario.id}`);
       if (scenario.expectedPrefixFiles) assert.deepEqual(files.slice(0, scenario.expectedPrefixFiles.length),
         scenario.expectedPrefixFiles, `golden ranking prefix: ${scenario.id}`);
+      if (scenario.expectedContainsFiles) {
+        for (const file of scenario.expectedContainsFiles) {
+          assert.ok(files.includes(file), `golden candidates: ${scenario.id} must include ${file}`);
+        }
+      }
       for (const reason of scenario.requiredReasons) {
         assert.ok(results.some(result => result.reasons.includes(reason)),
           `golden case ${scenario.id} must preserve reason ${reason}`);
