@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CORE="$ROOT/native/pks-core"
 OUT="${1:-$CORE/target/release/pks.node}"
+if [[ "$OUT" != /* ]]; then
+  OUT="$ROOT/$OUT"
+fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "build-native-node.sh currently supports the macOS PKS service runtime only" >&2

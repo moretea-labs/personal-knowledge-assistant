@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SearchMode, SearchResult } from '../types.js';
 
@@ -36,7 +36,10 @@ export class NativeSearchEngine {
     addonPath = process.env.PKS_NATIVE_ADDON_PATH ?? defaultNativeAddonPath()
   ) {
     const require = createRequire(import.meta.url);
-    this.addon = require(addonPath) as NativeAddon;
+    const resolvedAddonPath = isAbsolute(addonPath)
+      ? addonPath
+      : resolve(process.cwd(), addonPath);
+    this.addon = require(resolvedAddonPath) as NativeAddon;
     if (!this.addon || typeof this.addon.search !== 'function') {
       throw new Error('PKS native addon does not export search(databasePath, requestJson)');
     }
