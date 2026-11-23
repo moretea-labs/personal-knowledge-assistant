@@ -283,25 +283,24 @@ impl PksHandle {
 
         let content_hash = request.text.as_deref().map(digest_hex);
         let document_id = stable_id("doc", &request.uri);
-        let existing_hash: Option<Option<String>> = self
+        let existing: Option<(Option<String>, String, String, Option<String>)> = self
             .db
             .query_row(
-                "SELECT content_hash FROM documents WHERE id=?1",
+                "SELECT content_hash,title,index_status,deleted_at FROM documents WHERE id=?1",
                 params![document_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
-        let changed = existing_hash.flatten() != content_hash
-            || self
-                .db
-                .query_row(
-                    "SELECT index_status != ?2 OR deleted_at IS NOT NULL FROM documents WHERE id=?1",
-                    params![document_id, status],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()?
-                .unwrap_or(1)
-                != 0;
+        let requires_reindex = match existing.as_ref() {
+            None => true,
+            Some((existing_hash, existing_title, existing_status, deleted_at)) => {
+                existing_hash != &content_hash
+                    || existing_title != &request.title
+                    || existing_status != &status
+                    || deleted_at.is_some()
+            }
+        };
+        let changed = requires_reindex;
 
         let source_name = request.source_name.as_deref().unwrap_or(&request.source_id);
         let root_uri = request.root_uri.as_deref().unwrap_or(&request.uri);
@@ -311,12 +310,16 @@ impl PksHandle {
         let tags_json = serde_json::to_string(&request.tags)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
 
-        let prepared = request
-            .text
-            .as_deref()
-            .filter(|_| status == "indexed")
-            .map(chunks)
-            .unwrap_or_default();
+        let prepared = if requires_reindex {
+            request
+                .text
+                .as_deref()
+                .filter(|_| status == "indexed")
+                .map(chunks)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
 
         let tx = self
             .db
@@ -363,47 +366,49 @@ impl PksHandle {
                 now
             ],
         )?;
-        tx.execute(
-            "DELETE FROM chunks_fts WHERE document_id=?1",
-            params![document_id],
-        )?;
-        tx.execute(
-            "DELETE FROM chunks WHERE document_id=?1",
-            params![document_id],
-        )?;
+        if requires_reindex {
+            tx.execute(
+                "DELETE FROM chunks_fts WHERE document_id=?1",
+                params![document_id],
+            )?;
+            tx.execute(
+                "DELETE FROM chunks WHERE document_id=?1",
+                params![document_id],
+            )?;
 
-        for chunk in prepared {
-            let chunk_hash = digest_hex(&chunk.text);
-            let chunk_id = stable_id(
-                "chk",
-                &format!("{}:{}:{}", document_id, chunk.ordinal, chunk_hash),
-            );
-            let embedding = hash_embedding(&chunk.text, EMBEDDING_DIMENSIONS);
-            let embedding_json = serde_json::to_string(&embedding)
-                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-            tx.execute(
-                "INSERT INTO chunks(
-                   id,document_id,ordinal,text,start_offset,end_offset,page,heading_path,
-                   embedding_json,embedding_provider,embedding_dim,content_hash
-                 ) VALUES(?1,?2,?3,?4,?5,?6,NULL,?7,?8,?9,?10,?11)",
-                params![
-                    chunk_id,
-                    document_id,
-                    chunk.ordinal as i64,
-                    chunk.text,
-                    chunk.start_offset as i64,
-                    chunk.end_offset as i64,
-                    chunk.heading_path,
-                    embedding_json,
-                    format!("hash-ngram-v1-{EMBEDDING_DIMENSIONS}"),
-                    EMBEDDING_DIMENSIONS as i64,
-                    chunk_hash
-                ],
-            )?;
-            tx.execute(
-                "INSERT INTO chunks_fts(chunk_id,document_id,title,text) VALUES(?1,?2,?3,?4)",
-                params![chunk_id, document_id, request.title, chunk.text],
-            )?;
+            for chunk in prepared {
+                let chunk_hash = digest_hex(&chunk.text);
+                let chunk_id = stable_id(
+                    "chk",
+                    &format!("{}:{}:{}", document_id, chunk.ordinal, chunk_hash),
+                );
+                let embedding = hash_embedding(&chunk.text, EMBEDDING_DIMENSIONS);
+                let embedding_json = serde_json::to_string(&embedding)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+                tx.execute(
+                    "INSERT INTO chunks(
+                       id,document_id,ordinal,text,start_offset,end_offset,page,heading_path,
+                       embedding_json,embedding_provider,embedding_dim,content_hash
+                     ) VALUES(?1,?2,?3,?4,?5,?6,NULL,?7,?8,?9,?10,?11)",
+                    params![
+                        chunk_id,
+                        document_id,
+                        chunk.ordinal as i64,
+                        chunk.text,
+                        chunk.start_offset as i64,
+                        chunk.end_offset as i64,
+                        chunk.heading_path,
+                        embedding_json,
+                        format!("hash-ngram-v1-{EMBEDDING_DIMENSIONS}"),
+                        EMBEDDING_DIMENSIONS as i64,
+                        chunk_hash
+                    ],
+                )?;
+                tx.execute(
+                    "INSERT INTO chunks_fts(chunk_id,document_id,title,text) VALUES(?1,?2,?3,?4)",
+                    params![chunk_id, document_id, request.title, chunk.text],
+                )?;
+            }
         }
         tx.commit()?;
 

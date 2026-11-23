@@ -1,4 +1,5 @@
 use pks_core::{EmbeddedDocumentRequest, FinalizeSourceRequest, PksHandle, SearchRequest};
+use rusqlite::{Connection, params};
 use std::fs;
 
 fn document(uri: &str, title: &str, text: Option<&str>) -> EmbeddedDocumentRequest {
@@ -66,6 +67,16 @@ fn embedded_index_is_searchable_incremental_and_deletes_unseen_documents() {
             .any(|reason| reason == "full_text")
     );
 
+    let probe = Connection::open(&path).unwrap();
+    let rowid_before: i64 = probe
+        .query_row(
+            "SELECT rowid FROM chunks WHERE document_id=?1",
+            params![first.document_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    drop(probe);
+
     let unchanged = core
         .index_embedded_document(&document(
             "/library/Alpha.md",
@@ -74,6 +85,43 @@ fn embedded_index_is_searchable_incremental_and_deletes_unseen_documents() {
         ))
         .unwrap();
     assert!(!unchanged.changed);
+
+    let probe = Connection::open(&path).unwrap();
+    let rowid_after: i64 = probe
+        .query_row(
+            "SELECT rowid FROM chunks WHERE document_id=?1",
+            params![unchanged.document_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        rowid_after, rowid_before,
+        "unchanged content must not rebuild chunks"
+    );
+    drop(probe);
+
+    let renamed = core
+        .index_embedded_document(&document(
+            "/library/Alpha.md",
+            "Alpha Renamed",
+            Some("# Alpha\nNative embedded search body"),
+        ))
+        .unwrap();
+    assert!(renamed.changed);
+    let probe = Connection::open(&path).unwrap();
+    let (renamed_rowid, fts_title): (i64, String) = probe
+        .query_row(
+            "SELECT c.rowid,f.title FROM chunks c JOIN chunks_fts f ON f.chunk_id=c.id WHERE c.document_id=?1",
+            params![renamed.document_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_ne!(
+        renamed_rowid, rowid_before,
+        "title changes must refresh FTS"
+    );
+    assert_eq!(fts_title, "Alpha Renamed");
+    drop(probe);
 
     let metadata = core
         .index_embedded_document(&document("/library/Manual.pdf", "Manual.pdf", None))
