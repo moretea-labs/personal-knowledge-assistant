@@ -531,6 +531,7 @@ final class GlobalSearchResults: ObservableObject {
     private var applicationCatalogTask: Task<Void, Never>?
     private var isPresented = false
     private let spotlight = GlobalSpotlightLookup()
+    private let libraryProvider: any GlobalLibrarySearchProviding
     private var appHits: [GlobalSearchItem] = []
     private var pksHits: [SearchHit] = []
     private var workspaceHits: [SearchHit] = []
@@ -545,8 +546,12 @@ final class GlobalSearchResults: ObservableObject {
     private var workspaceSearchPending = false
     private var librarySearchPending = false
 
+    init(libraryProvider: any GlobalLibrarySearchProviding = EmbeddedPKSSearchProvider()) {
+        self.libraryProvider = libraryProvider
+    }
+
     var hasActiveWorkspace: Bool {
-        (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel?.root != nil
+        (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel?.root != nil
     }
 
     private var isWorkspaceScoped: Bool {
@@ -615,7 +620,7 @@ final class GlobalSearchResults: ObservableObject {
     }
 
     func canSearch(in folder: URL) -> Bool {
-        (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel?
+        (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel?
             .isSearchableWorkspaceDirectory(folder) ?? false
     }
 
@@ -716,7 +721,7 @@ final class GlobalSearchResults: ObservableObject {
             forKey: GlobalSearchPreferences.indexedFoldersEnabledKey
         )
         let notesModel = shouldSearch && (indexedFoldersEnabled || workspaceOnly)
-            ? (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel
+            ? (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel
             : nil
         spotlightSearchPending = shouldSearch && !workspaceOnly
         workspaceSearchPending = shouldSearch && notesModel != nil
@@ -787,21 +792,7 @@ final class GlobalSearchResults: ObservableObject {
             }
 
             do {
-                var url = URLComponents(string: "http://127.0.0.1:3217/api/search")!
-                url.queryItems = [
-                    URLQueryItem(name: "q", value: text),
-                    URLQueryItem(name: "mode", value: "auto"),
-                    URLQueryItem(name: "limit", value: "40")
-                ]
-                var request = URLRequest(url: url.url!)
-                request.timeoutInterval = 3
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard !Task.isCancelled, self.searchGeneration == generation,
-                      (response as? HTTPURLResponse)?.statusCode == 200 else {
-                    if !Task.isCancelled { throw URLError(.badServerResponse) }
-                    return
-                }
-                let hits = try JSONDecoder().decode([SearchHit].self, from: data)
+                let hits = try await self.libraryProvider.search(text, mode: "auto", limit: 40)
                 guard !Task.isCancelled, self.searchGeneration == generation,
                       self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 var seen = Set<String>()
@@ -817,21 +808,12 @@ final class GlobalSearchResults: ObservableObject {
                 self.publish()
 
                 if GlobalSearchRanker.shouldFindRelated(text), self.pksHits.count < 15 {
-                    var relatedURL = URLComponents(string: "http://127.0.0.1:3217/api/search")!
-                    relatedURL.queryItems = [
-                        URLQueryItem(name: "q", value: text),
-                        URLQueryItem(name: "mode", value: "related"),
-                        URLQueryItem(name: "limit", value: "12")
-                    ]
-                    var relatedRequest = URLRequest(url: relatedURL.url!)
-                    relatedRequest.timeoutInterval = 3
                     do {
-                        let (relatedData, relatedResponse) = try await URLSession.shared.data(for: relatedRequest)
-                        guard !Task.isCancelled, self.searchGeneration == generation,
-                              (relatedResponse as? HTTPURLResponse)?.statusCode == 200 else {
-                            throw URLError(.badServerResponse)
-                        }
-                        let relatedResults = try JSONDecoder().decode([SearchHit].self, from: relatedData)
+                        let relatedResults = try await self.libraryProvider.search(
+                            text,
+                            mode: "related",
+                            limit: 12
+                        )
                         guard !Task.isCancelled, self.searchGeneration == generation,
                               self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                         var seen = Set<String>()
@@ -841,10 +823,14 @@ final class GlobalSearchResults: ObservableObject {
                             return GlobalSearchItem.file(hit, url: file, isRelated: true)
                         }
                         self.publish()
+                    } catch is CancellationError {
+                        return
                     } catch {
                         // Optional related suggestions must not break primary search.
                     }
                 }
+            } catch is CancellationError {
+                return
             } catch {
                 guard !Task.isCancelled, self.searchGeneration == generation,
                       self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
@@ -879,7 +865,7 @@ final class GlobalSearchResults: ObservableObject {
 
     private func prefetchSelectedFile() {
         guard let selected, case .file = selected.kind,
-              let model = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel else { return }
+              let model = (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel else { return }
         model.prefetchFile(selected.url)
     }
 }
@@ -1045,7 +1031,7 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
             }
         case .file, .folder:
             if let hit = item.sourceHit,
-               let model = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel {
+               let model = (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel {
                 dismiss()
                 // Reuse the sole note-navigation authority, including dirty-draft
                 // confirmation and exact Markdown match handling.
@@ -1054,7 +1040,7 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
                     $0.isVisible && !($0 is NSPanel)
                 })?.makeKeyAndOrderFront(nil)
                 model.openResult(hit)
-            } else if let model = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel,
+            } else if let model = (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel,
                       GlobalSearchItem.isLeafspanWorkspaceDocument(item, in: model.root) {
                 dismiss()
                 NSApp.activate(ignoringOtherApps: true)
@@ -1073,7 +1059,7 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
     }
 
     private func reportOpenFailure() {
-        guard let model = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel else { return }
+        guard let model = (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel else { return }
         NSApp.activate(ignoringOtherApps: true)
         NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) })?.makeKeyAndOrderFront(nil)
         model.message = AppLanguage.current.text("Unable to open this item")
@@ -1085,7 +1071,7 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
     }
 
     func locateInLeafspan(_ item: GlobalSearchItem) {
-        guard let model = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel,
+        guard let model = (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel,
               let root = model.root,
               GlobalSearchItem.isLeafspanWorkspaceItem(item, in: root),
               FileManager.default.fileExists(atPath: item.url.path) else { return }
@@ -1251,7 +1237,7 @@ private struct GlobalSearchPalette: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         ForEach(Array(results.items.enumerated()), id: \.element.id) { index, item in
-                            let workspaceRoot = (NSApp.delegate as? PKSNotesAppDelegate)?.notesModel?.root
+                            let workspaceRoot = (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel?.root
                             let canLocateInLeafspan = GlobalSearchItem.isLeafspanWorkspaceItem(
                                 item, in: workspaceRoot
                             )
