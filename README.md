@@ -22,7 +22,7 @@ Forge owns trusted provider installation, authorization, resource claims, and ex
 - Markdown/text/HTML/JSON/CSV plus lightweight PDF, DOCX, PPTX, and XLSX extraction;
 - SQLite catalog + FTS5 + offline approximate semantic hash vectors;
 - hybrid retrieval with bounded reads and exact source locations;
-- file-location search over verified catalog titles, source paths, inferred learning-topic tags, and user-confirmed aliases, including metadata-only PDFs;
+- file-location search over catalog titles, source paths, inferred learning-topic tags and user-confirmed aliases; unsupported binary formats are indexed by filename/path only (no content read or hashing);
 - managed canonical write/update, mutation log, and undo;
 - structured health extraction/timeline with provenance and review queue;
 - book/movie records from frontmatter;
@@ -52,6 +52,26 @@ Open `http://127.0.0.1:3217`.
 
 Default compatibility state remains under `~/.pks`; configuration can override data and managed-store locations.
 
+### Optional search outside the note workspace
+
+PKS indexes directories declared in pks.config.json (sourceRoots), separately
+from the folder currently open in Leafspan. The default is ~/Documents.
+Other directories must be explicitly added with distinct root IDs. Use each
+source's exclude list to omit private directories. Re-run the PKS sync command
+after changing configuration, then the existing local Search API and Forge
+personal_knowledge provider search all opted-in roots through one index.
+
+Supported document formats get full-text and optional embedding retrieval.
+Other regular files get only filenames and paths in the catalog; their binary
+content is neither read nor hashed. Hidden paths, ignored development folders,
+symbolic links and explicitly excluded paths are not scanned. Search data is
+local, rebuildable, and does not require AI APIs. The default hash embedding
+is not a neural-network model. True remote embeddings require opt-in config.
+
+This is not a macOS-wide launcher or Spotlight replacement. A sandboxed
+Leafspan app does not gain access to arbitrary paths by enabling PKS search.
+
+
 ## Verify
 
 ```bash
@@ -60,7 +80,7 @@ npm run build
 npm test
 ```
 
-The current synthetic benchmark baseline is tracked at [`benchmarks/2026-08-11.json`](benchmarks/2026-08-11.json). Benchmark results are evidence for the recorded fixture, not a universal retrieval-quality claim.
+The current synthetic benchmark baseline is tracked at [`benchmarks/2026-08-11.json`](benchmarks/2026-08-11.json). For read-only latency measurement against an existing local SQLite index, set `PKS_BENCH_DB` and run `npm run benchmark:search` (no source files are modified). Benchmark results are evidence for the recorded fixture, not a universal retrieval-quality claim.
 
 ## Forge provider
 

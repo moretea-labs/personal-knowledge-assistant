@@ -1,0 +1,46 @@
+{
+  "formatVersion": 1,
+  "id": "quiet-study",
+  "name": "Quiet Study",
+  "colors": {
+    "canvas": {
+      "light": "#FAF9F6",
+      "dark": "#181B20"
+    },
+    "ink": {
+      "light": "#242831",
+      "dark": "#EEF1F4"
+    },
+    "codeBackground": {
+      "light": "#EDEEF0",
+      "dark": "#262B32"
+    },
+    "link": {
+      "light": "#225C89",
+      "dark": "#89BCEF"
+    }
+  },
+  "typography": {
+    "fontDesign": "serif",
+    "bodySize": 17,
+    "heading1": 2.1,
+    "heading2": 1.52,
+    "heading3": 1.2,
+    "headingWeight": "semibold",
+    "lineSpacing": 0.4,
+    "paragraphSpacing": 1.3,
+    "headingSpacing": 1.7,
+    "pageWidth": 730,
+    "quoteInset": 14,
+    "codePadding": 16,
+    "codeCorner": 5,
+    "listSpacing": 0.32
+  },
+  "blocks": {
+    "quoteRuleWidth": 2,
+    "quoteOpacity": 0.86,
+    "quoteItalic": true,
+    "inlineCodeScale": 0.9,
+    "codeBlockScale": 0.88
+  }
+}

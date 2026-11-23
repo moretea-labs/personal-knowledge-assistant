@@ -1,0 +1,145 @@
+import Foundation
+
+struct MarkdownOutlineHeading: Identifiable, Equatable {
+    let id: Int
+    let level: Int
+    let title: String
+    let utf16Offset: Int
+    let sectionID: Int
+}
+
+enum MarkdownHeadingScanner {
+    /// Parse an ATX heading after the shared Markdown block-code classifier
+    /// has excluded fenced and indented code lines.
+    static func heading<S: StringProtocol>(in line: S) -> (level: Int, title: String)? {
+        let level = line.prefix { $0 == "#" }.count
+        guard (1...6).contains(level), line.dropFirst(level).first == " " else { return nil }
+        let title = String(line.dropFirst(level + 1))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return nil }
+        return (level, title)
+    }
+}
+
+enum MarkdownOutline {
+    static func headings(in source: String) -> [MarkdownOutlineHeading] {
+        let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
+        let codeLines = MindMapOutline.blockCodeLineFlags(in: source)
+        var headings: [MarkdownOutlineHeading] = []
+        var utf16Offset = 0
+        var sectionID = 0
+        var currentSectionHasLines = false
+
+        for (index, line) in lines.enumerated() {
+            if !codeLines[index], let heading = MarkdownHeadingScanner.heading(in: line) {
+                if currentSectionHasLines { sectionID += 1 }
+                headings.append(MarkdownOutlineHeading(
+                    id: headings.count,
+                    level: heading.level,
+                    title: heading.title,
+                    utf16Offset: utf16Offset,
+                    sectionID: sectionID
+                ))
+            }
+            currentSectionHasLines = true
+            utf16Offset += line.utf16.count
+            if index < lines.count - 1 { utf16Offset += 1 }
+        }
+        return headings
+    }
+
+    /// Resolve a cached outline row against the current Markdown revision.
+    /// Heading order/title/level must still identify the same entry; offsets
+    /// are recalculated because edits before a heading shift its UTF-16 position.
+    static func currentUTF16Offset(
+        for heading: MarkdownOutlineHeading,
+        in source: String
+    ) -> Int? {
+        let current = headings(in: source)
+        guard current.indices.contains(heading.id) else { return nil }
+        let candidate = current[heading.id]
+        guard candidate.title == heading.title, candidate.level == heading.level else {
+            return nil
+        }
+        return candidate.utf16Offset
+    }
+
+    /// One UTF-16 line-position authority for native editor navigation.
+    static func lineRange(in source: String, lineIndex: Int) -> NSRange? {
+        guard lineIndex >= 0 else { return nil }
+        let lines = source.components(separatedBy: "\n")
+        guard lines.indices.contains(lineIndex) else { return nil }
+
+        var location = 0
+        for index in 0..<lineIndex {
+            location += (lines[index] as NSString).length + 1
+        }
+        return NSRange(location: location, length: (lines[lineIndex] as NSString).length)
+    }
+
+    /// Map a canonical Markdown line to the lazy preview section that contains it.
+    /// Section IDs are the same projection consumed by MarkdownPreviewPane.
+    static func previewSectionID(containingLineIndex lineIndex: Int, in source: String) -> Int? {
+        guard lineIndex >= 0 else { return nil }
+        var firstLine = 0
+        for section in MarkdownSection.sections(in: source) {
+            let lineCount = section.markdown.components(separatedBy: "\n").count
+            if lineIndex < firstLine + lineCount { return section.id }
+            firstLine += lineCount
+        }
+        return nil
+    }
+
+    static func heading(matchingFragment fragment: String, in source: String) -> MarkdownOutlineHeading? {
+        let decoded = (fragment.removingPercentEncoding ?? fragment)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard !decoded.isEmpty else { return nil }
+
+        let headings = headings(in: source)
+        if let exact = headings.first(where: {
+            $0.title.localizedCaseInsensitiveCompare(decoded) == .orderedSame
+        }) {
+            return exact
+        }
+
+        let wanted = anchorKey(decoded)
+        guard !wanted.isEmpty else { return nil }
+        return headings.first { anchorKey($0.title) == wanted }
+    }
+
+    /// Only expose headings that can be addressed unambiguously by the exact-title
+    /// fragment contract used by Note#Heading navigation.
+    static func linkableHeadings(in source: String) -> [MarkdownOutlineHeading] {
+        let all = headings(in: source)
+        var counts: [String: Int] = [:]
+        func exactKey(_ title: String) -> String {
+            title.folding(options: [.caseInsensitive, .widthInsensitive], locale: .current)
+        }
+        for heading in all {
+            counts[exactKey(heading.title), default: 0] += 1
+        }
+        return all.filter { counts[exactKey($0.title)] == 1 }
+    }
+
+    private static func anchorKey(_ value: String) -> String {
+        let folded = value.folding(
+            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+            locale: .current
+        )
+        var result = ""
+        var pendingSeparator = false
+
+        for scalar in folded.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                if pendingSeparator, !result.isEmpty { result.append("-") }
+                result.unicodeScalars.append(scalar)
+                pendingSeparator = false
+            } else if CharacterSet.whitespacesAndNewlines.contains(scalar)
+                        || scalar == "-" || scalar == "_" {
+                pendingSeparator = true
+            }
+        }
+        return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+}

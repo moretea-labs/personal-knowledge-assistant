@@ -18,7 +18,7 @@ export function makeHandler(service, webDir) {
             if (url.pathname === '/api/sync' && req.method === 'POST')
                 return json(res, 200, await service.sync());
             if (url.pathname === '/api/search' && req.method === 'GET')
-                return json(res, 200, await service.search(url.searchParams.get('q') || '', { mode: url.searchParams.get('mode') || 'auto', limit: Number(url.searchParams.get('limit') || 12), documentType: url.searchParams.get('documentType') || undefined, source: url.searchParams.get('source') || undefined }));
+                return json(res, 200, await service.search(url.searchParams.get('q') || '', { mode: url.searchParams.get('mode') || 'auto', limit: Number(url.searchParams.get('limit') || 12), documentType: url.searchParams.get('documentType') || undefined, source: url.searchParams.get('source') || undefined, excludeUri: url.searchParams.get('excludeUri') || undefined }));
             if (url.pathname.startsWith('/api/read/') && req.method === 'GET')
                 return json(res, 200, await service.read(decodeURIComponent(url.pathname.slice(10)), Number(url.searchParams.get('maxChars') || 20000)));
             if (url.pathname === '/api/write' && req.method === 'POST')

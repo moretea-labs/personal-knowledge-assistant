@@ -1,0 +1,242 @@
+import SwiftUI
+import XCTest
+@testable import PKSNotes
+
+final class MindMapFunctionalShortcutsTests: XCTestCase {
+    func testNodeStyleShortcutsUseNativeMacKeyBindingsWithoutHijackingTextInput() {
+        XCTAssertNil(MindMapKeyboard.command(for: "b", modifiers: .command))
+        XCTAssertNil(MindMapKeyboard.command(for: "i", modifiers: .command))
+        XCTAssertNil(MindMapKeyboard.command(for: .return, modifiers: .command))
+        XCTAssertNil(MindMapKeyboard.command(for: "b", modifiers: [.command, .shift]))
+        XCTAssertNil(MindMapKeyboard.command(for: "i", modifiers: [.command, .option]))
+        XCTAssertNil(MindMapKeyboard.command(for: "b", modifiers: []))
+        XCTAssertEqual(MindMapKeyboard.command(for: .tab, modifiers: []), .addChild)
+        XCTAssertEqual(MindMapKeyboard.command(for: .return, modifiers: []), .addSibling)
+    }
+
+    func testOptionArrowShortcutsReorderAndReparentWithoutChangingTextFieldEditing() {
+        XCTAssertEqual(
+            MindMapKeyboard.command(for: .upArrow, modifiers: .option),
+            .moveUp
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.command(for: .downArrow, modifiers: .option),
+            .moveDown
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.command(for: .leftArrow, modifiers: .option),
+            .promote
+        )
+        XCTAssertEqual(
+            MindMapKeyboard.command(for: .rightArrow, modifiers: .option),
+            .demote
+        )
+        XCTAssertNil(MindMapKeyboard.command(for: "e", modifiers: .option))
+        XCTAssertNil(MindMapKeyboard.command(for: .leftArrow, modifiers: [.option, .shift]))
+        XCTAssertNil(MindMapKeyboard.command(for: .rightArrow, modifiers: [.option, .command]))
+    }
+
+    func testNodeStyleShortcutsKeepOneCanonicalMarkdownWriter() throws {
+        let original = "# Research\n- [Linked](Docs/Readme.md)\n- Important\n"
+        let nodes = MindMapOutline.nodes(in: original)
+        let id = try XCTUnwrap(nodes.first(where: { $0.title == "Important" })?.id)
+        let boldTitle = MindMapTitleEmphasis.toggle("Important", marker: "**")
+        let bold = try XCTUnwrap(MindMapOutline.rename(in: original, nodeID: id, to: boldTitle))
+        XCTAssertEqual(bold, "# Research\n- [Linked](Docs/Readme.md)\n- **Important**\n")
+        let italicTitle = MindMapTitleEmphasis.toggle(boldTitle, marker: "*")
+        let combined = try XCTUnwrap(MindMapOutline.rename(in: bold, nodeID: id, to: italicTitle))
+        XCTAssertEqual(combined, "# Research\n- [Linked](Docs/Readme.md)\n- ***Important***\n")
+        XCTAssertEqual(MindMapOutline.nodes(in: combined).map(\.depth), nodes.map(\.depth))
+        XCTAssertEqual(MindMapOutline.links(in: combined).map(\.target), ["Docs/Readme.md"])
+    }
+
+    func testNewNodeCancellationRestoresOnlyTheExactOriginalDraft() throws {
+        let original = "# Project\n- Existing\n"
+        let inserted = try XCTUnwrap(MindMapOutline.addChild(in: original, parentID: 0))
+        XCTAssertEqual(inserted, "# Project\n- New idea\n- Existing\n")
+        XCTAssertEqual(
+            MindMapPendingCreation.rollback(in: inserted, expected: inserted, nodeID: 1),
+            original
+        )
+        XCTAssertNil(MindMapPendingCreation.rollback(
+            in: inserted + "- Different\n", expected: inserted, nodeID: 1
+        ))
+        XCTAssertNil(MindMapPendingCreation.rollback(
+            in: original, expected: original, nodeID: 1
+        ))
+    }
+
+    func testAddingChildrenPreservesAttachedMarkdownAndRejectsAmbiguousBoundaries() {
+        let heading = "# Topic\nAn explanation that belongs to the original heading.\n- Next\n"
+        XCTAssertEqual(
+            MindMapOutline.addChild(in: heading, parentID: 0),
+            "# Topic\nAn explanation that belongs to the original heading.\n- New idea\n- Next\n"
+        )
+
+        let list = "# Topic\n- Parent\n  Explanation belongs to Parent.\n- Next\n"
+        XCTAssertEqual(
+            MindMapOutline.addChild(in: list, parentID: 1),
+            "# Topic\n- Parent\n  Explanation belongs to Parent.\n  - New idea\n- Next\n"
+        )
+
+        let unsafe = "# Topic\n- Parent\nUnindented text outside Parent.\n- Next\n"
+        XCTAssertNil(MindMapOutline.addChild(in: unsafe, parentID: 1))
+        XCTAssertEqual(
+            MindMapOutline.addChild(in: "# Topic\n- Existing\n", parentID: 0),
+            "# Topic\n- New idea\n- Existing\n"
+        )
+        XCTAssertEqual(
+            AppLanguage.simplifiedChinese.text(
+                "Cannot add a node here without changing attached Markdown. Use the editor."
+            ),
+            "此处存在关联的 Markdown 正文或代码，无法安全新增节点；请在编辑器中调整。"
+        )
+        XCTAssertEqual(
+            AppLanguage.simplifiedChinese.text("Enter a nonempty, single-line node title."),
+            "请输入非空的单行节点标题。"
+        )
+    }
+
+    func testReturnCreatesTheCorrectSiblingOrHeadingChildAfterAttachedContent() throws {
+        let heading = "# Topic\nHeading explanation.\n- Existing\n"
+        let headingOutcome = try XCTUnwrap(
+            MindMapOutline.addSiblingWithOutcome(in: heading, nodeID: 0)
+        )
+        XCTAssertEqual(
+            headingOutcome.source,
+            "# Topic\nHeading explanation.\n- Existing\n# New idea\n"
+        )
+        XCTAssertEqual(headingOutcome.nodeID, 3)
+
+        let list = "# Topic\n- Parent\n  [PDF · p. 2](Books/Study.pdf#page=2)\n  - Existing child\n- Next\n"
+        let parentID = try XCTUnwrap(
+            MindMapOutline.nodes(in: list).first(where: { $0.title == "Parent" })?.id
+        )
+        let listOutcome = try XCTUnwrap(
+            MindMapOutline.addSiblingWithOutcome(in: list, nodeID: parentID)
+        )
+        XCTAssertEqual(
+            listOutcome.source,
+            "# Topic\n- Parent\n  [PDF · p. 2](Books/Study.pdf#page=2)\n  - Existing child\n- New idea\n- Next\n"
+        )
+        XCTAssertEqual(
+            MindMapOutline.nodes(in: listOutcome.source).first(where: { $0.id == listOutcome.nodeID })?.title,
+            "New idea"
+        )
+    }
+
+    func testCheckboxTaskTogglesInCanonicalMarkdownWithoutTouchingOtherLines() throws {
+        let markdown = """
+        # Study
+        - [ ] Read [paper](Docs/Research.md)
+        - [x] Complete the outline
+        - [X] Finished early
+        - Regular list item
+        """
+        let nodes = MindMapOutline.nodes(in: markdown)
+        XCTAssertEqual(nodes.map(\.id), [0, 1, 2, 3, 4])
+        XCTAssertEqual(MindMapTaskNode.parse(nodes[1].title),
+                       .init(title: "Read [paper](Docs/Research.md)", checked: false))
+        XCTAssertEqual(MindMapTaskNode.parse(nodes[2].title),
+                       .init(title: "Complete the outline", checked: true))
+        XCTAssertEqual(MindMapTaskNode.parse(nodes[3].title),
+                       .init(title: "Finished early", checked: true))
+        XCTAssertNil(MindMapTaskNode.parse(nodes[4].title))
+
+        let checked = try XCTUnwrap(MindMapTaskNode.toggle(in: markdown, nodeID: 1))
+        XCTAssertEqual(checked, markdown.replacingOccurrences(
+            of: "- [ ] Read [paper](Docs/Research.md)",
+            with: "- [x] Read [paper](Docs/Research.md)"
+        ))
+        XCTAssertEqual(MindMapOutline.links(in: checked).map(\.target),
+                       ["Docs/Research.md"])
+        let undone = try XCTUnwrap(MindMapTaskNode.toggle(in: checked, nodeID: 1))
+        XCTAssertEqual(undone, markdown)
+        XCTAssertEqual(
+            MindMapTaskNode.toggle(in: markdown, nodeID: 2),
+            markdown.replacingOccurrences(
+                of: "- [x] Complete the outline",
+                with: "- [ ] Complete the outline"
+            )
+        )
+        XCTAssertNil(MindMapTaskNode.toggle(in: markdown, nodeID: 4))
+        XCTAssertNil(MindMapTaskNode.toggle(in: markdown, nodeID: 0))
+    }
+
+    func testTaskCheckboxAcceptsSpacesAndTabsAfterMarker() throws {
+        let markdown = "# Tasks\n- [ ]\tRead the paper\n- [x]   Complete the outline\n- [X]\t\n"
+        let nodes = MindMapOutline.nodes(in: markdown)
+        let tabTask = try XCTUnwrap(nodes.first { $0.title.hasPrefix("[ ]") })
+        let spacedTask = try XCTUnwrap(nodes.first { $0.title.hasPrefix("[x]") })
+        let emptyTabTask = try XCTUnwrap(nodes.first { $0.title == "[X]" })
+
+        XCTAssertEqual(
+            MindMapTaskNode.parse(tabTask.title),
+            .init(title: "Read the paper", checked: false)
+        )
+        XCTAssertEqual(
+            MindMapTaskNode.parse(spacedTask.title),
+            .init(title: "Complete the outline", checked: true)
+        )
+        XCTAssertEqual(
+            MindMapTaskNode.parse(emptyTabTask.title),
+            .init(title: "", checked: true)
+        )
+        XCTAssertEqual(MindMapTaskNode.titleForEditing(tabTask.title), "Read the paper")
+        XCTAssertEqual(
+            MindMapTaskNode.replacingTitle("Read chapter", in: tabTask.title),
+            "[ ] Read chapter"
+        )
+
+        let checked = try XCTUnwrap(MindMapTaskNode.toggle(in: markdown, nodeID: tabTask.id))
+        XCTAssertTrue(checked.contains("- [x] Read the paper\n"))
+        XCTAssertTrue(checked.contains("- [x]   Complete the outline\n"))
+        XCTAssertTrue(checked.contains("- [X]\t\n"))
+
+        let reopened = try XCTUnwrap(MindMapTaskNode.toggle(in: markdown, nodeID: spacedTask.id))
+        XCTAssertTrue(reopened.contains("- [ ] Complete the outline\n"))
+    }
+
+    func testTitleStylingAndCheckboxTogglingRemainComposable() throws {
+        let base = "# Tasks\n- [ ] Review [paper](Docs/Research.md)\n"
+        let originalID = try XCTUnwrap(MindMapOutline.nodes(in: base).last?.id)
+        let title = try XCTUnwrap(MindMapOutline.nodes(in: base).last?.title)
+        let emphasized = MindMapTitleEmphasis.toggle(title, marker: "**")
+        XCTAssertEqual(emphasized, "[ ] **Review [paper](Docs/Research.md)**")
+        let styled = try XCTUnwrap(MindMapOutline.rename(
+            in: base, nodeID: originalID, to: emphasized
+        ))
+        let checked = try XCTUnwrap(MindMapTaskNode.toggle(in: styled, nodeID: originalID))
+        XCTAssertEqual(checked, "# Tasks\n- [x] **Review [paper](Docs/Research.md)**\n")
+        let italic = MindMapTitleEmphasis.toggle("[x] **Review**", marker: "*")
+        XCTAssertEqual(italic, "[x] ***Review***")
+        XCTAssertEqual(MindMapTitleEmphasis.toggle(italic, marker: "*"), "[x] **Review**")
+        XCTAssertEqual(
+            MindMapTitleEmphasis.toggle("[ ]", marker: "**"), "[ ]",
+            "A checkbox-only task cannot lose its marker when styling empty text."
+        )
+        XCTAssertEqual(MindMapOutline.links(in: checked).map(\.target),
+                       ["Docs/Research.md"])
+        XCTAssertEqual(MindMapTaskNode.toggle(in: checked, nodeID: originalID), styled)
+    }
+
+    func testEmptyTaskAndFencedExampleSafety() throws {
+        let source = "# Tasks\n- [ ]\n- [x]\n\n~~~markdown\n- [ ] Example only\n~~~\n"
+        let nodes = MindMapOutline.nodes(in: source)
+        XCTAssertEqual(nodes.map(\.id), [0, 1, 2])
+        XCTAssertEqual(MindMapTaskNode.parse(nodes[1].title),
+                       .init(title: "", checked: false))
+        XCTAssertEqual(MindMapTaskNode.parse(nodes[2].title),
+                       .init(title: "", checked: true))
+        XCTAssertEqual(
+            MindMapTaskNode.toggle(in: source, nodeID: 1),
+            source.replacingOccurrences(of: "- [ ]\n", with: "- [x]\n")
+        )
+        XCTAssertNil(MindMapTaskNode.toggle(in: source, nodeID: 5))
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Mark task complete"),
+                       "标记任务完成")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.text("Toggle task completion"),
+                       "切换任务完成状态")
+    }
+
+}

@@ -75,3 +75,15 @@ Some `knowledge_admin` actions still serialize on the broad `repo-state:write` r
 - Acceptance: run `npm run build && npm test` against the committed implementation; live daemon rollout requires deploying/restarting the provider and checking its reported version.
 
 The 2026-10-21 changes advance the source package to v0.2.2. The official Forge external-provider registration must be updated with version/revision guarding and then probed separately; a source-only build does not update an installed v0.2.1 package.
+
+
+## 2026-11-06 — PKS search reliability and query performance
+
+- Source v0.2.2 work is consolidated in the existing Issue #1 Work branch. The original dirty Mac checkout and active v0.2.1 provider remain untouched until a separately verified rollout.
+- Live catalog used for the read-only benchmark: **2,743 documents / 6,566 chunks**, compatible hash provider `hash-ngram-v1-256`. Existing standalone HTTP service uses the older installed build.
+- Before optimisation, repeated live HTTP queries measured roughly **7–13 ms** for well-covered literal terms and **74–80 ms** for queries entering hash-semantic retrieval. In a separate read-only source-engine benchmark on the same SQLite database, repeated explicit semantic searches were ~120–135 ms before and ~10–13 ms after vector candidate reuse. Host load, query mode and cold starts affect timing; these are measurements, not a latency SLA.
+- Added **one bounded, ephemeral semantic candidate view** (up to 12 MiB of vector payload) invalidated by SQLite `total_changes()` (same writer) and `PRAGMA data_version` (other writers). SQLite remains the only index authority; no on-disk cache or duplicate corpus.
+- A single-term query with sufficient literal FTS matches no longer scans 5,000 vectors; lower-recall and explicit `mode=semantic` searches retain semantic candidate ranking.
+- Ordinary `最近` / `最新` terms no longer enter health-only structured retrieval and return empty results. Only recognized observation terms use that structured path automatically.
+- Synthetic regression tests cover locator and verified-alias truth, cloud-deferred and metadata-only PDFs, source filtering, local/external database change invalidation, literal fast path and ordinary recency queries. **15/15 Node tests pass**.
+- Repeatable read-only query latency check: `PKS_BENCH_DB=/path/to/knowledge.db npm run benchmark:search`. The benchmark prints no private source content or locations. Do not confuse this source test with deployment to the active Mac daemon or Forge's installed package.

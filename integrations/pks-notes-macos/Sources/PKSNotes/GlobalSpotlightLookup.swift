@@ -1,0 +1,199 @@
+import Foundation
+
+/// Finder-style metadata search using the system's existing Spotlight index.
+/// The search is read-only; PKS remains the document-content index authority.
+@MainActor
+final class GlobalSpotlightLookup {
+    private var query: NSMetadataQuery?
+    private var observer: NSObjectProtocol?
+    private var processingTask: Task<Void, Never>?
+    private var searchToken = UUID()
+
+    func start(_ text: String, completion: @escaping ([GlobalSearchItem]) -> Void) {
+        cancel()
+        let term = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard GlobalSearchRanker.shouldStartDocumentSearch(for: term) else { return }
+
+        let metadata = NSMetadataQuery()
+        // IndexedLocalComputer omits some iCloud Drive files even when Finder
+        // and Spotlight CLI can locate them. LocalComputer includes the home directory.
+        metadata.searchScopes = [NSMetadataQueryLocalComputerScope]
+        metadata.predicate = Self.searchPredicate(for: term)
+        metadata.sortDescriptors = [NSSortDescriptor(key: NSMetadataItemFSNameKey, ascending: true)]
+        query = metadata
+        let token = UUID()
+        searchToken = token
+        observer = NotificationCenter.default.addObserver(
+            forName: .NSMetadataQueryDidFinishGathering,
+            object: metadata, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.searchToken == token,
+                      let metadata = self.query else { return }
+                metadata.disableUpdates()
+                // Snapshot only the bounded metadata projection on the main actor.
+                // Ranking and excerpt matching can invoke NaturalLanguage and scan
+                // long indexed bodies, so neither belongs on the UI executor.
+                var metadataByPath: [String: NSMetadataItem] = [:]
+                var hits: [GlobalSearchItem] = []
+                let gathered = metadata.results.prefix(5000)
+                hits.reserveCapacity(gathered.count)
+                for (index, value) in gathered.enumerated() {
+                    // Metadata items belong to Spotlight's owning run loop. Keep
+                    // the projection on the main actor, but bound each burst so
+                    // Cancel/Escape and subsequent keystrokes can be processed.
+                    if index.isMultiple(of: 32) {
+                        await Task.yield()
+                        guard !Task.isCancelled,
+                              self.searchToken == token, self.query === metadata else { return }
+                    }
+                    guard let result = value as? NSMetadataItem,
+                          let url = Self.fileURL(
+                              metadataURL: result.value(forAttribute: NSMetadataItemURLKey) as? URL,
+                              metadataPath: result.value(forAttribute: NSMetadataItemPathKey) as? String
+                          ),
+                          url.pathExtension.lowercased() != "app" else { continue }
+                    metadataByPath[url.path] = result
+                    let name = result.value(forAttribute: NSMetadataItemFSNameKey) as? String
+                        ?? url.lastPathComponent
+                    let type = result.value(forAttribute: NSMetadataItemContentTypeKey) as? String
+                    let relevance = (result.value(
+                        forAttribute: NSMetadataQueryResultContentRelevanceAttribute
+                    ) as? NSNumber)?.doubleValue ?? 0
+                    hits.append(GlobalSearchItem.spotlight(
+                        url, title: name, isFolder: type == "public.folder", relevance: relevance
+                    ))
+                }
+
+                let rankingTask = Task.detached(priority: .userInitiated) {
+                    Self.rank(hits, for: term)
+                }
+                self.processingTask = Task { @MainActor [weak self] in
+                    let ranked = await withTaskCancellationHandler {
+                        await rankingTask.value
+                    } onCancel: {
+                        rankingTask.cancel()
+                    }
+                    guard let self, !Task.isCancelled,
+                          self.searchToken == token, self.query === metadata else { return }
+
+                    // Read indexed text only for top-N candidates on the main actor,
+                    // then perform excerpt matching on a worker using value snapshots.
+                    var snippetInputs: [(item: GlobalSearchItem, content: String?)] = []
+                    snippetInputs.reserveCapacity(ranked.count)
+                    for (index, item) in ranked.enumerated() {
+                        if index.isMultiple(of: 8) {
+                            await Task.yield()
+                            guard !Task.isCancelled,
+                                  self.searchToken == token, self.query === metadata else { return }
+                        }
+                        snippetInputs.append((
+                            item: item,
+                            content: metadataByPath[item.url.path]?
+                                .value(forAttribute: "kMDItemTextContent") as? String
+                        ))
+                    }
+                    let snippetTask = Task.detached(priority: .userInitiated) {
+                        snippetInputs.map { candidate in
+                            guard !Task.isCancelled,
+                                  let content = candidate.content,
+                                  let snippet = Self.contentSnippet(content, matching: term)
+                            else { return candidate.item }
+                            return candidate.item.withSnippet(snippet)
+                        }
+                    }
+                    let enriched = await withTaskCancellationHandler {
+                        await snippetTask.value
+                    } onCancel: {
+                        snippetTask.cancel()
+                    }
+                    guard !Task.isCancelled,
+                          self.searchToken == token, self.query === metadata else { return }
+                    self.processingTask = nil
+                    self.cancel()
+                    completion(enriched)
+                }
+            }
+        }
+        if !metadata.start() { cancel() }
+    }
+
+    // Reuse macOS Spotlight's existing content index; no new disk crawl or
+    // document ingestion. Very short queries stay filename-only to avoid
+    // broad, low-signal full-text searches.
+    nonisolated static func searchPredicate(for term: String) -> NSPredicate {
+        if term.count < 3 {
+            return NSPredicate(
+                format: "(%K CONTAINS[cd] %@) OR (%K CONTAINS[cd] %@)",
+                NSMetadataItemFSNameKey, term, NSMetadataItemPathKey, term
+            )
+        }
+        return NSPredicate(
+            format: "(%K CONTAINS[cd] %@) OR (%K CONTAINS[cd] %@) OR (%K CONTAINS[cd] %@)",
+            NSMetadataItemFSNameKey, term,
+            "kMDItemTextContent", term,
+            NSMetadataItemPathKey, term
+        )
+    }
+
+    /// Excerpt from Spotlight's indexed metadata without opening or hydrating the file.
+    nonisolated static func contentSnippet(
+        _ content: String?, matching term: String, limit: Int = 120
+    ) -> String? {
+        WorkspaceSearch.contentSnippet(content, matching: term, limit: limit)
+    }
+
+    // NSMetadataItemURLKey can be absent for iCloud Drive and local results;
+    // NSMetadataItemPathKey still identifies the document. Returning a URL
+    // does not grant sandbox access to the file's contents.
+    nonisolated static func fileURL(metadataURL: URL?, metadataPath: String?) -> URL? {
+        if let metadataURL, metadataURL.isFileURL { return metadataURL }
+        guard let metadataPath, metadataPath.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: metadataPath)
+    }
+
+    func cancel() {
+        searchToken = UUID()
+        processingTask?.cancel()
+        processingTask = nil
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+            self.observer = nil
+        }
+        query?.stop()
+        query = nil
+    }
+
+    /// Deterministic top-N projection; no local catalog or alternate index.
+    nonisolated static func rank(_ entries: [GlobalSearchItem], for term: String, limit: Int = 35) -> [GlobalSearchItem] {
+        // Derive all query-specific matching once. The same cached result
+        // drives Spotlight top-N, the content-match badge and unified merge.
+        let queryTransliteration = entries.contains { $0.kind != .application }
+            ? WorkspaceSearch.queryTransliterationKey(term) : nil
+        let ranked = entries.compactMap { item -> (item: GlobalSearchItem, ranking: GlobalSearchRanking)? in
+            guard !Task.isCancelled else { return nil }
+            let ranking = GlobalSearchRanker.ranking(
+                for: item, query: term, queryTransliteration: queryTransliteration
+            )
+            return (item: item.withRanking(ranking), ranking: ranking)
+        }
+        guard !Task.isCancelled else { return [] }
+        return ranked.sorted { left, right in
+            let leftName = left.ranking.spotlightNameRank
+            let rightName = right.ranking.spotlightNameRank
+            if leftName != rightName { return leftName < rightName }
+            let leftPath = left.ranking.spotlightPathRank
+            let rightPath = right.ranking.spotlightPathRank
+            if leftPath != rightPath { return leftPath < rightPath }
+
+            if leftName == 5, leftPath == 5,
+               left.item.spotlightRelevance != right.item.spotlightRelevance {
+                return left.item.spotlightRelevance > right.item.spotlightRelevance
+            }
+            if left.item.title.count != right.item.title.count {
+                return left.item.title.count < right.item.title.count
+            }
+            return left.item.title.localizedStandardCompare(right.item.title) == .orderedAscending
+        }.prefix(max(0, limit)).map(\.item)
+    }
+}

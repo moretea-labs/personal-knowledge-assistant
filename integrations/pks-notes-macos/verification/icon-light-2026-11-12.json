@@ -1,0 +1,41 @@
+{
+  "date": "2026-11-12",
+  "feature": "Leafspan user-selected light note icon",
+  "selection": {
+    "status": "user_selected",
+    "instruction": "那就用这个",
+    "appearance": "ivory tile, pale stone folded cover, white paper and graphite writing strokes"
+  },
+  "sourceBaseCommit": "f741798aaaefc5ec7ee3bbd89ca788f15615110b",
+  "checks": {
+    "tenNativeIconSizes": "passed",
+    "icnsRoundTripExtraction": "passed",
+    "rgbaTransparency": "passed",
+    "masterVisualInspection": "passed",
+    "installedApplicationDockReview": "not_run"
+  },
+  "assets": {
+    "Resources/LeafspanIcon-master.png": {
+      "sha256": "73e70814c2602538ee3c9749b60489dde2e919f7ba6b52c1f8846f9599bf99f1",
+      "bytes": 1736653
+    },
+    "Resources/AppIcon-1024.png": {
+      "sha256": "3c2fd07ae322835da5340dacbd3edc81c442cbad4b0ae5963573aca2270e2378",
+      "bytes": 1145269
+    },
+    "Resources/AppIcon.icns": {
+      "sha256": "26ef57be1af136588bc8f5c7d7ba97089e117bdc820dab41d0fbd8abed986c7b",
+      "bytes": 1882133
+    },
+    "scripts/generate-app-icon.swift": {
+      "sha256": "a4e1d49552e16247d637f6d17b2213adbfd608b69e0ea95ddd329712be747b32",
+      "bytes": 2468
+    }
+  },
+  "retestWhen": [
+    "master artwork changes",
+    "icon generator changes",
+    "bundle icon mapping changes"
+  ],
+  "scope": "Selected artwork and export validation only; does not certify functionality or installed-app behavior."
+}

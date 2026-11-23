@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-12",
+  "feature": "Selected Leafspan icon replacement guard",
+  "checks": {
+    "selected_assets_pass": "passed",
+    "changed_master_rejected_before_export": "passed",
+    "changed_icns_rejected": "passed",
+    "installer_rejects_changed_icon": "passed",
+    "packager_rejects_changed_icon": "passed",
+    "wrong_bundle_mapping_rejected": "passed"
+  },
+  "scope": "Isolated temporary fixture only; no real app installation, signing, packaging or GUI process changes.",
+  "inputs": {
+    "Resources/LeafspanIcon-master.png": "c5210fdb3f93f9a517c6ca27eaba39a05c1c59b4287f5390b751787863d09086",
+    "Resources/AppIcon-1024.png": "b28deaa82d5f530a7c89fec1944a7978ad52faf36acd12f76134cd86d3a5ed9d",
+    "Resources/AppIcon.icns": "9b03f0228b2e8c1c02d810cd303ac0a0db92844b6c95f7e035485599fb1916ce",
+    "Resources/AppIcon.sha256": "6fbc3a300fd8a56c7aa4f80d295f2d499e45a7b2c73dc6a08e68466d99ef58d5",
+    "Resources/Info.plist": "0cbfd2b251fb1d9b97d2578c7cd3f9804b4ec5ca0455b0a0f660110fe98baa6b",
+    "scripts/generate-app-icon.swift": "045d211f6d104145ce0eb47005d5e631c764d6fbdcbbc42611ab52f4a73dcaf0",
+    "scripts/verify-app-icon.py": "96e467fe078ccd849afe15a12e5499fe79d106150314671d7641252d351c7365",
+    "scripts/install-macos.sh": "6707eadde5905efd8e41d4228ca4b72802d99163dd69f3e5aa2500125a5e2216",
+    "scripts/package-appstore.sh": "186f70f918db64c5727aef984aa7084949202b7d5fcdafc94d567f9d63b59ffc"
+  }
+}

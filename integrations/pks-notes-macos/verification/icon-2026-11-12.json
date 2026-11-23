@@ -1,0 +1,36 @@
+{
+  "date": "2026-11-12",
+  "feature": "Leafspan abstract folded-span icon",
+  "sourceBaseCommit": "f741798aaaefc5ec7ee3bbd89ca788f15615110b",
+  "checks": {
+    "tenNativeIconSizes": "passed",
+    "icnsRoundTripExtraction": "passed",
+    "reproducibleGeneration": "passed",
+    "masterVisualInspection": "passed",
+    "installedApplicationDockReview": "not_run"
+  },
+  "assets": {
+    "Resources/LeafspanIcon-master.png": {
+      "sha256": "7a44820212518fe6655fb0d225eb39180466e21e7a28bd7fae47de56bd2a7fbb",
+      "bytes": 2011086
+    },
+    "Resources/AppIcon-1024.png": {
+      "sha256": "af671d7d53f3d4159e144a53593cd7fab98ba54d9538d2368aec6999f9e74779",
+      "bytes": 1351454
+    },
+    "Resources/AppIcon.icns": {
+      "sha256": "e9496b3f76d1204957783d17aeecd98c6794db10e3a05b7452592205d9e73a4e",
+      "bytes": 2158058
+    },
+    "scripts/generate-app-icon.swift": {
+      "sha256": "a1e7fb8f56e7141c2bcdd5d9d07edf2bb9f18084e4f8f5eb8a00aee755685372",
+      "bytes": 2472
+    }
+  },
+  "retestWhen": [
+    "master artwork changes",
+    "icon generator changes",
+    "bundle icon mapping changes"
+  ],
+  "scope": "Asset generation only. Does not certify native UI, functionality, StoreKit, iCloud or release readiness."
+}

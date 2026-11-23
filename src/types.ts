@@ -1,6 +1,6 @@
 // @ts-nocheck
 export type SourceType = 'local' | 'obsidian' | 'notion' | 'managed';
-export type SearchMode = 'auto' | 'fts' | 'semantic' | 'metadata' | 'structured';
+export type SearchMode = 'auto' | 'fts' | 'semantic' | 'metadata' | 'structured' | 'related';
 
 export interface SourceRootConfig {
   id: string;

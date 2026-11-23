@@ -39,5 +39,17 @@ CREATE TABLE IF NOT EXISTS document_collections(document_id TEXT NOT NULL,collec
 `);
     for(const sql of ["ALTER TABLE chunks ADD COLUMN embedding_provider TEXT","ALTER TABLE chunks ADD COLUMN embedding_dim INTEGER"]){try{this.db.exec(sql);}catch{}}
   }
+  // SQLite is the one cross-process write coordinator. Yield between BUSY attempts
+  // instead of blocking another connection's asynchronous filesystem operation.
+  async beginWrite(timeoutMs=5000) {
+    const deadline=Date.now()+timeoutMs;
+    while (true) {
+      try { this.db.exec('BEGIN IMMEDIATE'); return; }
+      catch (error:any) {
+        if (!/SQLITE_BUSY|database is locked/i.test(String(error?.message||error)) || Date.now()>=deadline) throw error;
+        await new Promise(resolve=>setTimeout(resolve,10));
+      }
+    }
+  }
   close() { this.db?.close(); }
 }

@@ -1,6 +1,6 @@
 // @ts-nocheck
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile, rename, rm } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, readFile, stat, writeFile, rename, rm, open } from 'node:fs/promises';
 import { dirname, resolve, relative, isAbsolute, sep } from 'node:path';
 
 export async function ensureDir(path: string) { await mkdir(path, { recursive: true }); }
@@ -13,8 +13,20 @@ export function safeInside(root: string, candidate: string): boolean {
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
 }
 export async function atomicWrite(path: string, content: string) {
-  await ensureDir(dirname(path)); const tmp = `${path}.pks-tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, content, 'utf8'); await rename(tmp, path);
+  await ensureDir(dirname(path)); const tmp = `${path}.pks-tmp-${process.pid}-${randomUUID()}`;
+  try { await writeFile(tmp, content, 'utf8'); await rename(tmp, path); }
+  finally { await rm(tmp, { force: true }); }
+}
+
+export async function createExclusive(path: string, content: string) {
+  await ensureDir(dirname(path));
+  const handle = await open(path, 'wx');
+  let written = false;
+  try { await handle.writeFile(content, 'utf8'); written = true; }
+  finally {
+    await handle.close();
+    if (!written) await rm(path, { force: true });
+  }
 }
 export async function fileExists(path: string) { try { await stat(path); return true; } catch { return false; } }
 export async function removeIfExists(path: string) { if (await fileExists(path)) await rm(path, { force: true }); }

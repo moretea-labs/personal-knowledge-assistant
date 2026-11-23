@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-12",
+  "feature": "Leafspan light note with muted apricot folded border",
+  "request": "Combine image two and three; paler orange border; retain image three effect",
+  "checks": {
+    "tenNativeIconSizes": "passed",
+    "icnsExtraction": "passed",
+    "rgbaTransparency": "passed",
+    "masterVisualInspection": "passed",
+    "installedAppReview": "not_run"
+  },
+  "assets": {
+    "Resources/LeafspanIcon-master.png": "c5210fdb3f93f9a517c6ca27eaba39a05c1c59b4287f5390b751787863d09086",
+    "Resources/AppIcon-1024.png": "b28deaa82d5f530a7c89fec1944a7978ad52faf36acd12f76134cd86d3a5ed9d",
+    "Resources/AppIcon.icns": "9b03f0228b2e8c1c02d810cd303ac0a0db92844b6c95f7e035485599fb1916ce",
+    "scripts/generate-app-icon.swift": "ce005ebea832a214c229acf791062ab0f428248775709f26b22559132303964f"
+  },
+  "scope": "Artwork and export validation only; no unrelated functionality tests repeated."
+}
