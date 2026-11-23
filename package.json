@@ -6,6 +6,7 @@
   "main": "dist/src/server.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:native": "bash scripts/build-native-node.sh dist/native/pks.node",
     "start": "node dist/src/server.js",
     "cli": "node dist/src/cli.js",
     "test": "node --test dist/tests/*.test.js",
