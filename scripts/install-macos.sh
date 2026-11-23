@@ -9,6 +9,7 @@ LABEL="com.personal-knowledge.pks"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 CONFIG="$HOME/.pks/config.json"
 NODE="$(command -v node)"
+NPM="$(command -v npm)"
 SERVICE="gui/$(id -u)/$LABEL"
 
 health_ready() {
@@ -30,12 +31,70 @@ bootstrap_and_wait() {
   return 1
 }
 
-test -f "$ROOT/dist/src/server.js"
-"$ROOT/scripts/build-native-node.sh" "$ROOT/dist/native/pks.node" >/dev/null
-test -f "$ROOT/dist/native/pks.node"
 test -f "$ROOT/package.json"
+test -f "$ROOT/package-lock.json"
+test -f "$ROOT/tsconfig.json"
+test -f "$ROOT/pks.config.example.json"
+test -d "$ROOT/src"
+test -d "$ROOT/native/pks-core"
+test -f "$ROOT/scripts/build-native-node.sh"
 test -f "$ROOT/scripts/forge-provider.mjs"
+
+if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  service_dirty="$(git -C "$ROOT" status --porcelain --     src forge-adapter native/pks-core package.json package-lock.json tsconfig.json     scripts/build-native-node.sh scripts/forge-provider.mjs)"
+  if [[ -n "$service_dirty" ]]; then
+    echo "Refusing to install PKS daemon from dirty service source; use a clean commit/archive." >&2
+    printf '%s\n' "$service_dirty" >&2
+    exit 6
+  fi
+fi
+
 mkdir -p "$DEST" "$HOME/Library/LaunchAgents" "$HOME/.pks"
+
+build_root="$(mktemp -d "${TMPDIR:-/tmp}/pks-service-build.XXXXXX")"
+stage=""
+cleanup_temp() {
+  if [[ -n "${build_root:-}" && -d "$build_root" ]]; then rm -rf "$build_root"; fi
+  if [[ -n "${stage:-}" && -d "$stage" ]]; then rm -rf "$stage"; fi
+}
+trap cleanup_temp EXIT
+
+mkdir -p "$build_root/scripts" "$build_root/native"
+cp "$ROOT/package.json" "$ROOT/package-lock.json" "$ROOT/tsconfig.json" "$build_root/"
+cp -R "$ROOT/src" "$build_root/src"
+if [[ -d "$ROOT/forge-adapter" ]]; then cp -R "$ROOT/forge-adapter" "$build_root/forge-adapter"; fi
+/usr/bin/rsync -a --exclude target "$ROOT/native/pks-core/" "$build_root/native/pks-core/"
+cp "$ROOT/scripts/build-native-node.sh" "$build_root/scripts/build-native-node.sh"
+cp "$ROOT/scripts/forge-provider.mjs" "$build_root/scripts/forge-provider.mjs"
+
+(
+  cd "$build_root"
+  "$NPM" ci --ignore-scripts --no-audit --no-fund --prefer-offline
+  "$NPM" run build
+  bash scripts/build-native-node.sh dist/native/pks.node >/dev/null
+)
+
+test -f "$build_root/dist/src/server.js"
+test -f "$build_root/dist/src/core/service.js"
+test -f "$build_root/dist/src/core/native-search.js"
+test -f "$build_root/dist/native/pks.node"
+"$NODE" --check "$build_root/dist/src/server.js"
+"$NODE" --check "$build_root/dist/src/core/native-search.js"
+
+PKS_NATIVE_ADDON_PATH="$build_root/dist/native/pks.node"   "$NODE" --input-type=module - "$build_root/dist/src/core/service.js" <<'NODE'
+import { pathToFileURL } from 'node:url';
+const { PKSService } = await import(pathToFileURL(process.argv[2]).href);
+const service = new PKSService({
+  dataDir: '/tmp/pks-installer-preflight',
+  managedStore: '/tmp/pks-installer-preflight-managed',
+  port: 0,
+  host: '127.0.0.1',
+  sourceRoots: [],
+  semantic: { provider: 'hash', dimensions: 256 },
+  forge: { enabled: false }
+});
+if (service.searchEngine !== 'native') process.exit(1);
+NODE
 
 if [[ -e "$PLIST" ]]; then
   configured="$(/usr/bin/plutil -extract ProgramArguments.1 raw -o - "$PLIST")"
@@ -67,9 +126,9 @@ fi
 stage="$(mktemp -d "$DEST/.stage-XXXXXX")"
 rollback="$(mktemp -d "$DEST/.rollback-XXXXXX")"
 mkdir -p "$stage/scripts"
-cp -R "$ROOT/dist" "$stage/"
-cp "$ROOT/package.json" "$stage/package.json"
-cp "$ROOT/scripts/forge-provider.mjs" "$stage/scripts/forge-provider.mjs"
+cp -R "$build_root/dist" "$stage/"
+cp "$build_root/package.json" "$stage/package.json"
+cp "$build_root/scripts/forge-provider.mjs" "$stage/scripts/forge-provider.mjs"
 "$NODE" --check "$stage/dist/src/server.js"
 "$NODE" --check "$stage/scripts/forge-provider.mjs"
 
