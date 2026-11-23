@@ -92,6 +92,45 @@ final class EmbeddedPKSLibraryTests: XCTestCase {
         XCTAssertEqual(preserved.first?.title, "Secret.md")
     }
 
+    func testUnreadableTextPreservesPreviouslyIndexedBodyAndAllowsRecovery() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-Decode-Safety-\(UUID().uuidString)", isDirectory: true)
+        let root = base.appendingPathComponent("Library", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let note = root.appendingPathComponent("Note.md")
+        try "# Notes\nReliable indexed passage.".write(to: note, atomically: true, encoding: .utf8)
+        let suite = "EmbeddedPKSDecode-\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let registry = EmbeddedPKSLibrarySourceRegistry(suiteName: suite)
+        let source = try await registry.add(folder: root, excludingWorkspace: nil)
+        let core = try EmbeddedPKSCore(
+            databaseURL: base.appendingPathComponent("Index/knowledge.db")
+        )
+        let indexer = EmbeddedPKSLibraryIndexer(core: core)
+        let firstScan = try await indexer.refresh(source)
+        XCTAssertEqual(firstScan.indexedContentFiles, 1)
+
+        // A failed content read must not replace indexed chunks with metadata-only.
+        try Data([0xFF, 0xFE, 0xFD]).write(to: note, options: .atomic)
+        do {
+            _ = try await indexer.refresh(source)
+            XCTFail("A failed text read must not finalize a partial source scan")
+        } catch EmbeddedPKSLibraryError.enumerationFailed {
+            // Previously indexed content stays searchable.
+        }
+        let preserved = try await core.search("Reliable", mode: "fts", source: source.id)
+        XCTAssertEqual(preserved.first?.title, "Note.md")
+
+        try "# Notes\nUpdated indexed passage.".write(
+            to: note, atomically: true, encoding: .utf8
+        )
+        let recoveryScan = try await indexer.refresh(source)
+        XCTAssertEqual(recoveryScan.indexedContentFiles, 1)
+        let refreshed = try await core.search("Updated", mode: "fts", source: source.id)
+        XCTAssertEqual(refreshed.first?.title, "Note.md")
+    }
+
     func testRegistryAndIndexerPersistGrantAndBuildOfflineIndex() async throws {
         let suite = "EmbeddedPKSLibraryTests-\(UUID().uuidString)"
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }

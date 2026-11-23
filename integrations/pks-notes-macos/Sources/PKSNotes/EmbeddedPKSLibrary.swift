@@ -197,7 +197,13 @@ actor EmbeddedPKSLibraryIndexer {
             var text: String?
             if Self.contentExtensions.contains(ext),
                byteCount <= Self.maximumTextBytes {
-                text = try? String(contentsOf: canonical, encoding: .utf8)
+                do {
+                    text = try String(contentsOf: canonical, encoding: .utf8)
+                } catch {
+                    // Transient file errors must not replace indexed chunks
+                    // with metadata-only and silently lose searchable content.
+                    throw EmbeddedPKSLibraryError.enumerationFailed
+                }
             }
 
             let contentAvailable = text != nil
