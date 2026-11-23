@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import PKSNotes
 
@@ -20,6 +21,77 @@ final class EmbeddedPKSLibraryTests: XCTestCase {
     }
 
 #if canImport(PKSCore)
+    func testIndexDoesNotFollowSymlinkOutOfGrantedFolder() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-Link-Safety-\(UUID().uuidString)", isDirectory: true)
+        let root = base.appendingPathComponent("Granted", isDirectory: true)
+        let outside = base.appendingPathComponent("Outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let privateNote = outside.appendingPathComponent("Private.md")
+        try "# Confidential\nDo not index outside a folder grant.".write(
+            to: privateNote, atomically: true, encoding: .utf8
+        )
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("Escape.md"), withDestinationURL: privateNote
+        )
+        let suite = "EmbeddedPKSLinks-\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let registry = EmbeddedPKSLibrarySourceRegistry(suiteName: suite)
+        let source = try await registry.add(folder: root, excludingWorkspace: nil)
+        let core = try EmbeddedPKSCore(
+            databaseURL: base.appendingPathComponent("Index/knowledge.db")
+        )
+        let summary = try await EmbeddedPKSLibraryIndexer(core: core).refresh(source)
+        XCTAssertEqual(summary.scannedFiles, 0)
+        let hits = try await core.search("Confidential", source: source.id)
+        XCTAssertTrue(hits.isEmpty)
+    }
+
+    func testIncompleteEnumerationDoesNotPurgePreviouslyIndexedDocuments() async throws {
+        guard geteuid() != 0 else { throw XCTSkip("Requires a non-root user") }
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-Scan-Safety-\(UUID().uuidString)", isDirectory: true)
+        let restricted = base.appendingPathComponent("Restricted", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: restricted, withIntermediateDirectories: true
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700], ofItemAtPath: restricted.path
+            )
+            try? FileManager.default.removeItem(at: base)
+        }
+        try "# Secret\nPreviously indexed content.".write(
+            to: restricted.appendingPathComponent("Secret.md"),
+            atomically: true, encoding: .utf8
+        )
+        let suite = "EmbeddedPKSScan-\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let registry = EmbeddedPKSLibrarySourceRegistry(suiteName: suite)
+        let source = try await registry.add(folder: base, excludingWorkspace: nil)
+        let core = try EmbeddedPKSCore(
+            databaseURL: base.appendingPathComponent("Index/knowledge.db")
+        )
+        let indexer = EmbeddedPKSLibraryIndexer(core: core)
+        let initial = try await indexer.refresh(source)
+        XCTAssertEqual(initial.indexedContentFiles, 1)
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0], ofItemAtPath: restricted.path
+        )
+        do {
+            _ = try await indexer.refresh(source)
+            XCTFail("Incomplete enumeration must not finalize missing entries")
+        } catch EmbeddedPKSLibraryError.enumerationFailed {
+            // Expected: previous indexed files must remain searchable.
+        }
+        let preserved = try await core.search("Secret", mode: "metadata", source: source.id)
+        XCTAssertEqual(preserved.first?.title, "Secret.md")
+    }
+
     func testRegistryAndIndexerPersistGrantAndBuildOfflineIndex() async throws {
         let suite = "EmbeddedPKSLibraryTests-\(UUID().uuidString)"
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }

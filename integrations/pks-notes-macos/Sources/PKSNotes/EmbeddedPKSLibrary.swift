@@ -161,6 +161,7 @@ actor EmbeddedPKSLibraryIndexer {
 
         let keys: [URLResourceKey] = [
             .isRegularFileKey,
+            .isSymbolicLinkKey,
             .fileSizeKey,
             .creationDateKey,
             .contentModificationDateKey
@@ -171,6 +172,9 @@ actor EmbeddedPKSLibraryIndexer {
             fileManager: fileManager
         )
 
+        // Constrain all indexed files to the granted root, including symlink targets.
+        let rootPath = root.standardizedFileURL.resolvingSymlinksInPath().path
+        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
         var seen: [String] = []
         var scanned = 0
         var contentIndexed = 0
@@ -184,9 +188,11 @@ actor EmbeddedPKSLibraryIndexer {
             else { continue }
 
             let values = try fileURL.resourceValues(forKeys: Set(keys))
-            guard values.isRegularFile == true else { continue }
+            guard values.isRegularFile == true,
+                  values.isSymbolicLink != true else { continue }
 
             let canonical = fileURL.standardizedFileURL.resolvingSymlinksInPath()
+            guard canonical.path.hasPrefix(rootPrefix) else { continue }
             let byteCount = values.fileSize ?? 0
             var text: String?
             if Self.contentExtensions.contains(ext),
@@ -236,17 +242,26 @@ actor EmbeddedPKSLibraryIndexer {
         keys: [URLResourceKey],
         fileManager: FileManager
     ) throws -> [URL] {
+        // A partial scan must not mark unseen indexed documents as deleted.
+        // Inaccessible File Provider/iCloud subdirectories are not deletions.
+        var enumerationError: Error?
         guard let enumerator = fileManager.enumerator(
             at: root,
             includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles, .skipsPackageDescendants],
-            errorHandler: { _, _ in true }
+            errorHandler: { _, error in
+                enumerationError = error
+                return false
+            }
         ) else {
             throw EmbeddedPKSLibraryError.enumerationFailed
         }
         var files: [URL] = []
         while let next = enumerator.nextObject() as? URL {
             files.append(next)
+        }
+        guard enumerationError == nil else {
+            throw EmbeddedPKSLibraryError.enumerationFailed
         }
         return files
     }
