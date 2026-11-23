@@ -11,10 +11,18 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 deployment_target="${PKS_MACOS_DEPLOYMENT_TARGET:-$(sw_vers -productVersion | awk -F. '{print $1 "." $2}')}"
-export MACOSX_DEPLOYMENT_TARGET="$deployment_target"
-export CFLAGS="-mmacosx-version-min=$deployment_target ${CFLAGS:-}"
+arch="$(uname -m)"
+case "$arch" in
+  arm64) target_triple="aarch64-apple-darwin" ;;
+  x86_64) target_triple="x86_64-apple-darwin" ;;
+  *) echo "Unsupported macOS architecture: $arch" >&2; exit 2 ;;
+esac
 
-cargo build --locked --release --manifest-path "$CORE/Cargo.toml"
+target_env="$(echo "$target_triple" | tr '[:lower:]-' '[:upper:]_')"
+cflags_env="CFLAGS_$(echo "$target_triple" | tr '-' '_')"
+target_dir="$CORE/target"
+
+env   CARGO_TARGET_DIR="$target_dir"   "CARGO_TARGET_${target_env}_RUSTFLAGS=-C link-arg=-mmacosx-version-min=$deployment_target"   "$cflags_env=-mmacosx-version-min=$deployment_target"   cargo build --locked --release --target "$target_triple" --manifest-path "$CORE/Cargo.toml"
 
 node_include=""
 for candidate in /opt/homebrew/include/node /usr/local/include/node "$(brew --prefix 2>/dev/null)/include/node"; do
@@ -28,8 +36,10 @@ if [[ -z "$node_include" ]]; then
   exit 3
 fi
 
+library="$target_dir/$target_triple/release/libpks_core.a"
+test -f "$library"
 mkdir -p "$(dirname "$OUT")"
-clang -bundle -undefined dynamic_lookup -mmacosx-version-min="$deployment_target"   -I "$node_include"   "$CORE/adapters/node.c"   "$CORE/target/release/libpks_core.a"   -o "$OUT"
+clang -arch "$arch" -bundle -undefined dynamic_lookup   -mmacosx-version-min="$deployment_target"   -I "$node_include"   "$CORE/adapters/node.c"   "$library"   -o "$OUT"
 
 node -e '
 const addon = require(process.argv[1]);
