@@ -132,3 +132,24 @@ extension MindMapVisualStyleTests {
         )
     }
 }
+
+extension MindMapVisualStyleTests {
+    func testTaskCompletionAnnouncesCurrentStateInBothLanguages() {
+        XCTAssertEqual(
+            MindMapTaskAccessibility.accessibilityValue(isCompleted: true, language: .english),
+            "Completed"
+        )
+        XCTAssertEqual(
+            MindMapTaskAccessibility.accessibilityValue(isCompleted: false, language: .english),
+            "Not completed"
+        )
+        XCTAssertEqual(
+            MindMapTaskAccessibility.accessibilityValue(isCompleted: true, language: .simplifiedChinese),
+            "已完成"
+        )
+        XCTAssertEqual(
+            MindMapTaskAccessibility.accessibilityValue(isCompleted: false, language: .simplifiedChinese),
+            "未完成"
+        )
+    }
+}

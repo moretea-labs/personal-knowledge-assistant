@@ -342,6 +342,12 @@ enum MindMapNodeAccessibility {
     }
 }
 
+enum MindMapTaskAccessibility {
+    static func accessibilityValue(isCompleted: Bool, language: AppLanguage) -> String {
+        language.text(isCompleted ? "Completed" : "Not completed")
+    }
+}
+
 enum MindMapDocumentProjectionState {
     static func hasChanged(from previous: URL?, to current: URL?) -> Bool {
         guard let previous, let current else { return previous != current }
@@ -1801,6 +1807,7 @@ struct MindMapCanvas: View {
                     .buttonStyle(.plain)
                     .help(language.text(task.checked ? "Mark task incomplete" : "Mark task complete"))
                     .accessibilityLabel(language.text(task.checked ? "Mark task incomplete" : "Mark task complete"))
+                    .accessibilityValue(MindMapTaskAccessibility.accessibilityValue(isCompleted: task.checked, language: language))
                     .accessibilityIdentifier("pks-mind-map-task-\(node.id)")
                 }
             }

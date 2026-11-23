@@ -163,6 +163,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "QA preview — purchases disabled": "开发测试预览 · 已禁用购买",
         "Mark task complete": "标记任务完成",
         "Mark task incomplete": "标记任务未完成",
+        "Completed": "已完成",
+        "Not completed": "未完成",
         "Toggle task completion": "切换任务完成状态",
         "Bold / Italic node title": "节点标题加粗／斜体",
         "Cannot add a node here without changing attached Markdown. Use the editor.": "此处存在关联的 Markdown 正文或代码，无法安全新增节点；请在编辑器中调整。",
