@@ -7,6 +7,7 @@ pub use embedded::{
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
     ffi::{CStr, CString, c_char},
     path::Path,
     ptr,
@@ -59,11 +60,45 @@ pub struct SearchResponse {
     pub results: Vec<SearchResult>,
 }
 
+const SEMANTIC_CACHE_VECTOR_BUDGET_BYTES: usize = 12 * 1024 * 1024;
+
+#[derive(Debug, Clone)]
+struct SemanticCandidate {
+    document_id: String,
+    chunk_id: String,
+    title: String,
+    uri: String,
+    source_type: String,
+    source_id: String,
+    document_type: Option<String>,
+    modified_at: Option<String>,
+    text: String,
+    page: Option<i64>,
+    heading_path: Option<String>,
+    index_status: Option<String>,
+    vector: Vec<f32>,
+}
+
+#[derive(Debug)]
+struct SemanticCache {
+    revision: (i64, i64),
+    dimensions: i64,
+    candidates: Vec<SemanticCandidate>,
+}
+
 pub struct PksHandle {
     db: Connection,
+    semantic_cache: RefCell<Option<SemanticCache>>,
 }
 
 impl PksHandle {
+    pub(crate) fn from_connection(db: Connection) -> Self {
+        Self {
+            db,
+            semantic_cache: RefCell::new(None),
+        }
+    }
+
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let db = Connection::open_with_flags(
             path,
@@ -71,7 +106,7 @@ impl PksHandle {
         )?;
         db.busy_timeout(std::time::Duration::from_secs(2))?;
         db.pragma_update(None, "query_only", "ON")?;
-        Ok(Self { db })
+        Ok(Self::from_connection(db))
     }
 
     pub fn search(&self, request: &SearchRequest) -> rusqlite::Result<SearchResponse> {
@@ -391,17 +426,22 @@ impl PksHandle {
         Ok(results)
     }
 
-    fn semantic(&self, req: &SearchRequest, limit: usize) -> rusqlite::Result<Vec<SearchResult>> {
-        let dimensions: Option<i64> = self.db.query_row(
-            "SELECT embedding_dim FROM chunks WHERE embedding_json IS NOT NULL AND embedding_provider LIKE 'hash-ngram-v1-%' AND embedding_dim IS NOT NULL LIMIT 1",
-            [], |row| row.get(0)
-        ).optional()?;
-        let Some(dimensions) = dimensions.filter(|d| *d > 0 && *d <= 4096) else {
-            return Ok(Vec::new());
-        };
-        let query_vector = hash_embedding(&req.query, dimensions as usize);
-        let mut stmt = self.db.prepare("SELECT d.id,c.id,d.title,d.uri,d.source_type,d.source_id,d.document_type,d.modified_at,c.text,c.page,c.heading_path,d.index_status,c.embedding_json,c.embedding_provider,c.embedding_dim FROM chunks c JOIN documents d ON d.id=c.document_id WHERE c.embedding_json IS NOT NULL AND c.embedding_provider=?1 AND c.embedding_dim=?2 AND d.deleted_at IS NULL ORDER BY d.modified_at DESC LIMIT 5000")?;
+    fn semantic_revision(&self) -> rusqlite::Result<(i64, i64)> {
+        let total_changes = self
+            .db
+            .query_row("SELECT total_changes()", [], |row| row.get::<_, i64>(0))?;
+        let data_version = self
+            .db
+            .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))?;
+        Ok((total_changes, data_version))
+    }
+
+    fn load_semantic_candidates(
+        &self,
+        dimensions: i64,
+    ) -> rusqlite::Result<Vec<SemanticCandidate>> {
         let provider = format!("hash-ngram-v1-{dimensions}");
+        let mut stmt = self.db.prepare("SELECT d.id,c.id,d.title,d.uri,d.source_type,d.source_id,d.document_type,d.modified_at,c.text,c.page,c.heading_path,d.index_status,c.embedding_json FROM chunks c JOIN documents d ON d.id=c.document_id WHERE c.embedding_json IS NOT NULL AND c.embedding_provider=?1 AND c.embedding_dim=?2 AND d.deleted_at IS NULL ORDER BY d.modified_at DESC LIMIT 5000")?;
         let rows = stmt.query_map(params![provider, dimensions], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -419,7 +459,8 @@ impl PksHandle {
                 r.get::<_, String>(12)?,
             ))
         })?;
-        let mut ranked = Vec::new();
+
+        let mut candidates = Vec::new();
         for row in rows {
             let (
                 document_id,
@@ -436,43 +477,116 @@ impl PksHandle {
                 index_status,
                 encoded,
             ) = row?;
-            if req.exclude_uri.as_deref() == Some(uri.as_str())
+            let vector: Vec<f32> = match serde_json::from_str(&encoded) {
+                Ok(vector) => vector,
+                Err(_) => continue,
+            };
+            candidates.push(SemanticCandidate {
+                document_id,
+                chunk_id,
+                title,
+                uri,
+                source_type,
+                source_id,
+                document_type,
+                modified_at,
+                text,
+                page,
+                heading_path,
+                index_status,
+                vector,
+            });
+        }
+        Ok(candidates)
+    }
+
+    fn rank_semantic_candidates(
+        &self,
+        req: &SearchRequest,
+        limit: usize,
+        query_vector: &[f64],
+        candidates: &[SemanticCandidate],
+    ) -> Vec<SearchResult> {
+        let mut ranked = Vec::new();
+        for candidate in candidates {
+            if req.exclude_uri.as_deref() == Some(candidate.uri.as_str())
                 || !matches_filters(
                     req,
-                    &source_id,
-                    document_type.as_deref(),
-                    modified_at.as_deref(),
+                    &candidate.source_id,
+                    candidate.document_type.as_deref(),
+                    candidate.modified_at.as_deref(),
                 )
             {
                 continue;
             }
-            let vector: Vec<f32> = match serde_json::from_str(&encoded) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let score = cosine(&query_vector, &vector);
+            let score = cosine(query_vector, &candidate.vector);
             if score <= 0.12 {
                 continue;
             }
             ranked.push(SearchResult {
-                document_id,
-                chunk_id: Some(chunk_id),
-                title,
-                uri,
-                source_type,
-                document_type,
-                modified_at,
-                snippet: make_snippet(&text, &req.query),
+                document_id: candidate.document_id.clone(),
+                chunk_id: Some(candidate.chunk_id.clone()),
+                title: candidate.title.clone(),
+                uri: candidate.uri.clone(),
+                source_type: candidate.source_type.clone(),
+                document_type: candidate.document_type.clone(),
+                modified_at: candidate.modified_at.clone(),
+                snippet: make_snippet(&candidate.text, &req.query),
                 score: score * 0.82,
                 reasons: vec!["semantic_hash".into()],
-                page,
-                heading_path,
-                index_status,
+                page: candidate.page,
+                heading_path: candidate.heading_path.clone(),
+                index_status: candidate.index_status.clone(),
             });
         }
         ranked.sort_by(|a, b| b.score.total_cmp(&a.score));
         ranked.truncate(limit);
-        Ok(ranked)
+        ranked
+    }
+
+    fn semantic(&self, req: &SearchRequest, limit: usize) -> rusqlite::Result<Vec<SearchResult>> {
+        let revision = self.semantic_revision()?;
+        {
+            let cache = self.semantic_cache.borrow();
+            if let Some(cache) = cache.as_ref().filter(|cache| cache.revision == revision) {
+                let query_vector = hash_embedding(&req.query, cache.dimensions as usize);
+                return Ok(self.rank_semantic_candidates(
+                    req,
+                    limit,
+                    &query_vector,
+                    &cache.candidates,
+                ));
+            }
+        }
+
+        let dimensions: Option<i64> = self.db.query_row(
+            "SELECT embedding_dim FROM chunks WHERE embedding_json IS NOT NULL AND embedding_provider LIKE 'hash-ngram-v1-%' AND embedding_dim IS NOT NULL LIMIT 1",
+            [], |row| row.get(0)
+        ).optional()?;
+        let Some(dimensions) = dimensions.filter(|d| *d > 0 && *d <= 4096) else {
+            self.semantic_cache.borrow_mut().take();
+            return Ok(Vec::new());
+        };
+        let query_vector = hash_embedding(&req.query, dimensions as usize);
+        let candidates = self.load_semantic_candidates(dimensions)?;
+        let vector_bytes = candidates
+            .iter()
+            .map(|candidate| candidate.vector.len() * std::mem::size_of::<f32>())
+            .sum::<usize>();
+
+        if vector_bytes <= SEMANTIC_CACHE_VECTOR_BUDGET_BYTES {
+            *self.semantic_cache.borrow_mut() = Some(SemanticCache {
+                revision,
+                dimensions,
+                candidates,
+            });
+            let cache = self.semantic_cache.borrow();
+            let cache = cache.as_ref().expect("semantic cache was just populated");
+            Ok(self.rank_semantic_candidates(req, limit, &query_vector, &cache.candidates))
+        } else {
+            self.semantic_cache.borrow_mut().take();
+            Ok(self.rank_semantic_candidates(req, limit, &query_vector, &candidates))
+        }
     }
 
     fn related(&self, req: &SearchRequest, limit: usize) -> rusqlite::Result<Vec<SearchResult>> {
@@ -934,7 +1048,7 @@ mod tests {
     fn db() -> PksHandle {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch("CREATE TABLE documents(id TEXT PRIMARY KEY,title TEXT,uri TEXT,source_id TEXT,source_type TEXT,document_type TEXT,modified_at TEXT,index_status TEXT,tags_json TEXT,deleted_at TEXT); CREATE TABLE corrections(target_id TEXT,field TEXT,new_value TEXT); CREATE TABLE chunks(id TEXT PRIMARY KEY,document_id TEXT,text TEXT,page INTEGER,heading_path TEXT,embedding_json TEXT,embedding_provider TEXT,embedding_dim INTEGER); CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED,document_id UNINDEXED,title,text); INSERT INTO documents VALUES('d1','Night Piano','/docs/Night Piano.md','docs','local','note','2026-01-01','indexed','[\"keyboard\"]',NULL); INSERT INTO chunks(id,document_id,text) VALUES('c1','d1','Night piano practice with exact content.'); INSERT INTO chunks_fts VALUES('c1','d1','Night Piano','Night piano practice with exact content.'); INSERT INTO documents VALUES('d2','Practice','/docs/Practice.md','docs','local','note','2026-01-02','indexed','[]',NULL); INSERT INTO chunks(id,document_id,text) VALUES('c2','d2','Night piano practice for another note.'); INSERT INTO chunks_fts VALUES('c2','d2','Practice','Night piano practice for another note.'); INSERT INTO documents VALUES('d3','Chord Finger Exercises','/docs/Chord Finger Exercises.md','docs','local','note','2026-01-03','indexed','[]',NULL); INSERT INTO chunks(id,document_id,text) VALUES('c3','d3','Guitar chord switching and finger positioning exercises improve transitions.'); INSERT INTO chunks_fts VALUES('c3','d3','Chord Finger Exercises','Guitar chord switching and finger positioning exercises improve transitions.');").unwrap();
-        PksHandle { db }
+        PksHandle::from_connection(db)
     }
     #[test]
     fn metadata_exact_title_has_metadata_reason() {
@@ -998,6 +1112,178 @@ mod tests {
         assert_eq!(r.results[0].document_id, "d1");
         assert!(r.results[0].reasons.contains(&"semantic_hash".into()));
     }
+    #[test]
+    fn semantic_cache_reuses_and_invalidates_same_connection_changes() {
+        let handle = db();
+        let query_vector = hash_embedding("Night piano practice", 128);
+        let other_vector = hash_embedding("Guitar shopping", 128);
+        handle
+            .db
+            .execute(
+                "UPDATE chunks SET embedding_json=?1,embedding_provider='hash-ngram-v1-128',embedding_dim=128 WHERE id='c1'",
+                params![serde_json::to_string(&query_vector).unwrap()],
+            )
+            .unwrap();
+        handle
+            .db
+            .execute(
+                "UPDATE chunks SET embedding_json=?1,embedding_provider='hash-ngram-v1-128',embedding_dim=128 WHERE id='c2'",
+                params![serde_json::to_string(&other_vector).unwrap()],
+            )
+            .unwrap();
+
+        let request = SearchRequest {
+            contract_version: Some(1),
+            query: "Night piano practice".into(),
+            mode: Some("semantic".into()),
+            source: None,
+            document_type: None,
+            date_from: None,
+            date_to: None,
+            limit: Some(5),
+            exclude_uri: None,
+        };
+        let first = handle.search(&request).unwrap();
+        assert_eq!(first.results[0].document_id, "d1");
+        let (first_ptr, first_revision) = {
+            let cache = handle.semantic_cache.borrow();
+            let cache = cache.as_ref().expect("semantic cache should be populated");
+            (cache.candidates.as_ptr(), cache.revision)
+        };
+
+        let repeated = handle.search(&request).unwrap();
+        assert_eq!(repeated.results[0].document_id, "d1");
+        let repeated_ptr = {
+            let cache = handle.semantic_cache.borrow();
+            cache
+                .as_ref()
+                .expect("semantic cache should be reused")
+                .candidates
+                .as_ptr()
+        };
+        assert_eq!(first_ptr, repeated_ptr);
+
+        handle
+            .db
+            .execute(
+                "UPDATE chunks SET embedding_json=?1 WHERE id='c1'",
+                params![serde_json::to_string(&other_vector).unwrap()],
+            )
+            .unwrap();
+        handle
+            .db
+            .execute(
+                "UPDATE chunks SET embedding_json=?1 WHERE id='c2'",
+                params![serde_json::to_string(&query_vector).unwrap()],
+            )
+            .unwrap();
+
+        let changed = handle.search(&request).unwrap();
+        assert_eq!(changed.results[0].document_id, "d2");
+        let changed_revision = handle
+            .semantic_cache
+            .borrow()
+            .as_ref()
+            .expect("semantic cache should be rebuilt")
+            .revision;
+        assert_ne!(first_revision, changed_revision);
+    }
+
+    #[test]
+    fn semantic_cache_invalidates_after_external_commit() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "pks-semantic-cache-{}-{nonce}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let writer = Connection::open(&path).unwrap();
+        writer
+            .execute_batch(
+                "CREATE TABLE documents(id TEXT PRIMARY KEY,title TEXT,uri TEXT,source_id TEXT,source_type TEXT,document_type TEXT,modified_at TEXT,index_status TEXT,tags_json TEXT,deleted_at TEXT);
+                 CREATE TABLE chunks(id TEXT PRIMARY KEY,document_id TEXT,text TEXT,page INTEGER,heading_path TEXT,embedding_json TEXT,embedding_provider TEXT,embedding_dim INTEGER);
+                 INSERT INTO documents VALUES('d1','First','/first.md','docs','local','note','2026-01-01','indexed','[]',NULL);
+                 INSERT INTO documents VALUES('d2','Second','/second.md','docs','local','note','2026-01-02','indexed','[]',NULL);
+                 INSERT INTO chunks(id,document_id,text) VALUES('c1','d1','first semantic candidate');
+                 INSERT INTO chunks(id,document_id,text) VALUES('c2','d2','second semantic candidate');",
+            )
+            .unwrap();
+        let query_vector = hash_embedding("semantic target", 128);
+        let other_vector = hash_embedding("unrelated material", 128);
+        writer
+            .execute(
+                "UPDATE chunks SET embedding_json=?1,embedding_provider='hash-ngram-v1-128',embedding_dim=128 WHERE id='c1'",
+                params![serde_json::to_string(&query_vector).unwrap()],
+            )
+            .unwrap();
+        writer
+            .execute(
+                "UPDATE chunks SET embedding_json=?1,embedding_provider='hash-ngram-v1-128',embedding_dim=128 WHERE id='c2'",
+                params![serde_json::to_string(&other_vector).unwrap()],
+            )
+            .unwrap();
+        drop(writer);
+
+        let handle = PksHandle::open(&path).unwrap();
+        let request = SearchRequest {
+            contract_version: Some(1),
+            query: "semantic target".into(),
+            mode: Some("semantic".into()),
+            source: None,
+            document_type: None,
+            date_from: None,
+            date_to: None,
+            limit: Some(5),
+            exclude_uri: None,
+        };
+        assert_eq!(
+            handle.search(&request).unwrap().results[0].document_id,
+            "d1"
+        );
+        let first_revision = handle
+            .semantic_cache
+            .borrow()
+            .as_ref()
+            .expect("semantic cache should be populated")
+            .revision;
+
+        let external = Connection::open(&path).unwrap();
+        external
+            .execute(
+                "UPDATE chunks SET embedding_json=?1 WHERE id='c1'",
+                params![serde_json::to_string(&other_vector).unwrap()],
+            )
+            .unwrap();
+        external
+            .execute(
+                "UPDATE chunks SET embedding_json=?1 WHERE id='c2'",
+                params![serde_json::to_string(&query_vector).unwrap()],
+            )
+            .unwrap();
+        drop(external);
+
+        assert_eq!(
+            handle.search(&request).unwrap().results[0].document_id,
+            "d2"
+        );
+        let changed_revision = handle
+            .semantic_cache
+            .borrow()
+            .as_ref()
+            .expect("semantic cache should be rebuilt after external commit")
+            .revision;
+        assert_ne!(first_revision, changed_revision);
+
+        drop(handle);
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn related_requires_multiple_content_terms_and_excludes_self() {
         let r = db()

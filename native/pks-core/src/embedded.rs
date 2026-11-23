@@ -258,7 +258,7 @@ impl PksHandle {
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY;",
         )?;
         migrate(&db)?;
-        Ok(Self { db })
+        Ok(Self::from_connection(db))
     }
 
     pub fn index_embedded_document(
