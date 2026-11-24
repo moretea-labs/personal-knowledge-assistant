@@ -181,4 +181,138 @@ final class MindMapViewportConnectorSnapshotTests: XCTestCase {
     XCTAssertEqual(runs.count, 1, "Monochrome maps should require one Canvas stroke call.")
     XCTAssertEqual(runs.first?.lineWidth ?? 0, 1.25, accuracy: 0.001)
   }
+
+  func testDenseMapBatchedPathRasterizesAVisibleBranchSpur() throws {
+    var nodes = [MindMapNode(id: 0, depth: 0, title: "Root")]
+    var nextID = 1
+    for branch in 0..<96 {
+      nodes.append(MindMapNode(id: nextID, depth: 1, title: "Branch \(branch)"))
+      nextID += 1
+      for child in 0..<31 {
+        nodes.append(MindMapNode(id: nextID, depth: 2, title: "Detail \(branch)-\(child)"))
+        nextID += 1
+      }
+    }
+    let layout = MindMapSpatialLayout.layout(nodes, style: .classic)
+    XCTAssertGreaterThan(layout.connectors.count, 3_200)
+    let root = try XCTUnwrap(layout.placements.first(where: { $0.id == 0 }))
+    let rootRight = root.center.x + root.size.width / 2
+    let target = try XCTUnwrap(
+      layout.connectors.first(where: {
+        $0.angular && abs($0.start.y - $0.end.y) < 0.001
+          && $0.end.x > $0.start.x && $0.start.x > rootRight + 1
+      })
+    )
+    let targetPoint = CGPoint(
+      x: (target.start.x + target.end.x) / 2, y: target.start.y
+    )
+    let viewport = CGSize(width: 1_024, height: 768)
+    let zoom: CGFloat = 0.68
+    let offset = MindMapViewportGeometry.centeredOffset(
+      for: targetPoint, mapSize: layout.size, zoom: zoom
+    )
+    let rect = try XCTUnwrap(
+      MindMapViewportGeometry.visibleRect(
+        mapSize: layout.size, viewport: viewport, offset: offset,
+        zoom: zoom, overscan: 320
+      )
+    )
+    let visible = layout.visibleConnectors(in: rect)
+    XCTAssertTrue(visible.contains(target))
+    let runs = MindMapViewportConnectorSnapshot.strokeRuns(
+      connectors: visible, style: .classic, mapSize: layout.size,
+      viewportSize: viewport, offset: offset, zoom: zoom
+    )
+    XCTAssertEqual(runs.count, 1)
+
+    let snapshot = MindMapViewportConnectorSnapshot(
+      size: viewport, connectors: visible, style: .classic,
+      mapSize: layout.size, viewportOffset: offset, zoom: zoom, layoutVersion: 1
+    )
+    let renderer = ImageRenderer(
+      content: snapshot.background(Color.white).environment(\.colorScheme, .light)
+    )
+    renderer.scale = 1
+    renderer.isOpaque = true
+    renderer.proposedSize = ProposedViewSize(width: viewport.width, height: viewport.height)
+    let cgImage = try XCTUnwrap(renderer.cgImage)
+    let bitmap = NSBitmapImageRep(cgImage: cgImage)
+    let pixel = try XCTUnwrap(
+      bitmap.colorAt(x: Int(viewport.width / 2), y: Int(viewport.height / 2))?
+        .usingColorSpace(.deviceRGB)
+    )
+    XCTAssertLessThan(
+      pixel.redComponent, 0.98,
+      "A visible dense-map spur disappeared during Canvas rasterization."
+    )
+  }
+
+  func testFullOverviewRasterizesAllDenseMapConnectorSubpaths() throws {
+    var nodes = [MindMapNode(id: 0, depth: 0, title: "Root")]
+    var nextID = 1
+    for branch in 0..<96 {
+      nodes.append(MindMapNode(id: nextID, depth: 1, title: "Branch \(branch)"))
+      nextID += 1
+      for child in 0..<31 {
+        nodes.append(MindMapNode(id: nextID, depth: 2, title: "Detail \(branch)-\(child)"))
+        nextID += 1
+      }
+    }
+    let layout = MindMapSpatialLayout.layout(nodes, style: .classic)
+    let viewport = CGSize(width: 1_024, height: 2_048)
+    let zoom: CGFloat = 0.0095
+    let rect = try XCTUnwrap(
+      MindMapViewportGeometry.visibleRect(
+        mapSize: layout.size, viewport: viewport, offset: .zero,
+        zoom: zoom, overscan: 320
+      )
+    )
+    let visible = layout.visibleConnectors(in: rect)
+    XCTAssertEqual(visible.count, layout.connectors.count)
+    let runs = MindMapViewportConnectorSnapshot.strokeRuns(
+      connectors: visible, style: .classic, mapSize: layout.size,
+      viewportSize: viewport, offset: .zero, zoom: zoom
+    )
+    XCTAssertEqual(runs.count, 1)
+
+    var moveCount = 0
+    runs[0].path.cgPath.applyWithBlock { element in
+      if element.pointee.type == .moveToPoint {
+        moveCount += 1
+      }
+    }
+    XCTAssertEqual(moveCount, layout.connectors.count)
+
+    let spine = try XCTUnwrap(
+      layout.connectors.first(where: {
+        $0.angular && abs($0.start.x - $0.end.x) < 0.001
+          && abs($0.end.y - $0.start.y) > 1_000
+      })
+    )
+    let sample = CGPoint(x: spine.start.x, y: (spine.start.y + spine.end.y) / 2)
+    let screen = MindMapViewportConnectorSnapshot.mapToScreen(
+      sample, mapSize: layout.size, viewportSize: viewport,
+      offset: .zero, zoom: zoom
+    )
+    let snapshot = MindMapViewportConnectorSnapshot(
+      size: viewport, connectors: visible, style: .classic,
+      mapSize: layout.size, viewportOffset: .zero, zoom: zoom, layoutVersion: 1
+    )
+    let renderer = ImageRenderer(
+      content: snapshot.background(Color.white).environment(\.colorScheme, .light)
+    )
+    renderer.scale = 1
+    renderer.isOpaque = true
+    renderer.proposedSize = ProposedViewSize(width: viewport.width, height: viewport.height)
+    let cgImage = try XCTUnwrap(renderer.cgImage)
+    let bitmap = NSBitmapImageRep(cgImage: cgImage)
+    let pixel = try XCTUnwrap(
+      bitmap.colorAt(x: Int(screen.x.rounded()), y: Int(screen.y.rounded()))?
+        .usingColorSpace(.deviceRGB)
+    )
+    XCTAssertLessThan(
+      pixel.redComponent, 0.98,
+      "The full-map shared spine disappeared at overview zoom."
+    )
+  }
 }

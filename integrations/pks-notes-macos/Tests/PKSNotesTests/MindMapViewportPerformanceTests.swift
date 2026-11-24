@@ -83,6 +83,7 @@ final class MindMapViewportPerformanceTests: XCTestCase {
     XCTAssertLessThan(maximumVisibleConnectors, 100)
   }
 
+  @MainActor
   func testLargeConnectorSpatialIndexMatchesLinearOracleAcrossPanZoomAndStyles() throws {
     var nodes = [MindMapNode(id: 0, depth: 0, title: "Root")]
     var nextID = 1
@@ -104,6 +105,7 @@ final class MindMapViewportPerformanceTests: XCTestCase {
       XCTAssertEqual(layout.placements.count, nodes.count)
       XCTAssertGreaterThan(layout.connectors.count, 2_900)
       var queryMilliseconds: [Double] = []
+      var pathPreparationMilliseconds: [Double] = []
       for frame in 0..<120 {
         let target = layout.placements[(frame * 37) % layout.placements.count]
         let zoom = zooms[frame % zooms.count]
@@ -118,6 +120,18 @@ final class MindMapViewportPerformanceTests: XCTestCase {
         let queryStart = ProcessInfo.processInfo.systemUptime
         let actual = layout.visibleConnectors(in: mapRect)
         queryMilliseconds.append((ProcessInfo.processInfo.systemUptime - queryStart) * 1_000)
+        let pathStart = ProcessInfo.processInfo.systemUptime
+        let runs = MindMapViewportConnectorSnapshot.strokeRuns(
+          connectors: actual, style: style, mapSize: layout.size,
+          viewportSize: viewport, offset: offset, zoom: zoom
+        )
+        pathPreparationMilliseconds.append(
+          (ProcessInfo.processInfo.systemUptime - pathStart) * 1_000
+        )
+        XCTAssertLessThanOrEqual(runs.count, actual.count)
+        if !actual.isEmpty && !style.usesBranchColors {
+          XCTAssertEqual(runs.count, 1)
+        }
         let expected = layout.connectors.filter { $0.bounds.intersects(mapRect) }
         XCTAssertEqual(
           actual, expected,
@@ -125,11 +139,13 @@ final class MindMapViewportPerformanceTests: XCTestCase {
       }
       let sorted = queryMilliseconds.sorted()
       let p95 = sorted[Int((Double(sorted.count - 1) * 0.95).rounded(.up))]
+      let sortedPath = pathPreparationMilliseconds.sorted()
+      let pathP95 = sortedPath[Int((Double(sortedPath.count - 1) * 0.95).rounded(.up))]
       print(
         String(
           format:
-            "[MindMapPerf] 3,073 nodes / %d connectors / %@; layout %.2f ms; culling P95 %.3f ms",
-          layout.connectors.count, style.rawValue, layoutMilliseconds, p95
+            "[MindMapPerf] 3,073 nodes / %d connectors / %@; layout %.2f ms; culling P95 %.3f ms; path preparation P95 %.3f ms",
+          layout.connectors.count, style.rawValue, layoutMilliseconds, p95, pathP95
         ))
     }
   }
