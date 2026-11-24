@@ -1195,7 +1195,24 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
 
 extension PDFSourceAnchorControllerTests {
     @MainActor
-    func testOutlineSkipsDestinationsOutsideLoadedDocument() throws {
+    private func waitForOutline(
+        _ controller: PDFReaderController,
+        timeout: TimeInterval = 2
+    ) async {
+        if !controller.outline.isEmpty { return }
+        let ready = expectation(description: "Deferred PDF outline is ready")
+        var fulfilled = false
+        let cancellable = controller.$outline.dropFirst().sink { entries in
+            guard !entries.isEmpty, !fulfilled else { return }
+            fulfilled = true
+            ready.fulfill()
+        }
+        await fulfillment(of: [ready], timeout: timeout)
+        withExtendedLifetime(cancellable) {}
+    }
+
+    @MainActor
+    func testOutlineSkipsDestinationsOutsideLoadedDocument() async throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
 
         func makeDocument(_ text: String) throws -> PDFDocument {
@@ -1242,13 +1259,18 @@ extension PDFSourceAnchorControllerTests {
             requestedPage: nil,
             requestedAnchor: nil
         )
+        XCTAssertTrue(
+            controller.outline.isEmpty,
+            "Initial PDF attachment must not synchronously traverse bookmark metadata."
+        )
+        await waitForOutline(controller)
 
         XCTAssertEqual(controller.outline.map(\.title), ["Second chapter"])
         XCTAssertEqual(controller.outline.first?.pageIndex, 1)
     }
 
     @MainActor
-    func testOutlinePromotesNavigableChildOfHeadingWithoutDestination() throws {
+    func testOutlinePromotesNavigableChildOfHeadingWithoutDestination() async throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let firstText = NSTextView(frame: bounds)
         firstText.string = "First page"
@@ -1280,6 +1302,7 @@ extension PDFSourceAnchorControllerTests {
                 .appendingPathComponent("Leafspan-Grouped-Outline-\(UUID().uuidString).pdf"),
             requestedPage: nil, requestedAnchor: nil
         )
+        await waitForOutline(controller)
 
         XCTAssertEqual(controller.outline.map(\.title), ["Second chapter"])
         XCTAssertEqual(controller.outline.map(\.depth), [0],
@@ -1291,7 +1314,7 @@ extension PDFSourceAnchorControllerTests {
     }
 
     @MainActor
-    func testOutlineFlatteningHandlesDeepBookmarkTreesIteratively() throws {
+    func testOutlineFlatteningHandlesDeepBookmarkTreesIteratively() async throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let text = NSTextView(frame: bounds)
         text.string = "Deep outline"
@@ -1327,6 +1350,11 @@ extension PDFSourceAnchorControllerTests {
                 .appendingPathComponent("Leafspan-Deep-Outline-\(UUID().uuidString).pdf"),
             requestedPage: nil, requestedAnchor: nil
         )
+        XCTAssertTrue(
+            controller.outline.isEmpty,
+            "Even a deep outline must be deferred until after initial PDF presentation."
+        )
+        await waitForOutline(controller)
         XCTAssertEqual(controller.outline.map(\.title), ["Part One", "Deep chapter"])
         XCTAssertEqual(controller.outline.map(\.depth), [0, 1])
         XCTAssertEqual(controller.outline.map(\.pageIndex), [0, 0])

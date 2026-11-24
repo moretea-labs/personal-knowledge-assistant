@@ -548,7 +548,9 @@ final class PDFReaderController: ObservableObject {
 
         cancelSearch()
         pageCount = document.pageCount
-        outline = Self.flattenOutline(document.outlineRoot, in: document)
+        if !outline.isEmpty {
+            outline = []
+        }
 
         if requestedPage != nil || requestedAnchor != nil {
             applyRequestedSource(page: requestedPage, anchor: requestedAnchor)
@@ -571,6 +573,17 @@ final class PDFReaderController: ObservableObject {
                   self.pdfView === view, self.document === document,
                   self.documentURL == url else { return }
             self.fitWidth()
+
+            // Bookmark traversal is optional navigation metadata. Let PDFKit
+            // bind, restore the visible page and fit width before walking a
+            // potentially large outline tree on a later main-actor turn.
+            await Task.yield()
+            guard self.pdfView === view, self.document === document,
+                  self.documentURL == url else { return }
+            let nextOutline = Self.flattenOutline(document.outlineRoot, in: document)
+            if self.outline != nextOutline {
+                self.outline = nextOutline
+            }
         }
     }
 
