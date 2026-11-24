@@ -1,10 +1,72 @@
 import AppKit
+import Combine
 import Darwin
 import PDFKit
 import XCTest
 @testable import PKSNotes
 
 final class PDFSourceAnchorControllerTests: XCTestCase {
+    @MainActor
+    func testRepeatedAttachDoesNotRepublishUnchangedPDFControllerState() async throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        let textView = NSTextView(frame: bounds)
+        textView.string = "Important source passage"
+        let document = try XCTUnwrap(
+            PDFDocument(data: textView.dataWithPDF(inside: bounds))
+        )
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Reattach-\(UUID().uuidString).pdf")
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        var publicationCount = 0
+        let cancellable = controller.objectWillChange.sink { _ in
+            publicationCount += 1
+        }
+        var detached = false
+        defer {
+            if !detached {
+                controller.detach(view: view)
+            }
+        }
+
+        controller.attach(view: view, document: document, url: url,
+                          requestedPage: nil, requestedAnchor: nil)
+        await Task.yield()
+        await Task.yield()
+
+        publicationCount = 0
+        controller.attach(view: view, document: document, url: url,
+                          requestedPage: nil, requestedAnchor: nil)
+        XCTAssertEqual(
+            publicationCount, 0,
+            "An unchanged NSViewRepresentable update must not republish controller state."
+        )
+
+        view.currentSelection = try XCTUnwrap(
+            document.findString("Important source passage", withOptions: []).first
+        )
+        await Task.yield()
+        await Task.yield()
+
+        publicationCount = 0
+        controller.attach(view: view, document: document, url: url,
+                          requestedPage: nil, requestedAnchor: nil)
+        XCTAssertEqual(
+            publicationCount, 0,
+            "An unchanged selected-text update must not republish warning state."
+        )
+        XCTAssertFalse(controller.selectionNeedsPageOnlyReference)
+
+        publicationCount = 0
+        controller.detach(view: view)
+        detached = true
+        XCTAssertEqual(
+            publicationCount, 0,
+            "Detaching without a selection-warning change must not republish controller state."
+        )
+        withExtendedLifetime(cancellable) {}
+    }
+
     @MainActor
     func testReferencePagePrefersSelectedSourcePageOverVisiblePage() throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)

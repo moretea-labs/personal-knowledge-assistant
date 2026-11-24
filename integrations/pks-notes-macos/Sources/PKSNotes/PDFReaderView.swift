@@ -648,7 +648,9 @@ final class PDFReaderController: ObservableObject {
         syncPageFromView()
         removeViewObservers()
         pdfView = nil
-        selectionNeedsPageOnlyReference = false
+        if selectionNeedsPageOnlyReference {
+            selectionNeedsPageOnlyReference = false
+        }
     }
 
     func selectedText() -> String? {
@@ -900,7 +902,12 @@ final class PDFReaderController: ObservableObject {
         if hasSelectedText {
             clearInvalidRequestedSourceWarning()
         }
-        selectionNeedsPageOnlyReference = hasSelectedText && selectedSourceAnchor() == nil
+        // This runs from PDFCanvas.updateNSView via attach(). Publishing an
+        // unchanged @Published value here re-enters SwiftUI's update cycle.
+        let needsPageOnlyReference = hasSelectedText && selectedSourceAnchor() == nil
+        if selectionNeedsPageOnlyReference != needsPageOnlyReference {
+            selectionNeedsPageOnlyReference = needsPageOnlyReference
+        }
     }
 
     private func installViewObservers(for view: PDFView) {
@@ -923,8 +930,12 @@ final class PDFReaderController: ObservableObject {
     }
 
     private func clearInvalidRequestedSourceWarning() {
-        invalidRequestedPage = nil
-        invalidRequestedSelection = false
+        if invalidRequestedPage != nil {
+            invalidRequestedPage = nil
+        }
+        if invalidRequestedSelection {
+            invalidRequestedSelection = false
+        }
     }
 
     private func revealSearchMatch() {
