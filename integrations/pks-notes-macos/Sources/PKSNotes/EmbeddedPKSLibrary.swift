@@ -13,6 +13,7 @@ enum EmbeddedPKSLibraryError: Error {
     case bookmarkCreationFailed
     case bookmarkResolutionFailed
     case folderUnavailable
+    case datalessPlaceholder
     case enumerationFailed
 }
 
@@ -134,6 +135,7 @@ struct EmbeddedPKSLibraryIndexSummary: Equatable, Sendable {
     let scannedFiles: Int
     let indexedContentFiles: Int
     let metadataOnlyFiles: Int
+    let deferredFiles: Int
     let deletedDocuments: Int
 }
 
@@ -144,28 +146,40 @@ actor EmbeddedPKSLibraryIndexer {
 
     private let core: EmbeddedPKSCore
     private let fileManager: FileManager
+    private let isDataless: @Sendable (URL) -> Bool
 
-    init(core: EmbeddedPKSCore, fileManager: FileManager = .default) {
+    init(
+        core: EmbeddedPKSCore,
+        fileManager: FileManager = .default,
+        isDataless: @escaping @Sendable (URL) -> Bool = { WorkspaceFiles.isDataless($0) }
+    ) {
         self.core = core
         self.fileManager = fileManager
+        self.isDataless = isDataless
     }
 
     func refresh(_ source: EmbeddedPKSLibrarySource) async throws -> EmbeddedPKSLibraryIndexSummary {
         try Task.checkCancellation()
         let root = try EmbeddedPKSLibrarySourceRegistry.resolve(source)
+        let accessed = root.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { root.stopAccessingSecurityScopedResource() }
+        }
+
+        // A dataless directory can be enumerated only after File Provider downloads it.
+        // Keep the existing index intact and ask the user to materialize it explicitly.
+        guard !isDataless(root) else {
+            throw EmbeddedPKSLibraryError.datalessPlaceholder
+        }
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
             throw EmbeddedPKSLibraryError.folderUnavailable
         }
 
-        let accessed = root.startAccessingSecurityScopedResource()
-        defer {
-            if accessed { root.stopAccessingSecurityScopedResource() }
-        }
-
         let keys: [URLResourceKey] = [
             .isRegularFileKey,
+            .isDirectoryKey,
             .isSymbolicLinkKey,
             .fileSizeKey,
             .creationDateKey,
@@ -174,7 +188,8 @@ actor EmbeddedPKSLibraryIndexer {
         let fileURLs = try Self.enumeratedFiles(
             at: root,
             keys: keys,
-            fileManager: fileManager
+            fileManager: fileManager,
+            isDataless: isDataless
         )
 
         // Constrain all indexed files to the granted root, including symlink targets.
@@ -184,6 +199,7 @@ actor EmbeddedPKSLibraryIndexer {
         var scanned = 0
         var contentIndexed = 0
         var metadataOnly = 0
+        var deferred = 0
         let formatter = ISO8601DateFormatter()
 
         for fileURL in fileURLs {
@@ -198,6 +214,14 @@ actor EmbeddedPKSLibraryIndexer {
 
             let canonical = fileURL.standardizedFileURL.resolvingSymlinksInPath()
             guard canonical.path.hasPrefix(rootPrefix) else { continue }
+            if isDataless(canonical) {
+                // Do not read a File Provider placeholder. Keep its path in the seen set
+                // so existing indexed content survives until the file is materialized.
+                seen.append(canonical.path)
+                scanned += 1
+                deferred += 1
+                continue
+            }
             let byteCount = values.fileSize ?? 0
             var text: String?
             if Self.contentExtensions.contains(ext),
@@ -244,6 +268,7 @@ actor EmbeddedPKSLibraryIndexer {
             scannedFiles: scanned,
             indexedContentFiles: contentIndexed,
             metadataOnlyFiles: metadataOnly,
+            deferredFiles: deferred,
             deletedDocuments: deleted
         )
     }
@@ -251,7 +276,8 @@ actor EmbeddedPKSLibraryIndexer {
     private static func enumeratedFiles(
         at root: URL,
         keys: [URLResourceKey],
-        fileManager: FileManager
+        fileManager: FileManager,
+        isDataless: @Sendable (URL) -> Bool
     ) throws -> [URL] {
         // A partial scan must not mark unseen indexed documents as deleted.
         // Inaccessible File Provider/iCloud subdirectories are not deletions.
@@ -269,6 +295,18 @@ actor EmbeddedPKSLibraryIndexer {
         }
         var files: [URL] = []
         while let next = enumerator.nextObject() as? URL {
+            let values = try next.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            if values.isSymbolicLink == true {
+                // Never recurse through a link, even when its target is inside the grant.
+                enumerator.skipDescendants()
+                continue
+            }
+            if values.isDirectory == true && isDataless(next) {
+                // Descending into a cloud-only folder may hydrate it. Abort the source
+                // refresh so finalize cannot purge the folder's previously indexed children.
+                enumerator.skipDescendants()
+                throw EmbeddedPKSLibraryError.datalessPlaceholder
+            }
             files.append(next)
         }
         guard enumerationError == nil else {

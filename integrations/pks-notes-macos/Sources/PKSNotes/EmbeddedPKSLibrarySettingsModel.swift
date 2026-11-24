@@ -38,10 +38,13 @@ final class EmbeddedPKSLibrarySettingsModel: ObservableObject {
             do {
                 _ = try await refresh(source)
             } catch {
-                // Registration succeeded: keep the folder visible and offer retry.
-                statusMessage = AppLanguage.current.resolved == .simplifiedChinese
-                    ? "已添加资料库，但索引失败。请点击刷新重试。"
-                    : "Library added, but indexing failed. Use Refresh to retry."
+                // Registration succeeded: keep the folder visible and preserve the
+                // more specific refresh message (for example, a cloud-only root).
+                if statusMessage == nil {
+                    statusMessage = AppLanguage.current.resolved == .simplifiedChinese
+                        ? "已添加资料库，但索引失败。请点击刷新重试。"
+                        : "Library added, but indexing failed. Use Refresh to retry."
+                }
                 statusIsError = true
             }
             return true
@@ -68,6 +71,12 @@ final class EmbeddedPKSLibrarySettingsModel: ObservableObject {
             statusMessage = Self.summaryMessage(summary)
             statusIsError = false
             return summary
+        } catch EmbeddedPKSLibraryError.datalessPlaceholder {
+            statusMessage = AppLanguage.current.resolved == .simplifiedChinese
+                ? "资料库文件夹尚未下载。请先在 Finder 中下载，再刷新索引。"
+                : "Library folder is not downloaded. Download it in Finder, then refresh."
+            statusIsError = true
+            throw EmbeddedPKSLibraryError.datalessPlaceholder
         } catch {
             statusMessage = AppLanguage.current.resolved == .simplifiedChinese
                 ? "索引刷新失败，请检查文件夹权限后重试。"
@@ -88,6 +97,7 @@ final class EmbeddedPKSLibrarySettingsModel: ObservableObject {
         var totalScanned = 0
         var totalContent = 0
         var totalMetadata = 0
+        var totalDeferred = 0
         var totalDeleted = 0
         do {
             for source in current {
@@ -96,12 +106,14 @@ final class EmbeddedPKSLibrarySettingsModel: ObservableObject {
                 totalScanned += summary.scannedFiles
                 totalContent += summary.indexedContentFiles
                 totalMetadata += summary.metadataOnlyFiles
+                totalDeferred += summary.deferredFiles
                 totalDeleted += summary.deletedDocuments
             }
             statusMessage = Self.summaryMessage(EmbeddedPKSLibraryIndexSummary(
                 scannedFiles: totalScanned,
                 indexedContentFiles: totalContent,
                 metadataOnlyFiles: totalMetadata,
+                deferredFiles: totalDeferred,
                 deletedDocuments: totalDeleted
             ))
         } catch is CancellationError {
@@ -150,9 +162,12 @@ final class EmbeddedPKSLibrarySettingsModel: ObservableObject {
     }
 
     private static func summaryMessage(_ summary: EmbeddedPKSLibraryIndexSummary) -> String {
+        let deferred = summary.deferredFiles > 0 ? summary.deferredFiles : nil
         if AppLanguage.current.resolved == .simplifiedChinese {
-            return "已扫描 \(summary.scannedFiles) 个文件 · 正文索引 \(summary.indexedContentFiles) · 仅元数据 \(summary.metadataOnlyFiles) · 清理 \(summary.deletedDocuments)"
+            let cloud = deferred.map { " · 云端待下载 \($0)" } ?? ""
+            return "已扫描 \(summary.scannedFiles) 个文件 · 正文索引 \(summary.indexedContentFiles) · 仅元数据 \(summary.metadataOnlyFiles)\(cloud) · 清理 \(summary.deletedDocuments)"
         }
-        return "Scanned \(summary.scannedFiles) files · \(summary.indexedContentFiles) content indexed · \(summary.metadataOnlyFiles) metadata only · \(summary.deletedDocuments) removed"
+        let cloud = deferred.map { " · \($0) cloud-only files deferred" } ?? ""
+        return "Scanned \(summary.scannedFiles) files · \(summary.indexedContentFiles) content indexed · \(summary.metadataOnlyFiles) metadata only\(cloud) · \(summary.deletedDocuments) removed"
     }
 }

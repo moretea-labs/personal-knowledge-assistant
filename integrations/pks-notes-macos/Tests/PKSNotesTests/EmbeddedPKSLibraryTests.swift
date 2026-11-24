@@ -166,6 +166,127 @@ final class EmbeddedPKSLibraryTests: XCTestCase {
         XCTAssertEqual(refreshed.first?.title, "Note.md")
     }
 
+    func testDatalessPlaceholdersAreDeferredWithoutReadingOrPurgingExistingIndex() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-Dataless-Index-\(UUID().uuidString)", isDirectory: true)
+        let root = base.appendingPathComponent("Library", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let note = root.appendingPathComponent("Note.md")
+        let cloudOnly = root.appendingPathComponent("CloudOnly.md")
+        try "# Notes\nPreviously searchable passage.".write(
+            to: note, atomically: true, encoding: .utf8
+        )
+
+        let suite = "EmbeddedPKSDataless-\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let registry = EmbeddedPKSLibrarySourceRegistry(suiteName: suite)
+        let source = try await registry.add(folder: root, excludingWorkspace: nil)
+        let core = try EmbeddedPKSCore(
+            databaseURL: base.appendingPathComponent("Index/knowledge.db")
+        )
+        let initial = try await EmbeddedPKSLibraryIndexer(core: core).refresh(source)
+        XCTAssertEqual(initial.indexedContentFiles, 1)
+
+        // Simulate File Provider replacing local bytes with a cloud-only placeholder.
+        try "# Notes\nReplacement passage must stay deferred.".write(
+            to: note, atomically: true, encoding: .utf8
+        )
+        try "# Cloud\nNew cloud-only document.".write(
+            to: cloudOnly, atomically: true, encoding: .utf8
+        )
+        let deferredPaths = Set([note.path, cloudOnly.path])
+        let indexer = EmbeddedPKSLibraryIndexer(core: core, isDataless: { url in
+            deferredPaths.contains(url.standardizedFileURL.path)
+        })
+        let summary = try await indexer.refresh(source)
+
+        XCTAssertEqual(summary.scannedFiles, 2)
+        XCTAssertEqual(summary.deferredFiles, 2)
+        XCTAssertEqual(summary.indexedContentFiles, 0)
+        XCTAssertEqual(summary.metadataOnlyFiles, 0)
+        XCTAssertEqual(summary.deletedDocuments, 0)
+
+        let preserved = try await core.search("Previously searchable", mode: "fts", source: source.id)
+        XCTAssertEqual(preserved.first?.uri, note.path)
+        let replacement = try await core.search("Replacement passage", mode: "fts", source: source.id)
+        XCTAssertTrue(replacement.isEmpty)
+        let newDocument = try await core.search("New cloud-only", mode: "fts", source: source.id)
+        XCTAssertTrue(newDocument.isEmpty)
+    }
+
+    func testDatalessRootDoesNotEnumerateOrFinalizeExistingIndex() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-Dataless-Root-\(UUID().uuidString)", isDirectory: true)
+        let root = base.appendingPathComponent("Library", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let note = root.appendingPathComponent("Note.md")
+        try "# Notes\nRoot placeholder safety.".write(to: note, atomically: true, encoding: .utf8)
+
+        let suite = "EmbeddedPKSDatalessRoot-\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let registry = EmbeddedPKSLibrarySourceRegistry(suiteName: suite)
+        let source = try await registry.add(folder: root, excludingWorkspace: nil)
+        let core = try EmbeddedPKSCore(
+            databaseURL: base.appendingPathComponent("Index/knowledge.db")
+        )
+        _ = try await EmbeddedPKSLibraryIndexer(core: core).refresh(source)
+
+        let indexer = EmbeddedPKSLibraryIndexer(core: core, isDataless: { url in
+            url.standardizedFileURL == root.standardizedFileURL
+        })
+        do {
+            _ = try await indexer.refresh(source)
+            XCTFail("A dataless library root must not be enumerated or finalized")
+        } catch EmbeddedPKSLibraryError.datalessPlaceholder {
+            // Expected: prior rows remain searchable until the user downloads the root.
+        }
+        let preserved = try await core.search("Root placeholder", mode: "fts", source: source.id)
+        XCTAssertEqual(preserved.first?.uri, note.path)
+    }
+
+    func testDatalessSubdirectoryAbortsRefreshWithoutPurgingIndexedChildren() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Leafspan-Dataless-Subdirectory-\(UUID().uuidString)", isDirectory: true)
+        let root = base.appendingPathComponent("Library", isDirectory: true)
+        let cloudFolder = root.appendingPathComponent("CloudFolder", isDirectory: true)
+        try FileManager.default.createDirectory(at: cloudFolder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let note = cloudFolder.appendingPathComponent("Note.md")
+        try "# Notes\nPreviously searchable nested content.".write(
+            to: note, atomically: true, encoding: .utf8
+        )
+
+        let suite = "EmbeddedPKSDatalessSubdirectory-\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let registry = EmbeddedPKSLibrarySourceRegistry(suiteName: suite)
+        let source = try await registry.add(folder: root, excludingWorkspace: nil)
+        let core = try EmbeddedPKSCore(
+            databaseURL: base.appendingPathComponent("Index/knowledge.db")
+        )
+        _ = try await EmbeddedPKSLibraryIndexer(core: core).refresh(source)
+
+        try "# Notes\nReplacement must remain deferred.".write(
+            to: note, atomically: true, encoding: .utf8
+        )
+        let indexer = EmbeddedPKSLibraryIndexer(core: core, isDataless: { url in
+            url.standardizedFileURL == cloudFolder.standardizedFileURL
+        })
+        do {
+            _ = try await indexer.refresh(source)
+            XCTFail("A dataless subdirectory must stop traversal and source finalization")
+        } catch EmbeddedPKSLibraryError.datalessPlaceholder {
+            // Expected: do not enumerate the folder or delete its old indexed children.
+        }
+
+        let preserved = try await core.search("Previously searchable nested", mode: "fts", source: source.id)
+        XCTAssertEqual(preserved.first?.uri, note.path)
+        let replacement = try await core.search("Replacement must remain", mode: "fts", source: source.id)
+        XCTAssertTrue(replacement.isEmpty)
+    }
+
     func testRegistryAndIndexerPersistGrantAndBuildOfflineIndex() async throws {
         let suite = "EmbeddedPKSLibraryTests-\(UUID().uuidString)"
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
