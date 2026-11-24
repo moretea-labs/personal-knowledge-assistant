@@ -16,15 +16,16 @@ This file is the submission-copy authority for the first macOS App Store release
 - First macOS version: `1.0`; source candidate build number `3` (not uploaded). Existing uploaded build `2` is older and not a verified candidate for the latest source.
 - Sign-in required: No
 
-## Current App Store Connect draft state (2026-11-12)
+## Current App Store Connect draft state (live recheck 2026-11-24)
 
 - App Info en-US localization is `Leafspan` with subtitle `Local Markdown & Mind Maps`; the Privacy Policy URL points to the current `main` branch.
 - macOS version `1.0` remains `PREPARE_FOR_SUBMISSION`. Its existing en-US version localization now matches the Leafspan description, keywords, promotional text, and Support URL in this file.
 - App Info and version metadata each currently expose only one localization (`en-US`). The zh-Hans copy below is ready in this source draft but has not been created in App Store Connect; the available connector supports updating existing localizations but does not expose a create-localization action.
-- App age rating and version copyright are unset. Review contact name/email/phone remain required.
+- App age rating and version copyright remain unresolved submission inputs. Review contact name/email/phone remain required and must be supplied as real values; do not invent placeholders.
 - IAP `6831933705` exists. `Leafspan Pro` is the intended Reference Name and en-US/zh-Hans display name in this source draft, but the current connector cannot read or update IAP localizations; its actual App Store Connect name remains unverified.
 - App Store Connect contains only builds `1` and `2`; build `2` is `VALID`. The current local source candidate is build `3` and has not been uploaded.
-- No App Review submission records exist. This remains a draft-only state; no build upload, review submission, or publication occurred.
+- Live release preflight on 2026-11-24 returned `incomplete`: macOS `1.0` is still `PREPARE_FOR_SUBMISSION`, with en-US description and Support URL present. The two explicit provider blockers are **no App Store build assigned to version 1.0** and **no App Review details linked to version 1.0**. Screenshot coverage/processing, App Privacy, age rating, trade/export compliance, availability, and final Apple submission eligibility were not verified by this preflight. Evidence: `PLG-OBS-c4fa0d70be6213736bb5b5bb`.
+- No App Review submission record was created. This remains a read-only draft/preflight state; no build upload, review submission, or publication occurred.
 - **Connector routing guard:** always pass explicit `app_id=6831932674` for Leafspan App Store Connect actions. The connector global default `6775778505` belongs to Avela and must never be used for Leafspan. Verified by exact Bundle ID lookup on 2026-11-12.
 - The available screenshot-set read action rejects a `MAC_OS` version as unsupported; macOS screenshot upload state is not verified through that connector and remains a release gate.
 
@@ -163,19 +164,19 @@ To review:
 
 No account or demo login is required.
 
-## App Review notes draft
+## App Review notes — copy/paste candidate
 
-Leafspan does not require an account or sign-in.
+Leafspan does not require an account, demo login, subscription, custom payment system, or developer-operated server.
 
-The app works with a folder chosen by the reviewer. Choose any writable folder containing Markdown files, or choose an empty writable folder and create notes in the app. File access uses the macOS user-selected-folder sandbox entitlement and persistent security-scoped bookmarks.
+Reviewer setup:
+1. Launch Leafspan and choose any writable folder. An empty folder is valid; Leafspan can create Markdown notes there. File access uses the macOS user-selected-folder sandbox entitlement and a persistent security-scoped bookmark.
+2. Free workflow: create/open a Markdown note, edit and save it, use Quick Open/local search, and open a PDF from the same workspace. These workflows do not require the optional related-knowledge service.
+3. Pro workflow: open **Settings → Pro**. `Leafspan Pro` is one non-consumable in-app purchase (`com.moretea.pks.notes.pro`). Use Apple's App Store Sandbox purchase flow; after purchase, verify editable Mind Map/MindNode/relationship features are available. Use **Restore Purchases** in the same screen to verify restore behavior.
+4. If the optional related-knowledge service is absent, ordinary local Markdown/PDF/file workflows must continue. The Pro relationship surface may show related knowledge as unavailable; local backlinks remain available there.
 
-Core Markdown, PDF, file management, Quick Open, local Markdown body/filename search, and wiki-link workflows are free. Backlinks and related-knowledge relationship views are part of Pro.
+No reviewer credentials are required. Do not place private developer files in the review workspace.
 
-Leafspan Pro is one non-consumable in-app purchase. Pro unlocks editable mind maps, MindNode interoperability, and related-knowledge views. Use the App Store Sandbox account supplied by Apple for purchase testing. Restore Purchases is available in Settings → Pro.
-
-The optional related-knowledge service is not required for review. If it is unavailable, the Pro relationship view shows an unavailable related-knowledge state while normal local Markdown/file workflows continue; local backlinks remain available inside that Pro relationship view.
-
-No custom server, custom payment system, subscription, or user account is used.
+Before this text is copied into App Store Connect, create the version's App Review Details record with real contact name/email/phone and associate the final accepted build. The 2026-11-24 live preflight confirms both are still missing.
 
 ## Screenshot plan
 
