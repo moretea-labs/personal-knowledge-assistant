@@ -540,9 +540,11 @@ final class PDFReaderController: ObservableObject {
         if !presentationChanged {
             if pageRequestChanged || anchorRequestChanged || navigationRequested {
                 applyRequestedSource(page: requestedPage, anchor: requestedAnchor)
-            } else {
-                syncFromView()
             }
+            // Passive page, scale and selection changes are already delivered by
+            // the PDFView observers installed above. updateNSView also runs for
+            // unrelated toolbar publications, so querying PDFKit here repeats
+            // work on every SwiftUI pass without adding new state.
             return
         }
 

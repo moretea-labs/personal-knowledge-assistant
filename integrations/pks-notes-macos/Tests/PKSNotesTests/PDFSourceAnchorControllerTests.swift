@@ -68,6 +68,71 @@ final class PDFSourceAnchorControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testPDFViewNotificationsSynchronizePassiveStateWithoutRepresentableReattach() async throws {
+        let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
+        func page(_ text: String) throws -> PDFPage {
+            let textView = NSTextView(frame: bounds)
+            textView.string = text
+            let pageDocument = try XCTUnwrap(
+                PDFDocument(data: textView.dataWithPDF(inside: bounds))
+            )
+            return try XCTUnwrap(pageDocument.page(at: 0))
+        }
+
+        let firstPage = try page("First page evidence")
+        let secondPage = try page("Second page evidence")
+        let document = PDFDocument()
+        document.insert(firstPage, at: 0)
+        document.insert(secondPage, at: 1)
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PKS-PDF-Observer-Sync-\(UUID().uuidString).pdf")
+        let view = PDFView(frame: bounds)
+        let controller = PDFReaderController()
+        defer {
+            controller.detach(view: view)
+            removeStoredReadingPosition(for: url)
+        }
+
+        controller.attach(
+            view: view, document: document, url: url,
+            requestedPage: nil, requestedAnchor: nil
+        )
+        for _ in 0..<4 { await Task.yield() }
+
+        view.go(to: secondPage)
+        NotificationCenter.default.post(name: .PDFViewPageChanged, object: view)
+        view.scaleFactor = 1.5
+        NotificationCenter.default.post(name: .PDFViewScaleChanged, object: view)
+
+        let selection = try XCTUnwrap(
+            document.findString("First page evidence", withOptions: []).first
+        )
+        selection.add(try XCTUnwrap(
+            document.findString("Second page evidence", withOptions: []).first
+        ))
+        view.currentSelection = selection
+        NotificationCenter.default.post(name: .PDFViewSelectionChanged, object: view)
+        for _ in 0..<6 { await Task.yield() }
+
+        XCTAssertEqual(controller.currentPageIndex, 1)
+        XCTAssertEqual(controller.scalePercent, 150)
+        XCTAssertTrue(
+            controller.selectionNeedsPageOnlyReference,
+            "A multi-page selection must still update its page-only citation warning from PDFView notifications."
+        )
+
+        // An unrelated SwiftUI update must not be needed to synchronize state.
+        controller.attach(
+            view: view, document: document, url: url,
+            requestedPage: nil, requestedAnchor: nil
+        )
+        XCTAssertEqual(controller.currentPageIndex, 1)
+        XCTAssertEqual(controller.scalePercent, 150)
+        XCTAssertTrue(controller.selectionNeedsPageOnlyReference)
+    }
+
+    @MainActor
     func testReferencePagePrefersSelectedSourcePageOverVisiblePage() throws {
         let bounds = NSRect(x: 0, y: 0, width: 612, height: 792)
         let firstText = NSTextView(frame: bounds)
