@@ -1855,7 +1855,9 @@ final class NotesModel: ObservableObject {
         pdfPage: Int? = nil,
         pdfAnchor: PDFSourceAnchor? = nil
     ) {
-        markdownAnchorRequest = nil
+        if markdownAnchorRequest != nil {
+            markdownAnchorRequest = nil
+        }
         guard let root, WorkspaceFiles.contains(url, in: root) else {
             message = AppLanguage.current.text("File is outside the selected workspace."); return
         }
@@ -1877,11 +1879,19 @@ final class NotesModel: ObservableObject {
             cancelFilePrefetch()
             if previewPDF == url {
                 if let pdfAnchor {
-                    previewPDFAnchor = pdfAnchor
-                    previewPDFPage = pdfAnchor.page
+                    if previewPDFAnchor != pdfAnchor {
+                        previewPDFAnchor = pdfAnchor
+                    }
+                    if previewPDFPage != pdfAnchor.page {
+                        previewPDFPage = pdfAnchor.page
+                    }
                 } else if let pdfPage {
-                    previewPDFAnchor = nil
-                    previewPDFPage = pdfPage
+                    if previewPDFAnchor != nil {
+                        previewPDFAnchor = nil
+                    }
+                    if previewPDFPage != pdfPage {
+                        previewPDFPage = pdfPage
+                    }
                 }
                 if pdfAnchor != nil || pdfPage != nil {
                     previewPDFNavigationSequence &+= 1
@@ -1895,28 +1905,63 @@ final class NotesModel: ObservableObject {
             cancelNoteLoad()
             previewTask?.cancel()
             if !preservesActiveNote {
-                selected = nil
-                baseline = ""
-                draft = ""
+                if selected != nil {
+                    selected = nil
+                }
+                if !baseline.isEmpty {
+                    baseline = ""
+                }
+                // Avoid re-running draft didSet/autosave scheduling for the
+                // already-empty editor while opening a PDF from an idle workspace.
+                if !draft.isEmpty {
+                    draft = ""
+                }
             }
-            previewPDF = url
-            previewPDFAnchor = pdfAnchor
-            previewPDFPage = pdfAnchor?.page ?? pdfPage
+            let requestedPDFPage = pdfAnchor?.page ?? pdfPage
+            if previewPDFAnchor != pdfAnchor {
+                previewPDFAnchor = pdfAnchor
+            }
+            if previewPDFPage != requestedPDFPage {
+                previewPDFPage = requestedPDFPage
+            }
             if pdfAnchor != nil || pdfPage != nil {
                 previewPDFNavigationSequence &+= 1
             }
-            externalTitle = nil
-            externalBody = nil
-            previewSource = nil
-            activeMatch = nil
-            backlinks = []
+            if externalTitle != nil {
+                externalTitle = nil
+            }
+            if externalBody != nil {
+                externalBody = nil
+            }
+            if previewSource != nil {
+                previewSource = nil
+            }
+            if activeMatch != nil {
+                activeMatch = nil
+            }
+            if !backlinks.isEmpty {
+                backlinks = []
+            }
             backlinkTask?.cancel()
-            loadingBacklinks = false
-            relatedHits = []
+            if loadingBacklinks {
+                loadingBacklinks = false
+            }
+            if !relatedHits.isEmpty {
+                relatedHits = []
+            }
             relatedTask?.cancel()
-            loadingRelated = false
-            relatedError = nil
-            message = nil
+            if loadingRelated {
+                loadingRelated = false
+            }
+            if relatedError != nil {
+                relatedError = nil
+            }
+            if message != nil {
+                message = nil
+            }
+            // Publish the new PDF identity last so the first SwiftUI render sees
+            // the final page/anchor and already-cleared neighboring UI state.
+            previewPDF = url
         } else {
             // Do not replace the current note when handing a file to another app.
             openInDefaultApp(url)
@@ -1970,10 +2015,14 @@ final class NotesModel: ObservableObject {
     private func cancelNoteLoad() {
         noteLoadTask?.cancel()
         noteLoadTask = nil
-        requestedNote = nil
+        if requestedNote != nil {
+            requestedNote = nil
+        }
         loadIdentity = nil
         pendingMatch = nil
-        loadingNote = false
+        if loadingNote {
+            loadingNote = false
+        }
     }
 
     /// Warm exactly one strongly signalled local target (for example a hovered row).
