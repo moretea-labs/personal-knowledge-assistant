@@ -2,7 +2,7 @@ import AppKit
 import CoreGraphics
 
 /// Visual spacing is an app preference, not a second node/document authority.
-enum MindMapLayoutDensity: String, CaseIterable, Identifiable {
+enum MindMapLayoutDensity: String, CaseIterable, Identifiable, Sendable {
     case compact, standard, spacious
 
     static let defaultsKey = "PKSNotesMindMapDensity"
@@ -33,7 +33,7 @@ enum MindMapLayoutDensity: String, CaseIterable, Identifiable {
     }
 }
 
-struct MindMapPlacement: Identifiable, Equatable {
+struct MindMapPlacement: Identifiable, Equatable, Sendable {
     let node: MindMapNode
     let parentID: Int?
     let center: CGPoint
@@ -42,7 +42,7 @@ struct MindMapPlacement: Identifiable, Equatable {
     var id: Int { node.id }
 }
 
-struct MindMapConnector: Equatable {
+struct MindMapConnector: Equatable, Sendable {
     let start: CGPoint
     let end: CGPoint
     let control1: CGPoint
@@ -104,12 +104,12 @@ struct MindMapConnector: Equatable {
     }
 }
 
-private struct MindMapSpatialCell: Hashable {
+private struct MindMapSpatialCell: Hashable, Sendable {
     let column: Int
     let row: Int
 }
 
-struct MindMapLayoutSnapshot: Equatable {
+struct MindMapLayoutSnapshot: Equatable, Sendable {
     private static let spatialCellSize = CGSize(width: 640, height: 480)
     private static let maxIndexedCellsPerItem = 64
 

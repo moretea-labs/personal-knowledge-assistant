@@ -93,7 +93,7 @@ enum MindMapPendingCreation {
 }
 
 /// Visual-only preference: node hierarchy/links still come from Markdown.
-enum MindMapVisualStyle: String, CaseIterable, Identifiable, Equatable {
+enum MindMapVisualStyle: String, CaseIterable, Identifiable, Equatable, Sendable {
     case classic, colorful, minimal
     static let defaultsKey = "PKSNotesMindMapStyle"
     var id: String { rawValue }
@@ -413,6 +413,8 @@ struct MindMapCanvas: View {
     @State private var nodeParentIDs: Set<Int> = []
     @State private var visible: [MindMapNode] = []
     @State private var mapLayout = MindMapSpatialLayout.layout([])
+    @State private var layoutGeneration = 0
+    @State private var isLayoutRebuilding = false
     @State private var projectionReady = false
     @State private var projectedRevision: UInt64?
     @State private var projectedDocumentURL: URL?
@@ -910,7 +912,7 @@ struct MindMapCanvas: View {
                 collapsed = rebasedCollapsed
             }
             if documentChanged || !collapsedChanged {
-                rebuildVisibleLayout()
+                await rebuildVisibleLayout()
             }
             if documentChanged {
                 didInitializeViewport = focusOnRoot(viewport: viewportSize)
@@ -923,36 +925,44 @@ struct MindMapCanvas: View {
         .onChange(of: collapsed) { oldValue, newValue in
             if suppressNextCollapsedReveal {
                 suppressNextCollapsedReveal = false
-                rebuildVisibleLayout()
                 return
             }
             let changedIDs = oldValue.symmetricDifference(newValue)
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                rebuildVisibleLayout()
+            let focusNodeID: Int?
+            if changedIDs.count == 1,
+               let changedID = changedIDs.first,
+               oldValue.contains(changedID),
+               !newValue.contains(changedID) {
+                focusNodeID = changedID
+            } else {
+                focusNodeID = nil
+            }
 
+            isLayoutRebuilding = true
+            Task { @MainActor in
+                await rebuildVisibleLayout(animated: true)
                 // Expanding a branch changes the vertical geometry of the whole
                 // subtree. Keep the branch that was just opened in view so its
-                // newly revealed descendants are reachable immediately instead
-                // of appearing outside the current viewport.
-                guard changedIDs.count == 1,
-                      let changedID = changedIDs.first,
-                      oldValue.contains(changedID),
-                      !newValue.contains(changedID),
-                      let position = mapLayout.placements.first(where: { $0.id == changedID })
+                // newly revealed descendants are reachable immediately.
+                guard let focusNodeID,
+                      let position = mapLayout.placements.first(where: { $0.id == focusNodeID })
                 else { return }
-
-                viewportOffset = MindMapViewportGeometry.centeredOffset(
-                    for: position.center,
-                    mapSize: mapLayout.size,
-                    zoom: zoom
-                )
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                    viewportOffset = MindMapViewportGeometry.centeredOffset(
+                        for: position.center,
+                        mapSize: mapLayout.size,
+                        zoom: zoom
+                    )
+                }
             }
         }
         .onChange(of: mapStyleID) { _, _ in
-            rebuildVisibleLayout()
+            isLayoutRebuilding = true
+            Task { @MainActor in await rebuildVisibleLayout() }
         }
         .onChange(of: layoutDensityID) { _, _ in
-            rebuildVisibleLayout()
+            isLayoutRebuilding = true
+            Task { @MainActor in await rebuildVisibleLayout() }
         }
         .task(id: ActionAvailabilityKey(revision: revision, selectedID: selectedID)) {
             canMoveUp = false
@@ -1650,6 +1660,7 @@ struct MindMapCanvas: View {
             mapCenterAnchor(layout)
         }
         .frame(width: layout.size.width, height: layout.size.height, alignment: .topLeading)
+        .allowsHitTesting(!isLayoutRebuilding)
     }
 
     /// Draw only the connectors intersecting the current map-space viewport into
@@ -2448,19 +2459,49 @@ struct MindMapCanvas: View {
         }
     }
 
-    private func rebuildVisibleLayout() {
-        var hiddenBelow: Int?
-        let filtered = nodes.filter { node in
-            if let depth = hiddenBelow {
-                if node.depth > depth { return false }
-                hiddenBelow = nil
+    @MainActor
+    private func rebuildVisibleLayout(animated: Bool = false) async {
+        let inputNodes = nodes
+        let collapsedIDs = collapsed
+        let density = layoutDensity
+        let style = mapStyle
+        layoutGeneration &+= 1
+        let generation = layoutGeneration
+        isLayoutRebuilding = true
+
+        let worker = Task.detached(priority: .userInitiated) {
+            var hiddenBelow: Int?
+            let filtered = inputNodes.filter { node in
+                if let depth = hiddenBelow {
+                    if node.depth > depth { return false }
+                    hiddenBelow = nil
+                }
+                if collapsedIDs.contains(node.id) { hiddenBelow = node.depth }
+                return true
             }
-            if collapsed.contains(node.id) { hiddenBelow = node.depth }
-            return true
+            let layout = MindMapSpatialLayout.layout(filtered, density: density, style: style)
+            return (filtered, layout)
         }
-        visible = filtered
-        mapLayout = MindMapSpatialLayout.layout(filtered, density: layoutDensity, style: mapStyle)
-        mapContentVersion &+= 1
+        let (filtered, layout) = await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+        guard !Task.isCancelled, generation == layoutGeneration else { return }
+
+        if animated {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                visible = filtered
+                mapLayout = layout
+                mapContentVersion &+= 1
+                isLayoutRebuilding = false
+            }
+        } else {
+            visible = filtered
+            mapLayout = layout
+            mapContentVersion &+= 1
+            isLayoutRebuilding = false
+        }
     }
 
     /// Keep every node expanded on open and anchor the initial viewport on the root.
