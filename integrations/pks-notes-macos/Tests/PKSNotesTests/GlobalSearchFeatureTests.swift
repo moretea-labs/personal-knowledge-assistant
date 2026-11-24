@@ -84,6 +84,7 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertFalse(app.supportsQuickLook)
     }
 
+    @MainActor
     func testGlobalSearchRejectsStaleFilesystemActionTargetsWithBilingualFeedback() {
         let file = GlobalSearchItem.spotlight(
             URL(fileURLWithPath: "/Users/test/Notes/Moved.md"),
