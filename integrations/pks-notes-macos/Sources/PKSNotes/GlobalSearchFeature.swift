@@ -937,11 +937,18 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
     private var keyMonitor: Any?
     private let results = GlobalSearchResults()
 
-    static func shouldHandleUnmodifiedPaletteKey(_ modifiers: NSEvent.ModifierFlags) -> Bool {
-        // VoiceOver uses Control+Option or Caps Lock for navigation. Keep those
-        // commands, and other modified system shortcuts, in the responder chain.
+    static func shouldHandlePaletteKey(
+        keyCode: UInt16,
+        modifiers: NSEvent.ModifierFlags
+    ) -> Bool {
+        guard keyCode == 53 || keyCode == 125 || keyCode == 126 else { return false }
+        // VoiceOver uses Control+Option or Caps Lock for navigation. Keep those,
+        // Command/Shift shortcuts, and any other user-modified command in the
+        // responder chain. macOS arrow-key NSEvents can carry .function and
+        // .numericPad even when the user did not press a modifier, so those
+        // system-attached flags must not suppress palette navigation.
         let reservedModifiers: NSEvent.ModifierFlags = [
-            .command, .control, .option, .shift, .capsLock, .function
+            .command, .control, .option, .shift, .capsLock
         ]
         return modifiers.intersection(reservedModifiers).isEmpty
     }
@@ -1054,7 +1061,10 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
                     panelWindowNumber: panel.windowNumber,
                     keyWindowNumber: NSApp.keyWindow?.windowNumber
                   ),
-                  Self.shouldHandleUnmodifiedPaletteKey(event.modifierFlags) else { return event }
+                  Self.shouldHandlePaletteKey(
+                    keyCode: event.keyCode,
+                    modifiers: event.modifierFlags
+                  ) else { return event }
             switch event.keyCode {
             case 53: self.dismiss(); return nil
             case 125: self.results.moveSelection(1); return nil

@@ -306,12 +306,35 @@ final class GlobalSearchFeatureTests: XCTestCase {
 
     @MainActor
     func testGlobalSearchKeyboardRoutingPreservesVoiceOverAndSystemModifiers() {
-        XCTAssertTrue(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([]))
-        XCTAssertFalse(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([.control, .option]))
-        XCTAssertFalse(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([.capsLock]))
-        XCTAssertFalse(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([.command]))
-        XCTAssertFalse(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([.shift]))
-        XCTAssertFalse(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([.function]))
+        XCTAssertTrue(GlobalSearchController.shouldHandlePaletteKey(keyCode: 125, modifiers: []))
+        XCTAssertTrue(
+            GlobalSearchController.shouldHandlePaletteKey(
+                keyCode: 125, modifiers: [.numericPad, .function]
+            )
+        )
+        XCTAssertTrue(
+            GlobalSearchController.shouldHandlePaletteKey(
+                keyCode: 126, modifiers: [.numericPad, .function]
+            )
+        )
+        XCTAssertTrue(
+            GlobalSearchController.shouldHandlePaletteKey(
+                keyCode: 53, modifiers: [.numericPad, .function]
+            )
+        )
+        XCTAssertFalse(
+            GlobalSearchController.shouldHandlePaletteKey(
+                keyCode: 125, modifiers: [.control, .option, .numericPad, .function]
+            )
+        )
+        XCTAssertFalse(
+            GlobalSearchController.shouldHandlePaletteKey(
+                keyCode: 125, modifiers: [.capsLock, .numericPad, .function]
+            )
+        )
+        XCTAssertFalse(GlobalSearchController.shouldHandlePaletteKey(keyCode: 125, modifiers: [.command]))
+        XCTAssertFalse(GlobalSearchController.shouldHandlePaletteKey(keyCode: 125, modifiers: [.shift]))
+        XCTAssertFalse(GlobalSearchController.shouldHandlePaletteKey(keyCode: 36, modifiers: []))
     }
 
     @MainActor
