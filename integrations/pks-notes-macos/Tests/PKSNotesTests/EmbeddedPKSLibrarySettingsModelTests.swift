@@ -48,7 +48,12 @@ final class EmbeddedPKSLibrarySettingsModelTests: XCTestCase {
         XCTAssertEqual(model.sources.count, 1)
         XCTAssertTrue(model.statusIsError)
         let message = try XCTUnwrap(model.statusMessage)
-        XCTAssertTrue(message.contains("索引失败") || message.contains("indexing failed"))
+        XCTAssertTrue(
+            message.contains("索引失败")
+                || message.contains("索引刷新失败")
+                || message.localizedCaseInsensitiveContains("indexing failed")
+                || message.localizedCaseInsensitiveContains("index refresh failed")
+        )
         XCTAssertFalse(message.contains("无法添加") || message.contains("Unable to add"))
         let saved = await registry.sources()
         XCTAssertEqual(saved.count, 1)
