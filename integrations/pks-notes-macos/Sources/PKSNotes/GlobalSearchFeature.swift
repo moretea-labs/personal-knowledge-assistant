@@ -254,6 +254,13 @@ struct GlobalSearchItem: Identifiable, Sendable {
         return false
     }
 
+    static func actionTargetExists(
+        _ item: GlobalSearchItem,
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+    ) -> Bool {
+        fileExists(item.url.path)
+    }
+
     static func isLeafspanWorkspaceDocument(_ item: GlobalSearchItem, in root: URL?) -> Bool {
         guard case .file = item.kind,
               let root,
@@ -537,6 +544,7 @@ final class GlobalSearchResults: ObservableObject {
     private var workspaceHits: [SearchHit] = []
     private var relatedHits: [GlobalSearchItem] = []
     private var spotlightHits: [GlobalSearchItem] = []
+    private var unavailablePaths = Set<String>()
     private var searchTask: Task<Void, Never>?
     private var workspaceSearchTask: Task<Void, Never>?
     private var workspaceCoverage = WorkspaceSearch.Coverage()
@@ -577,6 +585,7 @@ final class GlobalSearchResults: ObservableObject {
         selectedIndex = 0
         workspaceCoverage = WorkspaceSearch.Coverage()
         librarySearchUnavailable = false
+        unavailablePaths.removeAll()
         statusMessage = nil
         loadApplicationCatalogIfNeeded()
     }
@@ -696,7 +705,9 @@ final class GlobalSearchResults: ObservableObject {
             spotlight: workspaceOnly ? [] : spotlightHits.filter(typeFilter.includes),
             related: workspaceOnly ? [] : relatedHits.filter(typeFilter.includes),
             query: query
-        )
+        ).filter {
+            !unavailablePaths.contains($0.url.standardizedFileURL.path)
+        }
         items = combined
         if let selectedID, let index = combined.firstIndex(where: { $0.id == selectedID }) {
             selectedIndex = index
@@ -715,6 +726,7 @@ final class GlobalSearchResults: ObservableObject {
         selectedIndex = 0
         workspaceCoverage = WorkspaceSearch.Coverage()
         librarySearchUnavailable = false
+        unavailablePaths.removeAll()
         statusMessage = nil
         let shouldSearch = GlobalSearchRanker.shouldStartDocumentSearch(for: text)
         let indexedFoldersEnabled = shouldSearch && UserDefaults.standard.bool(
@@ -844,6 +856,19 @@ final class GlobalSearchResults: ObservableObject {
             self.updateLoadingState()
             self.searchTask = nil
         }
+    }
+
+    static func unavailableItemMessage(chinese: Bool) -> String {
+        chinese ? "此项目已被移动或删除" : "This item was moved or deleted."
+    }
+
+    func discardUnavailable(_ item: GlobalSearchItem) {
+        unavailablePaths.insert(item.url.standardizedFileURL.path)
+        items.removeAll { $0.id == item.id }
+        selectedIndex = max(0, min(selectedIndex, max(0, items.count - 1)))
+        statusMessage = Self.unavailableItemMessage(
+            chinese: AppLanguage.current.resolved == .simplifiedChinese
+        )
     }
 
     func moveSelection(_ offset: Int) {
@@ -1062,6 +1087,10 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
                 Task { @MainActor in self?.reportOpenFailure() }
             }
         case .file, .folder:
+            guard GlobalSearchItem.actionTargetExists(item) else {
+                results.discardUnavailable(item)
+                return
+            }
             if let hit = item.sourceHit,
                let model = (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel {
                 dismiss()
@@ -1098,6 +1127,10 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
     }
 
     func reveal(_ item: GlobalSearchItem) {
+        guard GlobalSearchItem.actionTargetExists(item) else {
+            results.discardUnavailable(item)
+            return
+        }
         dismiss()
         NSWorkspace.shared.activateFileViewerSelecting([item.url])
     }
@@ -1105,8 +1138,11 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
     func locateInLeafspan(_ item: GlobalSearchItem) {
         guard let model = (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel,
               let root = model.root,
-              GlobalSearchItem.isLeafspanWorkspaceItem(item, in: root),
-              FileManager.default.fileExists(atPath: item.url.path) else { return }
+              GlobalSearchItem.isLeafspanWorkspaceItem(item, in: root) else { return }
+        guard GlobalSearchItem.actionTargetExists(item) else {
+            results.discardUnavailable(item)
+            return
+        }
         dismiss()
         NSApp.activate(ignoringOtherApps: true)
         NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) })?.makeKeyAndOrderFront(nil)
@@ -1114,8 +1150,11 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
     }
 
     func preview(_ item: GlobalSearchItem) {
-        guard item.supportsQuickLook,
-              FileManager.default.fileExists(atPath: item.url.path) else { return }
+        guard item.supportsQuickLook else { return }
+        guard GlobalSearchItem.actionTargetExists(item) else {
+            results.discardUnavailable(item)
+            return
+        }
         dismiss()
         if let quickLookWindow, let quickLookView {
             quickLookView.previewItem = item.url as NSURL

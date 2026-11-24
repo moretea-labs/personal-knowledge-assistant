@@ -84,6 +84,24 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertFalse(app.supportsQuickLook)
     }
 
+    func testGlobalSearchRejectsStaleFilesystemActionTargetsWithBilingualFeedback() {
+        let file = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Notes/Moved.md"),
+            title: "Moved.md", isFolder: false
+        )
+
+        XCTAssertFalse(GlobalSearchItem.actionTargetExists(file, fileExists: { _ in false }))
+        XCTAssertTrue(GlobalSearchItem.actionTargetExists(file, fileExists: { _ in true }))
+        XCTAssertEqual(
+            GlobalSearchResults.unavailableItemMessage(chinese: false),
+            "This item was moved or deleted."
+        )
+        XCTAssertEqual(
+            GlobalSearchResults.unavailableItemMessage(chinese: true),
+            "此项目已被移动或删除"
+        )
+    }
+
     func testGlobalSearchCopyNameUsesExactFilesystemLeafName() {
         let file = GlobalSearchItem.spotlight(
             URL(fileURLWithPath: "/Users/test/论文/研究 #1?.md"),
