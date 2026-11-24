@@ -127,20 +127,26 @@ final class MindMapViewportTests: XCTestCase {
         )
     }
 
-    func testLargeMapInitialFocusKeepsEveryNodeExpandedAndRootReadable() {
-        let nodes = (0..<600).map { index in
+    func testLargeMapInitialFocusKeepsEveryNodeExpandedAndRootReadable() throws {
+        let nodes = (0..<1_000).map { index in
             MindMapNode(id: index, depth: index == 0 ? 0 : 1, title: "Node \(index)")
         }
         let layout = MindMapSpatialLayout.layout(nodes)
         let root = layout.placements[0]
+        let viewport = CGSize(width: 1_000, height: 700)
         let initial = MindMapViewportGeometry.initialRootViewport(
             root: root,
             visiblePlacements: [root],
             mapSize: layout.size,
-            viewport: CGSize(width: 1_000, height: 700)
+            viewport: viewport
         )
+        let fitted = try XCTUnwrap(MindMapViewportGeometry.fittingViewport(
+            placements: layout.placements, mapSize: layout.size, viewport: viewport
+        ))
 
         XCTAssertEqual(initial.zoom, 1, accuracy: 0.001)
+        XCTAssertGreaterThan(fitted.zoom, 0)
+        XCTAssertLessThan(fitted.zoom, 0.05)
         XCTAssertEqual(layout.placements.count, nodes.count)
         XCTAssertEqual(layout.placements.map(\.node), nodes)
     }
