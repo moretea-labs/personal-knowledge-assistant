@@ -946,6 +946,15 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
         return modifiers.intersection(reservedModifiers).isEmpty
     }
 
+    static func shouldRoutePaletteKey(
+        eventWindowNumber: Int,
+        panelWindowNumber: Int?,
+        keyWindowNumber: Int?
+    ) -> Bool {
+        guard let panelWindowNumber else { return false }
+        return eventWindowNumber == panelWindowNumber || keyWindowNumber == panelWindowNumber
+    }
+
     private func report(_ feedback: GlobalSearchShortcutFeedback) {
         shortcutStatus = feedback.message(chinese: AppLanguage.current.resolved == .simplifiedChinese)
         shortcutStatusIsError = feedback.isError
@@ -1038,7 +1047,13 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
         }
         panel = window
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.panel === NSApp.keyWindow,
+            guard let self,
+                  let panel = self.panel,
+                  Self.shouldRoutePaletteKey(
+                    eventWindowNumber: event.windowNumber,
+                    panelWindowNumber: panel.windowNumber,
+                    keyWindowNumber: NSApp.keyWindow?.windowNumber
+                  ),
                   Self.shouldHandleUnmodifiedPaletteKey(event.modifierFlags) else { return event }
             switch event.keyCode {
             case 53: self.dismiss(); return nil

@@ -314,6 +314,30 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertFalse(GlobalSearchController.shouldHandleUnmodifiedPaletteKey([.function]))
     }
 
+    @MainActor
+    func testGlobalSearchKeyboardRoutingPrefersEventWindowAndKeepsKeyWindowFallback() {
+        XCTAssertTrue(
+            GlobalSearchController.shouldRoutePaletteKey(
+                eventWindowNumber: 42, panelWindowNumber: 42, keyWindowNumber: 7
+            )
+        )
+        XCTAssertTrue(
+            GlobalSearchController.shouldRoutePaletteKey(
+                eventWindowNumber: 7, panelWindowNumber: 42, keyWindowNumber: 42
+            )
+        )
+        XCTAssertFalse(
+            GlobalSearchController.shouldRoutePaletteKey(
+                eventWindowNumber: 7, panelWindowNumber: 42, keyWindowNumber: 8
+            )
+        )
+        XCTAssertFalse(
+            GlobalSearchController.shouldRoutePaletteKey(
+                eventWindowNumber: 42, panelWindowNumber: nil, keyWindowNumber: 42
+            )
+        )
+    }
+
     func testGlobalShortcutFeedbackIsBilingualAndErrorsAreDistinguishable() {
         let enabled = GlobalSearchShortcutFeedback.enabled("⌃⌥P")
         XCTAssertEqual(enabled.message(chinese: true), "已启用 ⌃⌥P")
