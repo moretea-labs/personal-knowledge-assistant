@@ -151,6 +151,92 @@ final class MindMapViewportTests: XCTestCase {
         XCTAssertEqual(layout.placements.map(\.node), nodes)
     }
 
+    func testFullFitLargeMapUsesOverviewRenderingAndBoundsInteractiveCards() throws {
+        var nodes = [MindMapNode(id: 0, depth: 0, title: "Root")]
+        var nextID = 1
+        for branch in 0..<10 {
+            nodes.append(MindMapNode(id: nextID, depth: 1, title: "Branch \(branch)"))
+            nextID += 1
+            let leafCount = branch == 9 ? 98 : 99
+            for leaf in 0..<leafCount {
+                nodes.append(MindMapNode(
+                    id: nextID, depth: 2, title: "Leaf \(branch)-\(leaf)"
+                ))
+                nextID += 1
+            }
+        }
+        XCTAssertEqual(nodes.count, 1_000)
+
+        let layout = MindMapSpatialLayout.layout(nodes)
+        let viewport = CGSize(width: 1_220, height: 780)
+        let fitted = try XCTUnwrap(MindMapViewportGeometry.fittingViewport(
+            placements: layout.placements, mapSize: layout.size, viewport: viewport
+        ))
+        let visible = MindMapViewportGeometry.visibleNodeIDs(
+            in: layout,
+            viewport: viewport,
+            offset: fitted.offset,
+            zoom: fitted.zoom,
+            overscan: 320
+        )
+
+        XCTAssertEqual(visible.count, nodes.count)
+        XCTAssertTrue(MindMapViewportRenderingPolicy.usesOverviewNodeRendering(
+            zoom: fitted.zoom, visibleNodeCount: visible.count
+        ))
+        XCTAssertEqual(
+            MindMapViewportRenderingPolicy.interactiveNodeIDs(
+                visibleNodeIDs: visible, pinnedIDs: [0], zoom: fitted.zoom
+            ),
+            Set([0])
+        )
+    }
+
+    func testDenseViewportSwitchesToOverviewBeforeInteractiveCardCountExplodes() {
+        XCTAssertFalse(MindMapViewportRenderingPolicy.usesOverviewNodeRendering(
+            zoom: 0.8, visibleNodeCount: 160
+        ))
+        XCTAssertTrue(MindMapViewportRenderingPolicy.usesOverviewNodeRendering(
+            zoom: 0.8, visibleNodeCount: 161
+        ))
+        XCTAssertTrue(MindMapViewportRenderingPolicy.usesOverviewNodeRendering(
+            zoom: .nan, visibleNodeCount: 1
+        ))
+    }
+
+    @MainActor
+    func testMapPointInvertsTheViewportConnectorTransform() throws {
+        let mapSize = CGSize(width: 2_686, height: 41_822)
+        let viewport = CGSize(width: 800, height: 600)
+        let offset = CGSize(width: 18, height: -24)
+        let point = CGPoint(x: 1_420, y: 20_700)
+        let zoom: CGFloat = 0.37
+        let screenPoint = MindMapViewportConnectorSnapshot.mapToScreen(
+            point,
+            mapSize: mapSize,
+            viewportSize: viewport,
+            offset: offset,
+            zoom: zoom
+        )
+        let restored = try XCTUnwrap(MindMapViewportGeometry.mapPoint(
+            fromScreenPoint: screenPoint,
+            mapSize: mapSize,
+            viewport: viewport,
+            offset: offset,
+            zoom: zoom
+        ))
+
+        XCTAssertEqual(restored.x, point.x, accuracy: 0.001)
+        XCTAssertEqual(restored.y, point.y, accuracy: 0.001)
+        XCTAssertNil(MindMapViewportGeometry.mapPoint(
+            fromScreenPoint: .zero,
+            mapSize: mapSize,
+            viewport: viewport,
+            offset: offset,
+            zoom: 0
+        ))
+    }
+
     func testLargeMapCullingKeepsVisibleCardCountBoundedAndPreservesSelection() {
         let placements = (0..<600).map { index in
             MindMapPlacement(

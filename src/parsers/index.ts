@@ -17,7 +17,7 @@ export function splitSections(text:string): ParsedDocument {
 }
 export async function parseDocument(path:string):Promise<ParsedDocument>{
   const ext=extname(path).toLowerCase();
-  if(['.md','.txt','.json','.csv','.tsv','.yaml','.yml','.html','.htm','.log'].includes(ext)){ let t=await readFile(path,'utf8'); if(ext==='.html'||ext==='.htm')t=t.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' '); return splitSections(t); }
+  if(['.md','.markdown','.txt','.json','.csv','.tsv','.yaml','.yml','.html','.htm','.log'].includes(ext)){ let t=await readFile(path,'utf8'); if(ext==='.html'||ext==='.htm')t=t.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' '); return splitSections(t); }
   if(ext==='.pdf'){ const t=command('pdftotext',['-layout',path,'-']); if(t) return splitSections(t); return {text:'',sections:[],metadata:{parserWarning:'pdftotext unavailable or PDF has no native text'}}; }
   if(ext==='.docx'){ const xml=unzipEntry(path,'word/document.xml'); return splitSections(stripXml(xml)); }
   if(ext==='.pptx'){ const list=command('unzip',['-Z1',path]).split(/\r?\n/).filter(x=>/^ppt\/slides\/slide\d+\.xml$/.test(x)).sort(); const pages=list.map((e,i)=>({page:i+1,text:stripXml(unzipEntry(path,e))})); return {text:pages.map(x=>x.text).join('\n\n'),sections:pages,metadata:{slideCount:pages.length}}; }
@@ -25,4 +25,4 @@ export async function parseDocument(path:string):Promise<ParsedDocument>{
   }
   return {text:'',sections:[],metadata:{unsupported:true}};
 }
-export const supportedExtensions = new Set(['.md','.txt','.json','.csv','.tsv','.yaml','.yml','.html','.htm','.log','.pdf','.docx','.pptx','.xlsx']);
+export const supportedExtensions = new Set(['.md','.markdown','.txt','.json','.csv','.tsv','.yaml','.yml','.html','.htm','.log','.pdf','.docx','.pptx','.xlsx']);

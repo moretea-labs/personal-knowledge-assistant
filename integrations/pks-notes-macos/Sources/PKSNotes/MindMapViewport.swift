@@ -54,6 +54,28 @@ enum MindMapViewportGeometry {
         )
     }
 
+    /// Convert a viewport-local point back into the stable map coordinate space.
+    /// This is the inverse of MindMapViewportConnectorSnapshot.mapToScreen.
+    static func mapPoint(
+        fromScreenPoint point: CGPoint,
+        mapSize: CGSize,
+        viewport: CGSize,
+        offset: CGSize,
+        zoom: CGFloat
+    ) -> CGPoint? {
+        guard mapSize.width > 0, mapSize.height > 0,
+              viewport.width > 0, viewport.height > 0,
+              mapSize.width.isFinite, mapSize.height.isFinite,
+              viewport.width.isFinite, viewport.height.isFinite,
+              offset.width.isFinite, offset.height.isFinite,
+              point.x.isFinite, point.y.isFinite,
+              zoom > 0, zoom.isFinite else { return nil }
+        return CGPoint(
+            x: mapSize.width / 2 + (point.x - viewport.width / 2 - offset.width) / zoom,
+            y: mapSize.height / 2 + (point.y - viewport.height / 2 - offset.height) / zoom
+        )
+    }
+
     /// Conservative bounds test for a cubic or orthogonal connector. The
     /// control-point rectangle contains the complete path; stroke width is
     /// included so visible edge caps are never clipped.
@@ -260,6 +282,30 @@ enum MindMapViewportGeometry {
             width: x - (x - offset.width) * factor,
             height: y - (y - offset.height) * factor
         )
+    }
+}
+
+/// Keep overview-scale maps out of SwiftUI's per-node interaction/accessibility tree.
+/// The viewport Canvas still draws every visible node glyph; only readable-scale
+/// nodes become full interactive SwiftUI cards.
+enum MindMapViewportRenderingPolicy {
+    static let minimumInteractiveNodeZoom: CGFloat = 0.52
+    static let maximumInteractiveNodeCount = 160
+
+    static func usesOverviewNodeRendering(zoom: CGFloat, visibleNodeCount: Int) -> Bool {
+        guard zoom.isFinite, zoom > 0 else { return true }
+        return zoom < minimumInteractiveNodeZoom
+            || visibleNodeCount > maximumInteractiveNodeCount
+    }
+
+    static func interactiveNodeIDs(
+        visibleNodeIDs: Set<Int>,
+        pinnedIDs: Set<Int>,
+        zoom: CGFloat
+    ) -> Set<Int> {
+        usesOverviewNodeRendering(zoom: zoom, visibleNodeCount: visibleNodeIDs.count)
+            ? pinnedIDs
+            : visibleNodeIDs.union(pinnedIDs)
     }
 }
 

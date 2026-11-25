@@ -544,9 +544,8 @@ struct MindMapCanvas: View {
         }
     }
 
-    private var visibleNodeIDs: Set<Int> {
-        let pinned = Set([selectedID, editingNodeID, dropTargetID].compactMap { $0 })
-        return MindMapViewportGeometry.visibleNodeIDs(
+    private var viewportVisibleNodeIDs: Set<Int> {
+        MindMapViewportGeometry.visibleNodeIDs(
             in: mapLayout,
             viewport: viewportSize,
             offset: CGSize(
@@ -554,8 +553,26 @@ struct MindMapCanvas: View {
                 height: viewportOffset.height + canvasDrag.height
             ),
             zoom: zoom,
-            overscan: 320,
-            pinnedIDs: pinned
+            overscan: 320
+        )
+    }
+
+    private var pinnedNodeIDs: Set<Int> {
+        Set([selectedID, editingNodeID, dropTargetID].compactMap { $0 })
+    }
+
+    private var usesOverviewNodeRendering: Bool {
+        MindMapViewportRenderingPolicy.usesOverviewNodeRendering(
+            zoom: zoom,
+            visibleNodeCount: viewportVisibleNodeIDs.count
+        )
+    }
+
+    private var visibleNodeIDs: Set<Int> {
+        MindMapViewportRenderingPolicy.interactiveNodeIDs(
+            visibleNodeIDs: viewportVisibleNodeIDs,
+            pinnedIDs: pinnedNodeIDs,
+            zoom: zoom
         )
     }
 
@@ -628,14 +645,26 @@ struct MindMapCanvas: View {
                         } else {
                             ZStack(alignment: .topLeading) {
                                 connectorViewportCanvas(mapLayout, viewport: viewport.size)
-                                interactiveCanvas(mapLayout)
-                                    .allowsHitTesting(projectionIsCurrent)
-                                    .accessibilityHidden(!projectionIsCurrent)
-                                    .scaleEffect(zoom)
-                                    .position(
-                                        x: viewport.size.width / 2 + viewportOffset.width + canvasDrag.width,
-                                        y: viewport.size.height / 2 + viewportOffset.height + canvasDrag.height
-                                    )
+                                if usesOverviewNodeRendering {
+                                    overviewNodeViewportCanvas(mapLayout, viewport: viewport.size)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture(coordinateSpace: .local) { location in
+                                            focusNodeAtOverviewPoint(
+                                                location, layout: mapLayout, viewport: viewport.size
+                                            )
+                                        }
+                                        .allowsHitTesting(projectionIsCurrent)
+                                        .accessibilityHidden(!projectionIsCurrent)
+                                } else {
+                                    interactiveCanvas(mapLayout)
+                                        .allowsHitTesting(projectionIsCurrent)
+                                        .accessibilityHidden(!projectionIsCurrent)
+                                        .scaleEffect(zoom)
+                                        .position(
+                                            x: viewport.size.width / 2 + viewportOffset.width + canvasDrag.width,
+                                            y: viewport.size.height / 2 + viewportOffset.height + canvasDrag.height
+                                        )
+                                }
                             }
                             .frame(width: viewport.size.width, height: viewport.size.height)
                         }
@@ -1694,6 +1723,54 @@ struct MindMapCanvas: View {
         .equatable()
     }
 
+    /// Overview node glyphs share the connector Canvas coordinate transform.
+    /// They stay viewport-sized and never instantiate one SwiftUI view per node.
+    private func overviewNodeViewportCanvas(
+        _ layout: MindMapLayoutSnapshot,
+        viewport: CGSize
+    ) -> some View {
+        let offset = CGSize(
+            width: viewportOffset.width + canvasDrag.width,
+            height: viewportOffset.height + canvasDrag.height
+        )
+        let overviewRect = MindMapViewportGeometry.visibleRect(
+            mapSize: layout.size,
+            viewport: viewport,
+            offset: offset,
+            zoom: zoom,
+            overscan: 320
+        )
+        let visibleIDs = layout.visiblePlacementIDs(
+            in: overviewRect,
+            pinnedIDs: pinnedNodeIDs
+        )
+        return MindMapViewportNodeSnapshot(
+            size: viewport,
+            placements: layout.visiblePlacements(for: visibleIDs),
+            branchByID: layout.branchByID,
+            style: mapStyle,
+            colorScheme: colorScheme,
+            mapSize: layout.size,
+            viewportOffset: offset,
+            zoom: zoom,
+            selectedID: selectedID,
+            totalNodeCount: layout.placements.count,
+            accessibilityLabel: language.text("Mind Map overview"),
+            accessibilityValue: language.text("\(layout.placements.count) nodes"),
+            accessibilityHint: language.text("Activate to focus the node nearest the map center."),
+            onActivate: {
+                focusNodeAtOverviewPoint(
+                    CGPoint(x: viewport.width / 2, y: viewport.height / 2),
+                    layout: layout,
+                    viewport: viewport,
+                    requireHitRadius: false
+                )
+            },
+            layoutVersion: mapContentVersion
+        )
+        .equatable()
+    }
+
     @ViewBuilder
     private func spatialCanvas(
         _ layout: MindMapLayoutSnapshot,
@@ -2527,6 +2604,51 @@ struct MindMapCanvas: View {
         zoom = fitted.zoom
         viewportOffset = fitted.offset
         return true
+    }
+
+    private func focusNodeAtOverviewPoint(
+        _ screenPoint: CGPoint,
+        layout: MindMapLayoutSnapshot,
+        viewport: CGSize,
+        requireHitRadius: Bool = true
+    ) {
+        let offset = CGSize(
+            width: viewportOffset.width + canvasDrag.width,
+            height: viewportOffset.height + canvasDrag.height
+        )
+        guard let mapPoint = MindMapViewportGeometry.mapPoint(
+            fromScreenPoint: screenPoint,
+            mapSize: layout.size,
+            viewport: viewport,
+            offset: offset,
+            zoom: zoom
+        ) else { return }
+
+        let nearest = layout.placements.min { lhs, rhs in
+            let leftX = lhs.center.x - mapPoint.x
+            let leftY = lhs.center.y - mapPoint.y
+            let rightX = rhs.center.x - mapPoint.x
+            let rightY = rhs.center.y - mapPoint.y
+            return leftX * leftX + leftY * leftY < rightX * rightX + rightY * rightY
+        }
+        guard let nearest else { return }
+
+        if requireHitRadius {
+            let deltaX = nearest.center.x - mapPoint.x
+            let deltaY = nearest.center.y - mapPoint.y
+            let hitRadius = max(nearest.size.width, nearest.size.height) * 0.9
+            guard deltaX * deltaX + deltaY * deltaY <= hitRadius * hitRadius else { return }
+        }
+
+        let nextZoom = min(1.25, max(0.72, zoom * 1.8))
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+            selectedID = nearest.id
+            zoom = nextZoom
+            viewportOffset = MindMapViewportGeometry.centeredOffset(
+                for: nearest.center, mapSize: layout.size, zoom: nextZoom
+            )
+        }
+        requestCanvasFocus()
     }
 
     private func beginRename() {

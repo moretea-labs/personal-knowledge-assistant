@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "contract": "pks.search.golden.v1",
+  "description": "Synthetic, privacy-safe conformance fixtures shared by service and embedded native PKS adapters.",
+  "documents": [
+    {
+      "id": "night-piano",
+      "source": "docs",
+      "file": "Night Piano.md",
+      "title": "Night Piano",
+      "content": "# Night Piano\nNight piano practice with exact content."
+    },
+    {
+      "id": "practice-body",
+      "source": "docs",
+      "file": "Practice.md",
+      "title": "Practice",
+      "content": "# Practice\nNight piano practice for a separate note."
+    },
+    {
+      "id": "guitar-source",
+      "source": "docs",
+      "file": "Guitar Practice.md",
+      "title": "Guitar Practice",
+      "content": "# Guitar practice\nChord switching and finger positioning exercises for smooth transitions."
+    },
+    {
+      "id": "guitar-related",
+      "source": "docs",
+      "file": "Chord Finger Exercises.md",
+      "title": "Chord Finger Exercises",
+      "content": "# Chord switching technique\nGuitar finger positioning exercises improve chord switching precision."
+    },
+    {
+      "id": "guitar-noise",
+      "source": "docs",
+      "file": "Guitar Shopping.md",
+      "title": "Guitar Shopping",
+      "content": "# Guitar price comparison\nGuitar accessories and retail store prices."
+    },
+    {
+      "id": "managed-guitar",
+      "source": "managed",
+      "file": "Managed Guitar.md",
+      "title": "Managed Guitar",
+      "content": "# Managed Guitar\nChord switching practice and fine motor precision."
+    }
+  ],
+  "queries": [
+    {
+      "id": "metadata-exact-title",
+      "mode": "metadata",
+      "query": "Night Piano",
+      "expectedFiles": [
+        "Night Piano.md"
+      ],
+      "requiredReasons": [
+        "metadata"
+      ]
+    },
+    {
+      "id": "fts-term-coverage",
+      "mode": "fts",
+      "query": "night piano practice",
+      "expectedFiles": [
+        "Night Piano.md",
+        "Practice.md"
+      ],
+      "requiredReasons": [
+        "full_text"
+      ]
+    },
+    {
+      "id": "auto-metadata-plus-body",
+      "mode": "auto",
+      "query": "night piano",
+      "expectedFiles": [
+        "Night Piano.md",
+        "Practice.md"
+      ],
+      "requiredReasons": [
+        "metadata",
+        "full_text"
+      ]
+    },
+    {
+      "id": "semantic-offline-fallback",
+      "mode": "semantic",
+      "query": "guitar chord switching technique",
+      "expectedContainsFiles": [
+        "Guitar Practice.md",
+        "Chord Finger Exercises.md",
+        "Guitar Shopping.md"
+      ],
+      "requiredReasons": [
+        "semantic_hash"
+      ]
+    },
+    {
+      "id": "source-filter",
+      "mode": "semantic",
+      "query": "chord switching practice",
+      "source": "managed",
+      "expectedFiles": [
+        "Managed Guitar.md"
+      ],
+      "requiredReasons": [
+        "semantic_hash"
+      ]
+    },
+    {
+      "id": "related-content-evidence",
+      "mode": "related",
+      "query": "Guitar chord switching finger positioning exercises",
+      "excludeFile": "Guitar Practice.md",
+      "expectedPrefixFiles": [
+        "Chord Finger Exercises.md"
+      ],
+      "requiredReasons": [
+        "related_content"
+      ]
+    }
+  ]
+}

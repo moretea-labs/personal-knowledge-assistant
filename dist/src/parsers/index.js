@@ -28,7 +28,7 @@ export function splitSections(text) {
 }
 export async function parseDocument(path) {
     const ext = extname(path).toLowerCase();
-    if (['.md', '.txt', '.json', '.csv', '.tsv', '.yaml', '.yml', '.html', '.htm', '.log'].includes(ext)) {
+    if (['.md', '.markdown', '.txt', '.json', '.csv', '.tsv', '.yaml', '.yml', '.html', '.htm', '.log'].includes(ext)) {
         let t = await readFile(path, 'utf8');
         if (ext === '.html' || ext === '.htm')
             t = t.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ');
@@ -57,4 +57,4 @@ export async function parseDocument(path) {
     }
     return { text: '', sections: [], metadata: { unsupported: true } };
 }
-export const supportedExtensions = new Set(['.md', '.txt', '.json', '.csv', '.tsv', '.yaml', '.yml', '.html', '.htm', '.log', '.pdf', '.docx', '.pptx', '.xlsx']);
+export const supportedExtensions = new Set(['.md', '.markdown', '.txt', '.json', '.csv', '.tsv', '.yaml', '.yml', '.html', '.htm', '.log', '.pdf', '.docx', '.pptx', '.xlsx']);

@@ -1,3 +1,5 @@
+// @ts-nocheck
+import { NativeSearchEngine } from './native-search.js';
 import { KnowledgeDB } from '../db/database.js';
 import { HashEmbeddingProvider, RemoteEmbeddingProvider } from './embedding.js';
 import { Indexer } from './indexer.js';
@@ -15,6 +17,7 @@ export class PKSService {
     embeddings;
     indexer;
     searcher;
+    searchEngine;
     writer;
     memory;
     constructor(cfg) {
@@ -22,7 +25,11 @@ export class PKSService {
         this.db = new KnowledgeDB(cfg.dataDir);
         this.embeddings = (cfg.semantic?.provider === 'remote' && cfg.semantic.endpoint && cfg.semantic.model) ? new RemoteEmbeddingProvider(cfg.semantic.endpoint, cfg.semantic.model, cfg.semantic.dimensions || 1536, cfg.semantic.apiKey) : new HashEmbeddingProvider(cfg.semantic?.dimensions || 256);
         this.indexer = new Indexer(this.db, cfg, this.embeddings);
-        this.searcher = new SearchEngine(this.db, this.embeddings);
+        const requested = process.env.PKS_SEARCH_ENGINE || 'native';
+        if (requested !== 'native' && requested !== 'typescript')
+            throw new Error('PKS_SEARCH_ENGINE must be native or typescript');
+        this.searchEngine = requested;
+        this.searcher = requested === 'native' ? new NativeSearchEngine(cfg.dataDir) : new SearchEngine(this.db, this.embeddings);
         this.writer = new KnowledgeWriter(this.db, cfg, this.indexer);
         this.memory = new MemoryBuilder(this.db);
     }
@@ -82,5 +89,5 @@ export class PKSService {
     } if (domain === 'movies' || domain === 'books') {
         return { domain, question, memory: this.memory.get(domain), evidence: await this.search(question || domain, { limit: 12 }) };
     } return { domain, question, evidence: await this.search(question, { limit: 20 }), memory: this.memory.get('general') }; }
-    status() { const docs = this.db.db.prepare('SELECT COUNT(*) n FROM documents WHERE deleted_at IS NULL').get().n; const chunks = this.db.db.prepare('SELECT COUNT(*) n FROM chunks').get().n; const obs = this.db.db.prepare('SELECT COUNT(*) n FROM medical_observations').get().n; const muts = this.db.db.prepare('SELECT COUNT(*) n FROM mutations').get().n; const indexStatusCounts = this.db.db.prepare('SELECT index_status status,COUNT(*) count FROM documents WHERE deleted_at IS NULL GROUP BY index_status').all(); return { documents: docs, chunks, medicalObservations: obs, mutations: muts, indexStatusCounts, dataDir: this.cfg.dataDir, managedStore: this.cfg.managedStore, sources: this.cfg.sourceRoots }; }
+    status() { const docs = this.db.db.prepare('SELECT COUNT(*) n FROM documents WHERE deleted_at IS NULL').get().n; const chunks = this.db.db.prepare('SELECT COUNT(*) n FROM chunks').get().n; const obs = this.db.db.prepare('SELECT COUNT(*) n FROM medical_observations').get().n; const muts = this.db.db.prepare('SELECT COUNT(*) n FROM mutations').get().n; const indexStatusCounts = this.db.db.prepare('SELECT index_status status,COUNT(*) count FROM documents WHERE deleted_at IS NULL GROUP BY index_status').all(); return { documents: docs, chunks, medicalObservations: obs, mutations: muts, searchEngine: this.searchEngine, indexStatusCounts, dataDir: this.cfg.dataDir, managedStore: this.cfg.managedStore, sources: this.cfg.sourceRoots }; }
 }
