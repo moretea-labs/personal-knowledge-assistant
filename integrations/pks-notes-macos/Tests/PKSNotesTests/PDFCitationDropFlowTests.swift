@@ -60,6 +60,7 @@ final class PDFCitationDropFlowTests: XCTestCase {
             PDFDocument(data: sourceText.dataWithPDF(inside: pageBounds))
         )
         XCTAssertTrue(sourceDocument.write(to: pdf))
+        let originalPDFData = try Data(contentsOf: pdf)
 
         let sourceView = PDFView(frame: pageBounds)
         let sourceController = PDFReaderController()
@@ -163,6 +164,10 @@ final class PDFCitationDropFlowTests: XCTestCase {
         defer { reopenedPDFController.detach(view: reopenedPDFView) }
         XCTAssertFalse(reopenedPDFController.invalidRequestedSelection)
         XCTAssertEqual(reopenedPDFController.selectedText(), selectedText)
+        XCTAssertEqual(
+            try Data(contentsOf: pdf), originalPDFData,
+            "PDF citation capture and navigation must not mutate the source PDF."
+        )
     }
 
     func testSelectedPDFTextExposesVoiceOverQuoteAndCitationActions() throws {
