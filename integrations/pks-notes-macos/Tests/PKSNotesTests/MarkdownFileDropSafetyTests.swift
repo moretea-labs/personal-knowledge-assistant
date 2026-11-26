@@ -18,6 +18,23 @@ private final class MarkdownFileDropDraftDelegate: NSObject, NSTextViewDelegate 
     }
 }
 
+private final class FileDropProviderLoadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+
+    func recordLoad() {
+        lock.lock()
+        defer { lock.unlock() }
+        storage += 1
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+}
+
 @MainActor
 final class MarkdownFileDropSafetyTests: XCTestCase {
     private struct Fixture {
@@ -168,6 +185,19 @@ final class MarkdownFileDropSafetyTests: XCTestCase {
                 progress.completedUnitCount = 1
             }
             return progress
+        }
+        return provider
+    }
+
+    private func trackedFileProvider(
+        for file: URL,
+        counter: FileDropProviderLoadCounter
+    ) -> NSItemProvider {
+        let provider = NSItemProvider()
+        provider.registerObject(ofClass: NSURL.self, visibility: .all) { completion in
+            counter.recordLoad()
+            completion(file as NSURL, nil)
+            return Progress(totalUnitCount: 1)
         }
         return provider
     }
@@ -338,6 +368,99 @@ final class MarkdownFileDropSafetyTests: XCTestCase {
         XCTAssertEqual(
             try String(contentsOf: fixture.droppedFile, encoding: .utf8),
             fixture.droppedContent
+        )
+    }
+
+    func testFinderDropCancelThenSuccessfulDropReopensBothNotesWithoutMovingSource() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let defaults = configureDefaults(for: fixture.root)
+        defer { restoreDefaults(defaults) }
+
+        let model = try await makeModel(for: fixture)
+        let dirtyDraft = fixture.firstOriginal + "Unsaved analysis must survive a cancelled and successful Finder drag.\n"
+        model.draft = dirtyDraft
+        let originalNoteData = try Data(contentsOf: fixture.firstNote)
+        let droppedNoteData = try Data(contentsOf: fixture.secondNote)
+
+        // Escape before mouse-up means SwiftUI's onDrop closure is never called.
+        // The provider must remain unrequested and the active dirty draft untouched.
+        let cancelledCounter = FileDropProviderLoadCounter()
+        let cancelledProvider = trackedFileProvider(
+            for: fixture.secondNote,
+            counter: cancelledCounter
+        )
+        XCTAssertTrue(cancelledProvider.canLoadObject(ofClass: NSURL.self))
+        XCTAssertEqual(cancelledCounter.count, 0)
+        XCTAssertEqual(model.selected?.standardizedFileURL, fixture.firstNote.standardizedFileURL)
+        XCTAssertEqual(model.draft, dirtyDraft)
+        XCTAssertTrue(model.isDirty)
+        XCTAssertNil(model.previewPDF)
+        XCTAssertEqual(try Data(contentsOf: fixture.firstNote), originalNoteData)
+        XCTAssertEqual(try Data(contentsOf: fixture.secondNote), droppedNoteData)
+
+        // Start a fresh Finder drag and complete the drop into the same editor.
+        let ui = try makeDropUI(note: fixture.firstNote, model: model)
+        let successCounter = FileDropProviderLoadCounter()
+        let provider = trackedFileProvider(for: fixture.secondNote, counter: successCounter)
+        XCTAssertTrue(provider.canLoadObject(ofClass: NSURL.self))
+        let resolvedFile = try await loadFile(from: provider)
+        XCTAssertEqual(successCounter.count, 1)
+        XCTAssertEqual(resolvedFile.standardizedFileURL, fixture.secondNote.standardizedFileURL)
+
+        let link = try XCTUnwrap(
+            WorkspaceFiles.markdownLinkForDrop(for: resolvedFile, in: fixture.root)
+        )
+        XCTAssertTrue(ui.target.insert(
+            link,
+            currentNote: model.selected,
+            currentDraftRevision: model.draftRevision,
+            canEdit: true,
+            asFileLink: true
+        ))
+
+        let insertedDraft = model.draft
+        XCTAssertTrue(model.isDirty)
+        XCTAssertTrue(
+            insertedDraft.contains("Unsaved analysis must survive a cancelled and successful Finder drag.")
+        )
+        XCTAssertTrue(insertedDraft.contains(link))
+        XCTAssertEqual(insertedDraft.components(separatedBy: link).count - 1, 1)
+        XCTAssertEqual(try Data(contentsOf: fixture.firstNote), originalNoteData)
+        XCTAssertEqual(try Data(contentsOf: fixture.secondNote), droppedNoteData)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.secondNote.path))
+
+        // Only an explicit Save writes the link; Finder's source remains in place.
+        model.save()
+        XCTAssertFalse(model.isDirty)
+        XCTAssertEqual(try Data(contentsOf: fixture.firstNote), Data(insertedDraft.utf8))
+        XCTAssertEqual(try Data(contentsOf: fixture.secondNote), droppedNoteData)
+
+        // A fresh model represents reopening the workspace after the completed drop.
+        let reopened = NotesModel()
+        XCTAssertTrue(reopened.openWorkspace(fixture.root))
+        reopened.openNote(fixture.firstNote)
+        try await waitForNote(reopened, fixture.firstNote, content: insertedDraft)
+        XCTAssertTrue(reopened.draft.contains(link))
+
+        // Follow the inserted link once, then return to the original note.
+        reopened.openFile(fixture.secondNote)
+        try await waitForNote(reopened, fixture.secondNote, content: fixture.secondOriginal)
+        XCTAssertEqual(
+            reopened.selected?.standardizedFileURL,
+            fixture.secondNote.standardizedFileURL
+        )
+        XCTAssertEqual(try Data(contentsOf: fixture.secondNote), droppedNoteData)
+
+        reopened.openNote(fixture.firstNote)
+        try await waitForNote(reopened, fixture.firstNote, content: insertedDraft)
+        XCTAssertTrue(reopened.draft.contains(link))
+        XCTAssertEqual(try Data(contentsOf: fixture.firstNote), Data(insertedDraft.utf8))
+        XCTAssertEqual(try Data(contentsOf: fixture.secondNote), droppedNoteData)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: fixture.root.path).sorted(),
+            ["Other.md", "Reference.pdf", "Study.md"],
+            "A Finder drop creates a link only; it must not move or duplicate the source file."
         )
     }
 }
