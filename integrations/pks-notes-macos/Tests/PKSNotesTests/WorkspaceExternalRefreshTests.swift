@@ -266,25 +266,41 @@ final class WorkspaceExternalRefreshTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("LeafspanExternalBurst-\(UUID().uuidString)", isDirectory: true)
         let folder = root.appendingPathComponent("Projects", isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let deep = folder.appendingPathComponent("Deep", isDirectory: true)
+        try FileManager.default.createDirectory(at: deep, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
         let original = folder.appendingPathComponent("Original.md")
+        let deepNote = deep.appendingPathComponent("Lazy.md")
         try "# Original\n".write(to: original, atomically: true, encoding: .utf8)
+        try "# Lazy descendant\n".write(to: deepNote, atomically: true, encoding: .utf8)
 
         let model = NotesModel()
         XCTAssertTrue(model.openWorkspace(root))
         try await awaitCondition { !model.loadingFiles }
         model.loadExpandedFolders([folder.path])
-        try await awaitCondition(message: "The initial expanded folder did not load its original note.") {
-            model.files.first(where: { $0.url == folder })?.children?.contains(where: { $0.url == original }) == true
+        try await awaitCondition(message: "The initial expanded folder did not load its immediate children.") {
+            let children = model.files.first(where: { $0.url == folder })?.children ?? []
+            return children.contains(where: { $0.url == original })
+                && children.contains(where: { $0.url == deep })
         }
+        let initialDeepChildren = model.files.first(where: { $0.url == folder })?
+            .children?.first(where: { $0.url == deep })?.children ?? []
+        XCTAssertFalse(
+            initialDeepChildren.contains(where: { $0.url == deepNote }),
+            "A collapsed descendant must not materialize its own children."
+        )
 
         // Let the real FSEvents stream settle before the external mutation burst.
         try await Task.sleep(for: .milliseconds(350))
         let transient = folder.appendingPathComponent("Transient.md")
         let renamed = folder.appendingPathComponent("Renamed.md")
         let final = folder.appendingPathComponent("Final.md")
+        let expectedChildren = Set([
+            renamed.standardizedFileURL,
+            final.standardizedFileURL,
+            deep.standardizedFileURL
+        ])
 
         try "# Transient\n".write(to: transient, atomically: true, encoding: .utf8)
         try FileManager.default.moveItem(at: original, to: renamed)
@@ -297,16 +313,39 @@ final class WorkspaceExternalRefreshTests: XCTestCase {
         ) {
             let children = model.files.first(where: { $0.url == folder })?.children ?? []
             let urls = Set(children.map { $0.url.standardizedFileURL })
-            return urls == Set([renamed.standardizedFileURL, final.standardizedFileURL])
+            return urls == expectedChildren && children.count == expectedChildren.count
         }
 
-        let children = model.files.first(where: { $0.url == folder })?.children ?? []
-        XCTAssertEqual(
-            Set(children.map { $0.url.standardizedFileURL }),
-            Set([renamed.standardizedFileURL, final.standardizedFileURL])
+        var children = model.files.first(where: { $0.url == folder })?.children ?? []
+        XCTAssertEqual(children.count, expectedChildren.count, "External event bursts must not create duplicate rows.")
+        XCTAssertEqual(Set(children.map { $0.url.standardizedFileURL }), expectedChildren)
+        let refreshedDeepChildren = children.first(where: { $0.url == deep })?.children ?? []
+        XCTAssertFalse(
+            refreshedDeepChildren.contains(where: { $0.url == deepNote }),
+            "Refreshing the parent must not eagerly scan a collapsed descendant."
         )
         XCTAssertEqual(try String(contentsOf: renamed, encoding: .utf8), "# Original\n")
         XCTAssertEqual(try String(contentsOf: final, encoding: .utf8), "# Final\n")
+
+        // Collapse and reopen the loaded folder; its cached rows must stay unique.
+        model.loadExpandedFolders([])
+        model.loadExpandedFolders([folder.path])
+        try await awaitCondition(message: "Reopening the folder did not preserve the final external filesystem state.") {
+            let reopened = model.files.first(where: { $0.url == folder })?.children ?? []
+            return reopened.count == expectedChildren.count
+                && Set(reopened.map { $0.url.standardizedFileURL }) == expectedChildren
+        }
+        children = model.files.first(where: { $0.url == folder })?.children ?? []
+        XCTAssertEqual(children.count, expectedChildren.count)
+        let reopenedDeepChildren = children.first(where: { $0.url == deep })?.children ?? []
+        XCTAssertFalse(reopenedDeepChildren.contains(where: { $0.url == deepNote }))
+
+        // Only an explicit expansion may materialize the nested descendant.
+        model.loadExpandedFolders([folder.path, deep.path])
+        try await awaitCondition(message: "The nested descendant did not load after explicit expansion.") {
+            model.files.first(where: { $0.url == folder })?.children?
+                .first(where: { $0.url == deep })?.children?.contains(where: { $0.url == deepNote }) == true
+        }
     }
 
     @MainActor
