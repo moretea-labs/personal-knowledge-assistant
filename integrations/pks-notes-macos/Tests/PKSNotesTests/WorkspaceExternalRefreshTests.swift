@@ -262,6 +262,54 @@ final class WorkspaceExternalRefreshTests: XCTestCase {
     }
 
     @MainActor
+    func testRapidExternalCreateRenameDeleteSequenceConvergesToFilesystemTruth() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LeafspanExternalBurst-\(UUID().uuidString)", isDirectory: true)
+        let folder = root.appendingPathComponent("Projects", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let original = folder.appendingPathComponent("Original.md")
+        try "# Original\n".write(to: original, atomically: true, encoding: .utf8)
+
+        let model = NotesModel()
+        XCTAssertTrue(model.openWorkspace(root))
+        try await awaitCondition { !model.loadingFiles }
+        model.loadExpandedFolders([folder.path])
+        try await awaitCondition(message: "The initial expanded folder did not load its original note.") {
+            model.files.first(where: { $0.url == folder })?.children?.contains(where: { $0.url == original }) == true
+        }
+
+        // Let the real FSEvents stream settle before the external mutation burst.
+        try await Task.sleep(for: .milliseconds(350))
+        let transient = folder.appendingPathComponent("Transient.md")
+        let renamed = folder.appendingPathComponent("Renamed.md")
+        let final = folder.appendingPathComponent("Final.md")
+
+        try "# Transient\n".write(to: transient, atomically: true, encoding: .utf8)
+        try FileManager.default.moveItem(at: original, to: renamed)
+        try FileManager.default.removeItem(at: transient)
+        try "# Final\n".write(to: final, atomically: true, encoding: .utf8)
+
+        try await awaitCondition(
+            timeout: .seconds(8),
+            message: "Coalesced external create/rename/delete events did not converge to the final directory contents."
+        ) {
+            let children = model.files.first(where: { $0.url == folder })?.children ?? []
+            let urls = Set(children.map { $0.url.standardizedFileURL })
+            return urls == Set([renamed.standardizedFileURL, final.standardizedFileURL])
+        }
+
+        let children = model.files.first(where: { $0.url == folder })?.children ?? []
+        XCTAssertEqual(
+            Set(children.map { $0.url.standardizedFileURL }),
+            Set([renamed.standardizedFileURL, final.standardizedFileURL])
+        )
+        XCTAssertEqual(try String(contentsOf: renamed, encoding: .utf8), "# Original\n")
+        XCTAssertEqual(try String(contentsOf: final, encoding: .utf8), "# Final\n")
+    }
+
+    @MainActor
     func testExternalModificationNeverOverwritesDirtyDraft() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("LeafspanExternal-\(UUID().uuidString)", isDirectory: true)
