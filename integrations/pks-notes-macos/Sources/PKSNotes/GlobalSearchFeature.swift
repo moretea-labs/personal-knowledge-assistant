@@ -268,6 +268,15 @@ struct GlobalSearchItem: Identifiable, Sendable {
         return ["md", "markdown", "pdf"].contains(item.url.pathExtension.lowercased())
     }
 
+    static func isLeafspanWorkspacePreviewableImage(_ item: GlobalSearchItem, in root: URL?) -> Bool {
+        guard case .file = item.kind,
+              let root,
+              WorkspaceFiles.contains(item.url, in: root) else { return false }
+        return LocalAttachmentImageMetadata.supportedExtensions.contains(
+            item.url.pathExtension.lowercased()
+        )
+    }
+
     static func isLeafspanWorkspaceItem(_ item: GlobalSearchItem, in root: URL?) -> Bool {
         guard let root else { return false }
         if case .application = item.kind { return false }
@@ -1136,6 +1145,12 @@ final class GlobalSearchController: NSObject, ObservableObject, NSWindowDelegate
                 // Spotlight results in the active workspace have no PKS hit,
                 // but still use the same dirty-draft, PDF and Markdown opener.
                 model.openFile(item.url)
+            } else if let model = (NSApplication.shared.delegate as? PKSNotesAppDelegate)?.notesModel,
+                      GlobalSearchItem.isLeafspanWorkspacePreviewableImage(item, in: model.root) {
+                // Workspace images are a supported Leafspan content type. Keep Open
+                // inside Leafspan with its native Quick Look panel instead of handing
+                // the file to Preview or another default application.
+                preview(item)
             } else {
                 let opened = NSWorkspace.shared.open(item.url)
                 dismiss()

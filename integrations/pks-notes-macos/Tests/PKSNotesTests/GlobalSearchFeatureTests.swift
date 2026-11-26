@@ -195,6 +195,38 @@ final class GlobalSearchFeatureTests: XCTestCase {
         XCTAssertFalse(GlobalSearchItem.isLeafspanWorkspaceDocument(note, in: nil))
     }
 
+    func testSpotlightWorkspaceImagesUseLeafspanPreviewPath() {
+        let root = URL(fileURLWithPath: "/Users/test/Notes", isDirectory: true)
+        for ext in LocalAttachmentImageMetadata.supportedExtensions.sorted() {
+            let image = GlobalSearchItem.spotlight(
+                root.appendingPathComponent("Diagram.\(ext)"),
+                title: "Diagram.\(ext)",
+                isFolder: false
+            )
+            XCTAssertTrue(
+                GlobalSearchItem.isLeafspanWorkspacePreviewableImage(image, in: root),
+                "Expected .\(ext) workspace images to stay inside Leafspan"
+            )
+        }
+
+        let unsupported = GlobalSearchItem.spotlight(
+            root.appendingPathComponent("Diagram.svg"), title: "Diagram.svg", isFolder: false
+        )
+        let outside = GlobalSearchItem.spotlight(
+            URL(fileURLWithPath: "/Users/test/Desktop/Diagram.png"),
+            title: "Diagram.png", isFolder: false
+        )
+        let folder = GlobalSearchItem.spotlight(
+            root.appendingPathComponent("Images", isDirectory: true),
+            title: "Images", isFolder: true
+        )
+
+        XCTAssertFalse(GlobalSearchItem.isLeafspanWorkspacePreviewableImage(unsupported, in: root))
+        XCTAssertFalse(GlobalSearchItem.isLeafspanWorkspacePreviewableImage(outside, in: root))
+        XCTAssertFalse(GlobalSearchItem.isLeafspanWorkspacePreviewableImage(folder, in: root))
+        XCTAssertFalse(GlobalSearchItem.isLeafspanWorkspacePreviewableImage(unsupported, in: nil))
+    }
+
     func testGlobalSearchLeafspanTreeLocateIncludesWorkspaceFilesAndFoldersOnly() {
         let root = URL(fileURLWithPath: "/Users/test/Notes", isDirectory: true)
         let note = GlobalSearchItem.spotlight(
