@@ -204,6 +204,25 @@ final class RealICloudFileProviderAcceptanceTests: XCTestCase {
                 AppLanguage.current.text("Could not reopen the last note. Select it again to retry.")
             ) == true
         )
+
+        // Simulate File Provider access recovering after the first read failed.
+        // The retained last-opened URL must be directly retryable without restarting
+        // the workspace or silently adopting a different same-name file.
+        let recoveredContent = "# Recovered after provider failure\n\nThe original note can now be opened.\n"
+        try recoveredContent.write(to: note, atomically: true, encoding: .utf8)
+
+        model.openNote(note)
+        XCTAssertTrue(model.loadingNote, "Retrying the preserved note URL must start a new load.")
+        for _ in 0..<400 where model.loadingNote {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertFalse(model.loadingNote)
+        XCTAssertEqual(model.selected?.standardizedFileURL, note.standardizedFileURL)
+        XCTAssertEqual(model.draft, recoveredContent)
+        XCTAssertFalse(model.isDirty)
+        XCTAssertEqual(defaults.string(forKey: "PKSNotesLastOpenedMarkdown"), note.path)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), recoveredContent)
     }
 
     @MainActor
