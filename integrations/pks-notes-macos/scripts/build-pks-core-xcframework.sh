@@ -19,11 +19,14 @@ if [[ ! -f "$(rustc --print sysroot)/lib/rustlib/src/rust/library/Cargo.toml" ]]
   exit 4
 fi
 
+# Compile from the canonical Rust workspace, not an rsynced temp checkout.
+# A persistent target dir keeps build-std/std/LLVM work incremental across runs;
+# only XCFramework assembly and headers use disposable staging.
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-core="$tmp/pks-core"
-mkdir -p "$core"
-rsync -a --exclude target/ "$source_core/" "$core/"
+core="$source_core"
+cargo_target_dir="${PKS_CORE_CARGO_TARGET_DIR:-$leafspan_root/.build/pks-native/cargo-target}"
+mkdir -p "$cargo_target_dir"
 
 headers="$tmp/headers"
 mkdir -p "$headers"
@@ -40,7 +43,7 @@ export RUSTC_BOOTSTRAP=1
 build_target() {
   local triple="$1"
   local arch="$2"
-  local target_dir="$tmp/target-$arch"
+  local target_dir="$cargo_target_dir"
   local rustflags_var="CARGO_TARGET_$(echo "$triple" | tr '[:lower:]-' '[:upper:]_')_RUSTFLAGS"
   local cflags_var="CFLAGS_$(echo "$triple" | tr '-' '_')"
 

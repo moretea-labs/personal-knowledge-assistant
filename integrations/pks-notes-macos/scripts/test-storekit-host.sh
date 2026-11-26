@@ -2,10 +2,11 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-derived="${PKS_NOTES_STOREKIT_DERIVED_DATA:-/tmp/PKSNotesStoreKitHost-${UID}}"
+# Reuse the same checkout and DerivedData on every StoreKit regression run.
+# Deleting DerivedData here previously forced a full rebuild per test session.
+derived="${PKS_NOTES_STOREKIT_DERIVED_DATA:-$root/.build/storekit-host-derived}"
 
 cd "$root/StoreKitTestHost"
-rm -rf "$derived"
 
 # Keep Xcode's default "Sign to Run Locally" test-host signing here.
 # It is the canonical local StoreKitTest environment and verifies all three
