@@ -183,4 +183,123 @@ final class RelationshipGraphJourneyTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: decoy, encoding: .utf8), decoyContents)
         XCTAssertFalse(fileManager.fileExists(atPath: target.path))
     }
+
+    func testBacklinkCyclesRepeatedLinksAndSelfLinksStayStableAcrossRefresh() async throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("Leafspan-REL-07-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        let noteA = root.appendingPathComponent("A.md")
+        let noteB = root.appendingPathComponent("B.md")
+        let noteAContents = """
+        # A
+        [B](B.md)
+        [B again](B.md)
+        [Self](A.md)
+        """
+        let noteBContents = """
+        # B
+        [A](A.md)
+        [A again](A.md)
+        """
+        try noteAContents.write(to: noteA, atomically: true, encoding: .utf8)
+        try noteBContents.write(to: noteB, atomically: true, encoding: .utf8)
+
+        let defaults = UserDefaults.standard
+        let workspaceKeys = [
+            "PKSNotesWorkspace",
+            "PKSNotesWorkspaceBookmark",
+            "PKSNotesLastOpenedMarkdown"
+        ]
+        let previousWorkspaceValues = workspaceKeys.map { defaults.object(forKey: $0) }
+        let metadataKeys = ["PKSNotesRecentByWorkspace", "PKSNotesFavoritesByWorkspace"]
+        let previousMetadata = metadataKeys.map { defaults.dictionary(forKey: $0)?[root.path] }
+        defer {
+            for (key, value) in zip(workspaceKeys, previousWorkspaceValues) {
+                if let value { defaults.set(value, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
+            for (key, previous) in zip(metadataKeys, previousMetadata) {
+                var current = defaults.dictionary(forKey: key) ?? [:]
+                if let previous { current[root.path] = previous }
+                else { current.removeValue(forKey: root.path) }
+                defaults.set(current, forKey: key)
+            }
+        }
+
+        let model = NotesModel(libraryProvider: RelationshipJourneyEmptyLibraryProvider())
+        XCTAssertTrue(model.openWorkspace(root))
+        model.openNote(noteA)
+        try await awaitCondition(message: "A did not open for the cyclic relationship fixture.") {
+            model.selected == noteA.standardizedFileURL && !model.loadingNote
+        }
+
+        model.loadRelationships()
+        try await awaitCondition(message: "A backlinks did not finish scanning the A ↔ B cycle.") {
+            !model.loadingBacklinks
+        }
+        XCTAssertEqual(model.backlinks.map { $0.source.standardizedFileURL }, [noteB.standardizedFileURL])
+        let backlinkToA = try XCTUnwrap(model.backlinks.first)
+        XCTAssertEqual(backlinkToA.count, 2, "Repeated links from B must remain occurrence-counted.")
+        XCTAssertEqual(backlinkToA.locations.map(\.lineIndex), [1, 2])
+        XCTAssertFalse(
+            model.backlinks.contains { $0.source.standardizedFileURL == noteA.standardizedFileURL },
+            "A self-link must not create a self-backlink."
+        )
+
+        model.openNote(noteB)
+        try await awaitCondition(message: "B did not open for the reverse side of the cycle.") {
+            model.selected == noteB.standardizedFileURL && !model.loadingNote
+        }
+        model.loadRelationships()
+        try await awaitCondition(message: "B backlinks did not finish scanning the reverse cycle.") {
+            !model.loadingBacklinks
+        }
+        XCTAssertEqual(model.backlinks.map { $0.source.standardizedFileURL }, [noteA.standardizedFileURL])
+        let backlinkToB = try XCTUnwrap(model.backlinks.first)
+        XCTAssertEqual(backlinkToB.count, 2)
+        XCTAssertEqual(backlinkToB.locations.map(\.lineIndex), [1, 2])
+        XCTAssertFalse(
+            model.backlinks.contains { $0.source.standardizedFileURL == noteB.standardizedFileURL },
+            "B self-links must not create self-backlinks."
+        )
+
+        for iteration in 0..<6 {
+            let target = iteration.isMultiple(of: 2) ? noteA : noteB
+            let expectedSource = iteration.isMultiple(of: 2) ? noteB : noteA
+            model.openNote(target)
+            try await awaitCondition(message: "Relationship target did not switch during repeated refresh.") {
+                model.selected == target.standardizedFileURL && !model.loadingNote
+            }
+            model.loadRelationships()
+            try await awaitCondition(message: "Repeated relationship refresh did not finish.") {
+                !model.loadingBacklinks
+            }
+            XCTAssertEqual(
+                model.backlinks.map { $0.source.standardizedFileURL },
+                [expectedSource.standardizedFileURL],
+                "Switching targets must not accumulate duplicate backlink rows."
+            )
+            XCTAssertEqual(model.backlinks.first?.count, 2)
+        }
+
+        let updatedBContents = noteBContents + "\n[Another link to A](A.md)\n"
+        try updatedBContents.write(to: noteB, atomically: true, encoding: .utf8)
+        model.openNote(noteA)
+        try await awaitCondition(message: "A did not reopen after the external backlink edit.") {
+            model.selected == noteA.standardizedFileURL && !model.loadingNote
+        }
+        model.loadRelationships()
+        try await awaitCondition(message: "Backlinks did not refresh after B changed on disk.") {
+            !model.loadingBacklinks
+        }
+        XCTAssertEqual(model.backlinks.map { $0.source.standardizedFileURL }, [noteB.standardizedFileURL])
+        XCTAssertEqual(
+            model.backlinks.first?.count,
+            3,
+            "A refreshed scan must observe the new occurrence without duplicating the source row."
+        )
+    }
 }
